@@ -3,6 +3,7 @@ require('dotenv').config();
 const axios = require('axios');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
+const crypto = require('crypto');
 const express = require('express');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
@@ -11,7 +12,14 @@ const { hasDatabase, query } = require('./db');
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
-const jwtSecret = process.env.JWT_SECRET || 'dev-only-change-this-secret';
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (isProduction && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET is required in production');
+}
+
+const jwtSecret = process.env.JWT_SECRET || 'dev-only-local-secret';
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
   'http://localhost:5173',
@@ -24,7 +32,12 @@ app.use(cors({
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
 }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({
+  limit: '5mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 
 const LABELS = [
   'New Enquiry',
@@ -159,11 +172,42 @@ function hasRealValue(value) {
 function isWhatsAppConfigured() {
   return hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
+function shouldAllowLocalMessageQueue() {
+  return !isProduction;
+}
 
 function maskValue(value) {
   if (!value) return '';
   if (value.length <= 8) return '********';
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function verifyMetaWebhookSignature(req) {
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+
+  if (!appSecret) {
+    return true;
+  }
+
+  const signature = req.headers['x-hub-signature-256'];
+
+  if (!signature || !signature.startsWith('sha256=')) {
+    return false;
+  }
+
+  const expectedSignature = `sha256=${crypto
+    .createHmac('sha256', appSecret)
+    .update(req.rawBody || Buffer.from(''))
+    .digest('hex')}`;
+
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 }
 
 function isReplyWindowOpen(contact) {
@@ -239,6 +283,11 @@ async function getLeastLoadedSalesUser() {
 async function ensureDefaultUsers() {
   if (!hasDatabase) return;
 
+  if (isProduction) {
+    console.log('Production mode: default demo users are not created automatically');
+    return;
+  }
+
   const defaults = [
     { name: 'Admin User', email: 'admin@bos.com', password: 'admin123', role: 'admin' },
     { name: 'Manager User', email: 'manager@bos.com', password: 'manager123', role: 'manager' },
@@ -263,22 +312,22 @@ async function ensureSchema() {
   await query(schema);
 }
 
-async function upsertContact({ waId, name, phone, label }) {
+async function upsertContact({ waId, name, phone, label, touchInbound = true }) {
   const assignedTo = await getLeastLoadedSalesUser();
   if (hasDatabase) {
     const result = await query(
       `INSERT INTO contacts (wa_id, name, phone, label, assigned_to, last_inbound_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, now(), now())
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN now() ELSE NULL END, now())
        ON CONFLICT (wa_id)
        DO UPDATE SET
          name = COALESCE(EXCLUDED.name, contacts.name),
          phone = EXCLUDED.phone,
          label = EXCLUDED.label,
          assigned_to = COALESCE(contacts.assigned_to, EXCLUDED.assigned_to),
-         last_inbound_at = now(),
+         last_inbound_at = CASE WHEN $6 THEN now() ELSE contacts.last_inbound_at END,
          updated_at = now()
        RETURNING *`,
-      [waId, name || null, phone, label || 'New Enquiry', assignedTo],
+      [waId, name || null, phone, label || 'New Enquiry', assignedTo, touchInbound],
     );
     return result.rows[0];
   }
@@ -295,7 +344,7 @@ async function upsertContact({ waId, name, phone, label }) {
       notes: '',
       label: label || 'New Enquiry',
       assigned_to: assignedTo,
-      last_inbound_at: now(),
+      last_inbound_at: touchInbound ? now() : null,
       updated_at: now(),
     };
     memory.contacts.unshift(contact);
@@ -303,7 +352,7 @@ async function upsertContact({ waId, name, phone, label }) {
     contact.name = name || contact.name;
     contact.phone = phone;
     contact.label = label || contact.label;
-    contact.last_inbound_at = now();
+    if (touchInbound) contact.last_inbound_at = now();
     contact.updated_at = now();
   }
   return contact;
@@ -388,9 +437,17 @@ async function findContact(contactId) {
   }
   return memory.contacts.find((item) => item.id === contactId) || null;
 }
+function canAccessContact(user, contact) {
+  if (!user || !contact) return false;
+  if (canMonitor(user)) return true;
+  return contact.assigned_to === user.id;
+}
 
 async function sendWhatsAppText(contact, text) {
-  if (!isWhatsAppConfigured()) return null;
+  if (!isWhatsAppConfigured()) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Message was not sent.');
+  }
 
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
   const url = `https://graph.facebook.com/${apiVersion}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -403,7 +460,10 @@ async function sendWhatsAppText(contact, text) {
 }
 
 async function sendWhatsAppTemplate(contact, templateName, language = 'en') {
-  if (!isWhatsAppConfigured()) return null;
+  if (!isWhatsAppConfigured()) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Template message was not sent.');
+  }
 
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
   const url = `https://graph.facebook.com/${apiVersion}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -461,6 +521,10 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', asyncHandler(async (req, res) => {
+  if (!verifyMetaWebhookSignature(req)) {
+    return res.status(403).json({ error: 'Invalid webhook signature' });
+  }
+
   const entries = req.body?.entry || [];
   for (const entry of entries) {
     for (const change of entry.changes || []) {
@@ -505,6 +569,7 @@ app.get('/api/settings/status', requireAuth, (req, res) => {
   res.json({
     database: hasDatabase ? 'Connected through DATABASE_URL' : 'Using in-memory demo store',
     webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+    webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
     whatsappTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
     phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
     webhookUrl: '/webhook',
@@ -522,6 +587,7 @@ app.get('/api/whatsapp/config', requireAuth, (req, res) => {
     accessTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
     accessTokenMasked: maskValue(process.env.WHATSAPP_ACCESS_TOKEN || ''),
     verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
     webhookPath: '/webhook',
     callbackUrl: process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook` : 'Set PUBLIC_BASE_URL to show full webhook URL',
@@ -551,10 +617,29 @@ app.post('/api/whatsapp/test-message', requireAuth, asyncHandler(async (req, res
     { messaging_product: 'whatsapp', to: cleanTo, type: 'text', text: { body: text.trim() } },
     { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' } },
   );
+  const messageId = response.data?.messages?.[0]?.id || null;
+  const contact = await upsertContact({
+    waId: cleanTo,
+    name: cleanTo,
+    phone: cleanTo,
+    label: 'Review Required',
+    touchInbound: false,
+  });
+  const message = await addMessage({
+    contactId: contact.id,
+    waMessageId: messageId,
+    direction: 'outbound',
+    type: 'text',
+    body: text.trim(),
+    status: messageId ? 'sent' : 'accepted',
+    rawPayload: response.data,
+  });
   res.json({
     ok: true,
     to: cleanTo,
-    messageId: response.data?.messages?.[0]?.id || null,
+    contactId: contact.id,
+    savedMessageId: message?.id || null,
+    messageId,
     metaResponse: response.data,
   });
 }));
@@ -723,18 +808,85 @@ app.get('/api/contacts/:id/assignment-history', requireAuth, asyncHandler(async 
 }));
 
 app.get('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req, res) => {
+  const contact = await findContact(req.params.id);
+
+  if (!contact) {
+    return res.status(404).json({ error: 'Contact not found' });
+  }
+
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
   if (hasDatabase) {
     const result = await query('SELECT * FROM messages WHERE contact_id = $1 ORDER BY created_at ASC', [req.params.id]);
     return res.json(result.rows);
   }
+
   res.json(memory.messages.filter((message) => message.contact_id === req.params.id));
+}));
+
+app.post('/api/conversations/:id/read', requireAuth, asyncHandler(async (req, res) => {
+  const contact = await findContact(req.params.id);
+
+  if (!contact) {
+    return res.status(404).json({ error: 'Contact not found' });
+  }
+
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
+  if (hasDatabase) {
+    const result = await query(
+      `UPDATE messages
+       SET status = 'read'
+       WHERE contact_id = $1
+         AND direction = 'inbound'
+         AND status = 'received'
+       RETURNING id`,
+      [req.params.id],
+    );
+
+    return res.json({ ok: true, updated: result.rowCount });
+  }
+
+  let updated = 0;
+
+  memory.messages.forEach((message) => {
+    if (
+      message.contact_id === req.params.id &&
+      message.direction === 'inbound' &&
+      message.status === 'received'
+    ) {
+      message.status = 'read';
+      updated += 1;
+    }
+  });
+
+  res.json({ ok: true, updated });
 }));
 
 app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
   const { name, company, stage, owner, notes, label, assigned_to, assignment_reason } = req.body;
-  if (assigned_to !== undefined && !canMonitor(req.user)) return res.status(403).json({ error: 'Only manager/admin can assign' });
+
+  const contact = await findContact(req.params.id);
+
+  if (!contact) {
+    return res.status(404).json({ error: 'Contact not found' });
+  }
+
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
+  if (assigned_to !== undefined && !canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Only manager/admin can assign' });
+  }
+
   const shouldUpdateAssignment = assigned_to !== undefined;
   const assignedToValue = assigned_to === '' ? null : assigned_to;
+
   if (hasDatabase) {
     const before = await query('SELECT assigned_to FROM contacts WHERE id = $1', [req.params.id]);
     const result = await query(
@@ -755,19 +907,39 @@ app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
     });
     return res.json(result.rows[0]);
   }
-  const contact = memory.contacts.find((item) => item.id === req.params.id);
-  const fromUserId = contact.assigned_to;
-  Object.assign(contact, { name, company, stage, owner, notes, label, updated_at: now() });
-  if (shouldUpdateAssignment) contact.assigned_to = assignedToValue;
-  await recordAssignmentHistory({ contactId: contact.id, fromUserId, toUserId: contact.assigned_to, changedBy: req.user.id, reason: assignment_reason });
-  res.json(contact);
+  const memoryContact = memory.contacts.find((item) => item.id === req.params.id);
+  const fromUserId = memoryContact.assigned_to;
+
+  Object.assign(memoryContact, {
+    name: name ?? memoryContact.name,
+    company: company ?? memoryContact.company,
+    stage: stage ?? memoryContact.stage,
+    owner: owner ?? memoryContact.owner,
+    notes: notes ?? memoryContact.notes,
+    label: label ?? memoryContact.label,
+    updated_at: now(),
+  });
+
+  if (shouldUpdateAssignment) memoryContact.assigned_to = assignedToValue;
+
+  await recordAssignmentHistory({
+    contactId: memoryContact.id,
+    fromUserId,
+    toUserId: memoryContact.assigned_to,
+    changedBy: req.user.id,
+    reason: assignment_reason,
+  });
+
+  res.json(memoryContact);
 }));
 
 app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req, res) => {
   const { text, templateName, language } = req.body;
   const contact = await findContact(req.params.id);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canMonitor(req.user) && contact.assigned_to !== req.user.id) return res.status(403).json({ error: 'Conversation assigned to another user' });
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
 
   const replyWindowOpen = isReplyWindowOpen(contact);
   if (!replyWindowOpen && !templateName) {
@@ -777,16 +949,38 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
   let waMessageId = null;
   let body = text;
   let type = 'text';
-  if (templateName) {
-    waMessageId = await sendWhatsAppTemplate(contact, templateName, language || 'en');
-    body = `[Template] ${templateName}`;
-    type = 'template';
-  } else {
-    if (!text?.trim()) return res.status(400).json({ error: 'Message text is required' });
-    waMessageId = await sendWhatsAppText(contact, text.trim());
+
+  try {
+    if (templateName) {
+      waMessageId = await sendWhatsAppTemplate(contact, templateName, language || 'en');
+      body = `[Template] ${templateName}`;
+      type = 'template';
+    } else {
+      if (!text?.trim()) return res.status(400).json({ error: 'Message text is required' });
+      waMessageId = await sendWhatsAppText(contact, text.trim());
+    }
+  } catch (error) {
+    return res.status(400).json({
+      error: error.response?.data?.error?.message || error.message || 'WhatsApp message failed',
+    });
   }
 
-  const message = await addMessage({ contactId: contact.id, waMessageId, direction: 'outbound', type, body, status: waMessageId ? 'sent' : 'queued-local', templateName });
+  const status = waMessageId ? 'sent' : 'queued-local';
+
+  if (!waMessageId && !shouldAllowLocalMessageQueue()) {
+    return res.status(400).json({ error: 'WhatsApp message was not sent.' });
+  }
+
+  const message = await addMessage({
+    contactId: contact.id,
+    waMessageId,
+    direction: 'outbound',
+    type,
+    body,
+    status,
+    templateName,
+  });
+
   res.status(201).json(message);
 }));
 

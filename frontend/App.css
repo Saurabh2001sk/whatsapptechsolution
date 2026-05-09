@@ -232,6 +232,23 @@ textarea {
   font-size: 12px;
 }
 
+.connection-strip {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+
+.connection-strip span {
+  min-height: 32px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .filter-toolbar {
   display: grid;
   grid-template-columns: 1fr;
@@ -258,6 +275,30 @@ textarea {
   display: grid;
   gap: 6px;
   overflow: auto;
+}
+
+.empty-list {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty-list strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.empty-list button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 34px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 800;
 }
 
 .conversation {
@@ -411,6 +452,11 @@ textarea {
 .message.outbound {
   align-self: flex-end;
   background: var(--bubble-out);
+}
+
+.message b {
+  font-size: 11px;
+  color: var(--green);
 }
 
 .message small {

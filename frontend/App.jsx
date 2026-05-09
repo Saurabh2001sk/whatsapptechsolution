@@ -209,8 +209,20 @@ function App() {
 
   function showPage(page, pageFilter = {}) {
     setActivePage(page)
-    if (pageFilter.label) setFilter(pageFilter.label)
-    if (pageFilter.window) setWindowFilter(pageFilter.window)
+    if (page === 'inbox') {
+      setFilter(pageFilter.label || 'all')
+      setWindowFilter(pageFilter.window || 'all')
+      setSearch('')
+    } else if (page === 'new') {
+      setFilter('New Enquiry')
+      setWindowFilter('all')
+    } else if (page === 'sales') {
+      setFilter('all')
+      setWindowFilter('open')
+    } else {
+      if (pageFilter.label) setFilter(pageFilter.label)
+      if (pageFilter.window) setWindowFilter(pageFilter.window)
+    }
   }
 
   async function sendMessage(event) {
@@ -299,6 +311,12 @@ function App() {
     try {
       const res = await api.post('/api/whatsapp/test-message', testMessage)
       setTestResult(`Accepted by Meta. To: ${res.data.to}. Message ID: ${res.data.messageId || 'not returned'}`)
+      setActivePage('inbox')
+      setFilter('all')
+      setWindowFilter('all')
+      setSearch('')
+      if (res.data.contactId) setSelectedId(res.data.contactId)
+      await loadAll()
     } catch (err) {
       setTestResult(err.response?.data?.error || 'Test message failed')
     }
@@ -339,6 +357,8 @@ function App() {
           <button type="button" onClick={() => showPage('activeOrders')}><PackageCheck size={18} /><strong>{activeOrders.length}</strong><span>Active Orders</span></button>
         </div>
 
+        <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
+
         {(activePage === 'inbox' || activePage === 'new' || activePage === 'sales') && (
           <>
             <div className="filter-toolbar">
@@ -346,7 +366,7 @@ function App() {
               <select value={filter} onChange={(e) => setFilter(e.target.value)}>{labels.map((label) => <option key={label} value={label}>{label}</option>)}</select>
               <select value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}><option value="all">All windows</option><option value="open">24h open</option><option value="expired">Expired</option></select>
             </div>
-            <ConversationList conversations={conversations} selectedId={selected?.id} onSelect={setSelectedId} />
+            <ConversationList conversations={conversations} selectedId={selected?.id} onSelect={setSelectedId} onReset={() => showPage('inbox')} />
           </>
         )}
 
@@ -364,6 +384,7 @@ function App() {
         <div className="message-list">
           {messages.map((message) => (
             <div className={`message ${message.direction}`} key={message.id}>
+              <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
               <span>{message.body}</span>
               <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
             </div>
@@ -388,9 +409,27 @@ function App() {
   )
 }
 
-function ConversationList({ conversations, selectedId, onSelect }) {
+function ConnectionStrip({ status, whatsappConfig, canMonitor }) {
+  const outgoingOk = canMonitor ? Boolean(whatsappConfig?.configured) : Boolean(status?.whatsappTokenSet && status?.phoneNumberIdSet)
+  const incomingReady = canMonitor ? Boolean(whatsappConfig?.callbackUrl && !String(whatsappConfig.callbackUrl).startsWith('Set ')) : Boolean(status?.webhookVerifyTokenSet)
+  return (
+    <div className="connection-strip">
+      <span className={outgoingOk ? 'ok' : 'warn'}><CheckCircle2 size={15} /> Outgoing {outgoingOk ? 'connected' : 'not ready'}</span>
+      <span className={incomingReady ? 'ok' : 'warn'}><Shield size={15} /> Incoming webhook {incomingReady ? 'ready' : 'needs URL'}</span>
+    </div>
+  )
+}
+
+function ConversationList({ conversations, selectedId, onSelect, onReset }) {
   return (
     <div className="conversation-list">
+      {!conversations.length && (
+        <div className="empty-list">
+          <strong>No chats in this filter</strong>
+          <span>Inbox ko All chats par reset karo, ya Settings me Local Inbound Test se customer message capture karke check karo.</span>
+          <button type="button" onClick={onReset}>Show all chats</button>
+        </div>
+      )}
       {conversations.map((conversation) => (
         <button className={`conversation ${selectedId === conversation.id ? 'active' : ''}`} key={conversation.id} type="button" onClick={() => onSelect(conversation.id)}>
           <span className="avatar">{initials(conversation.name || conversation.phone)}</span>
