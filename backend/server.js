@@ -4,7 +4,9 @@ const axios = require('axios');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const express = require('express');
+const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 const { hasDatabase, query } = require('./db');
 
 const app = express();
@@ -252,6 +254,13 @@ async function ensureDefaultUsers() {
       [user.name, user.email, passwordHash, user.role],
     );
   }
+}
+
+async function ensureSchema() {
+  if (!hasDatabase) return;
+  const schemaPath = path.join(__dirname, 'schema.sql');
+  const schema = fs.readFileSync(schemaPath, 'utf8');
+  await query(schema);
 }
 
 async function upsertContact({ waId, name, phone, label }) {
@@ -1082,7 +1091,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-ensureDefaultUsers().then(() => {
+ensureSchema().then(() => ensureDefaultUsers()).then(() => {
   app.listen(port, () => {
     console.log(`BOS WhatsApp backend running on http://localhost:${port}`);
   });
