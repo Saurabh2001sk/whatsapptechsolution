@@ -5,7 +5,7 @@ This workspace has two apps:
 - `backend`: Express API for Meta WhatsApp webhooks, login/roles, conversations, labels, assignment, templates, enquiry drafts, products, quotations, and sales orders.
 - `frontend`: Vite React CRM inbox UI for admin, manager, and sales users.
 
-Reference/setup-only files are kept in `extra-files/` so the runtime folders stay focused.
+Reference/setup-only files are kept in `z-extra-files/` so the runtime folders stay focused and appears after the main app folders.
 
 ## Demo Login
 
@@ -107,8 +107,8 @@ WHATSAPP_API_VERSION=v20.0
 Template env files are in:
 
 ```text
-extra-files/backend.env.example
-extra-files/frontend.env.example
+z-extra-files/backend.env.example
+z-extra-files/frontend.env.example
 ```
 
 In Meta Developer Console, configure the webhook callback URL to:
