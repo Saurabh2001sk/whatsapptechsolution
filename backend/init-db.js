@@ -33,7 +33,7 @@ async function main() {
 
   const appDb = new Client({ connectionString: process.env.DATABASE_URL });
   await appDb.connect();
-  const schema = fs.readFileSync(path.join(__dirname, '..', 'schema.sql'), 'utf8');
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   await appDb.query(schema);
   await appDb.end();
 
