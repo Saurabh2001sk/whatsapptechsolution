@@ -115,6 +115,7 @@ function App() {
   const [testResult, setTestResult] = useState('')
   const [quoteRates, setQuoteRates] = useState({})
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
@@ -141,6 +142,7 @@ function App() {
   async function loadAll() {
     if (!localStorage.getItem('bosToken')) return
     setLoading(true)
+    setLoadError('')
     try {
       const calls = [
         api.get('/api/settings/status'),
@@ -166,6 +168,15 @@ function App() {
       if (usersRes) setUsers(usersRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
+    } catch (err) {
+      const message = err.response?.data?.error || err.message || 'Unable to load CRM data'
+      setLoadError(message)
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        localStorage.removeItem('bosToken')
+        localStorage.removeItem('bosUser')
+        setAuth(null)
+        setUser(null)
+      }
     } finally {
       setLoading(false)
     }
@@ -349,6 +360,7 @@ function App() {
           </div>
           <button type="button" onClick={loadAll} disabled={loading}><RefreshCw size={17} /> Refresh</button>
         </div>
+        {loadError && <div className="load-error">{loadError}</div>}
 
         <div className="metric-grid">
           <button type="button" onClick={() => showPage('inbox', { label: 'all' })}><Inbox size={18} /><strong>{dashboard?.total_conversations || 0}</strong><span>Total Chats</span></button>

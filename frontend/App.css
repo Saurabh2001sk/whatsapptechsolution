@@ -130,6 +130,16 @@ textarea {
   font-weight: 700;
 }
 
+.load-error {
+  border: 1px solid #f4b4ae;
+  border-radius: 7px;
+  background: #fff1ef;
+  color: var(--danger);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .nav-rail {
   background: #10231d;
   color: #d5e6df;
