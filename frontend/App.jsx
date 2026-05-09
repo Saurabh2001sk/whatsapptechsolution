@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import {
-  AlertTriangle,
   BarChart3,
   Bell,
   CheckCircle2,
@@ -16,7 +15,6 @@ import {
   Send,
   Settings,
   Shield,
-  Tag,
   UserRound,
   Users,
 } from 'lucide-react'
@@ -116,6 +114,7 @@ function App() {
   const [quoteRates, setQuoteRates] = useState({})
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [profileOpen, setProfileOpen] = useState(false)
 
   const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
@@ -335,6 +334,7 @@ function App() {
 
   const newEnquiries = drafts.filter((item) => item.status === 'draft')
   const activeOrders = orders.filter((item) => item.status !== 'closed')
+  const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
 
   return (
     <main className="app-shell">
@@ -353,7 +353,7 @@ function App() {
       </aside>
 
       <section className="module-panel">
-        <div className="app-title">
+        <div className="app-title inbox-title">
           <div>
             <h1>BOS WhatsApp CRM</h1>
             <span>{user.name} - {user.role}</span>
@@ -362,21 +362,20 @@ function App() {
         </div>
         {loadError && <div className="load-error">{loadError}</div>}
 
-        <div className="metric-grid">
-          <button type="button" onClick={() => showPage('inbox', { label: 'all' })}><Inbox size={18} /><strong>{dashboard?.total_conversations || 0}</strong><span>Total Chats</span></button>
-          <button type="button" onClick={() => showPage('new', { label: 'New Enquiry' })}><Bell size={18} /><strong>{newEnquiries.length}</strong><span>New Enquiries</span></button>
-          <button type="button" onClick={() => showPage('inbox', { window: 'expired' })}><AlertTriangle size={18} /><strong>{dashboard?.expired_windows || 0}</strong><span>Expired Window</span></button>
-          <button type="button" onClick={() => showPage('activeOrders')}><PackageCheck size={18} /><strong>{activeOrders.length}</strong><span>Active Orders</span></button>
-        </div>
-
-        <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
-
-        {(activePage === 'inbox' || activePage === 'new' || activePage === 'sales') && (
+        {chatPages && (
           <>
+            <div className="chat-stats">
+              <button type="button" onClick={() => showPage('inbox', { label: 'all' })}><strong>{dashboard?.total_conversations || 0}</strong><span>Chats</span></button>
+              <button type="button" onClick={() => showPage('new')}><strong>{newEnquiries.length}</strong><span>New</span></button>
+              <button type="button" onClick={() => showPage('inbox', { window: 'expired' })}><strong>{dashboard?.expired_windows || 0}</strong><span>Expired</span></button>
+            </div>
+            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
             <div className="filter-toolbar">
               <div className="search-box"><Search size={17} /><input placeholder="Search customer, phone, company" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') loadAll() }} /></div>
-              <select value={filter} onChange={(e) => setFilter(e.target.value)}>{labels.map((label) => <option key={label} value={label}>{label}</option>)}</select>
-              <select value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}><option value="all">All windows</option><option value="open">24h open</option><option value="expired">Expired</option></select>
+              <div className="filter-row">
+                <select value={filter} onChange={(e) => setFilter(e.target.value)}>{labels.map((label) => <option key={label} value={label}>{label}</option>)}</select>
+                <select value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}><option value="all">All windows</option><option value="open">24h open</option><option value="expired">Expired</option></select>
+              </div>
             </div>
             <ConversationList conversations={conversations} selectedId={selected?.id} onSelect={setSelectedId} onReset={() => showPage('inbox')} />
           </>
@@ -388,11 +387,13 @@ function App() {
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} onCreate={createUser} onToggle={toggleUser} />}
         {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} />}
 
-        <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
+        {!chatPages && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
+          <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
+        )}
       </section>
 
       <section className="chat-shell">
-        <ChatHeader selected={selected} />
+        <ChatHeader selected={selected} onProfile={() => setProfileOpen(true)} />
         <div className="message-list">
           {messages.map((message) => (
             <div className={`message ${message.direction}`} key={message.id}>
@@ -414,7 +415,9 @@ function App() {
         </form>
       </section>
 
-      <aside className="profile-panel">
+      {profileOpen && <button className="drawer-backdrop" type="button" aria-label="Close profile" onClick={() => setProfileOpen(false)} />}
+      <aside className={`profile-panel ${profileOpen ? 'open' : ''}`}>
+        <button className="drawer-close" type="button" onClick={() => setProfileOpen(false)}>Close</button>
         <ProfilePanel selected={selected} leadForm={leadForm} setLeadForm={setLeadForm} users={users} canMonitor={canMonitor} stages={stages} labels={labels} onSave={saveLead} assignmentHistory={assignmentHistory} />
       </aside>
     </main>
@@ -457,7 +460,7 @@ function ConversationList({ conversations, selectedId, onSelect, onReset }) {
   )
 }
 
-function ChatHeader({ selected }) {
+function ChatHeader({ selected, onProfile }) {
   return (
     <header className="chat-header">
       <span className="avatar large">{initials(selected?.name || selected?.phone)}</span>
@@ -466,6 +469,7 @@ function ChatHeader({ selected }) {
         <span>{selected?.phone || ''} {selected?.reply_window_open ? '- 24h window open' : '- template required'}</span>
       </div>
       <span className={`status-pill ${selected?.reply_window_open ? 'ok' : 'warn'}`}>{selected?.label || 'No label'}</span>
+      <button className="profile-toggle" type="button" onClick={onProfile} disabled={!selected}><UserRound size={18} /></button>
     </header>
   )
 }
