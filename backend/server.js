@@ -48,6 +48,22 @@ const LABELS = [
   'Review Required',
 ];
 
+const DEFAULT_APP_SETTINGS = {
+  appName: 'WhatsApp Sales CRM',
+  companyName: 'Your Company',
+  industry: 'General Sales',
+  primaryColor: '#0b7f69',
+  currency: 'INR',
+  labels: LABELS,
+  stages: ['new', 'qualified', 'quoted', 'won', 'lost'],
+  quotationPrefix: 'QT-WA',
+  orderPrefix: 'SO-WA',
+  botEnabled: false,
+  botGreeting: 'Hello, please share the product, size, and quantity you need.',
+  handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
+  inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
+};
+
 const memory = {
   users: [
     { id: 'user-admin', name: 'Admin User', email: 'admin@bos.com', password: 'admin123', role: 'admin', active: true },
@@ -106,6 +122,7 @@ const memory = {
     { id: 'template-1', name: 'quotation_followup', language: 'en', body: 'Your quotation is ready. Please confirm.' },
     { id: 'template-2', name: 'payment_reminder', language: 'en', body: 'Payment follow-up for your pending order.' },
   ],
+  appSettings: { ...DEFAULT_APP_SETTINGS },
 };
 
 function now() {
@@ -180,6 +197,61 @@ function maskValue(value) {
   if (!value) return '';
   if (value.length <= 8) return '********';
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function cleanList(value, fallback) {
+  const list = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(',')
+      .map((item) => item.trim());
+  const clean = [...new Set(list.filter(Boolean))];
+  return clean.length ? clean : fallback;
+}
+
+function normalizeAppSettings(input = {}) {
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...input,
+    appName: String(input.appName || DEFAULT_APP_SETTINGS.appName).trim().slice(0, 80),
+    companyName: String(input.companyName || DEFAULT_APP_SETTINGS.companyName).trim().slice(0, 100),
+    industry: String(input.industry || DEFAULT_APP_SETTINGS.industry).trim().slice(0, 80),
+    primaryColor: /^#[0-9a-f]{6}$/i.test(String(input.primaryColor || '')) ? input.primaryColor : DEFAULT_APP_SETTINGS.primaryColor,
+    currency: String(input.currency || DEFAULT_APP_SETTINGS.currency).trim().toUpperCase().slice(0, 6),
+    labels: cleanList(input.labels, DEFAULT_APP_SETTINGS.labels),
+    stages: cleanList(input.stages, DEFAULT_APP_SETTINGS.stages),
+    quotationPrefix: String(input.quotationPrefix || DEFAULT_APP_SETTINGS.quotationPrefix).trim().slice(0, 16),
+    orderPrefix: String(input.orderPrefix || DEFAULT_APP_SETTINGS.orderPrefix).trim().slice(0, 16),
+    botEnabled: Boolean(input.botEnabled),
+    botGreeting: String(input.botGreeting || DEFAULT_APP_SETTINGS.botGreeting).trim().slice(0, 500),
+    handoffKeywords: cleanList(input.handoffKeywords, DEFAULT_APP_SETTINGS.handoffKeywords),
+    inventoryFields: cleanList(input.inventoryFields, DEFAULT_APP_SETTINGS.inventoryFields),
+  };
+}
+
+async function getAppSettings() {
+  if (hasDatabase) {
+    const result = await query('SELECT value FROM app_settings WHERE key = $1', ['customization']);
+    return normalizeAppSettings(result.rows[0]?.value || {});
+  }
+  return normalizeAppSettings(memory.appSettings);
+}
+
+async function saveAppSettings(settings) {
+  const normalized = normalizeAppSettings(settings);
+  if (hasDatabase) {
+    const result = await query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key)
+       DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+       RETURNING value`,
+      ['customization', normalized],
+    );
+    return normalizeAppSettings(result.rows[0].value);
+  }
+  memory.appSettings = normalized;
+  return normalized;
 }
 
 function verifyMetaWebhookSignature(req) {
@@ -484,6 +556,16 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, database: hasDatabase ? 'postgres' : 'memory', whatsappConfigured: isWhatsAppConfigured() });
 });
 
+app.get('/api/public/app-settings', asyncHandler(async (req, res) => {
+  const settings = await getAppSettings();
+  res.json({
+    appName: settings.appName,
+    companyName: settings.companyName,
+    industry: settings.industry,
+    primaryColor: settings.primaryColor,
+  });
+}));
+
 app.get('/api/test-db', asyncHandler(async (req, res) => {
   if (!hasDatabase) return res.json({ ok: true, mode: 'memory', message: 'DATABASE_URL blank hai, backend demo memory mode me chal raha hai.' });
   try {
@@ -511,6 +593,15 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
+
+app.get('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
+  res.json(await getAppSettings());
+}));
+
+app.put('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  res.json(await saveAppSettings(req.body || {}));
+}));
 
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];

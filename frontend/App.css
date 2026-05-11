@@ -683,9 +683,46 @@ textarea {
 }
 
 .user-form,
-.dual-form {
+.dual-form,
+.custom-form,
+.settings-stack {
   display: grid;
   gap: 8px;
+}
+
+.custom-form {
+  grid-template-columns: 1fr 1fr;
+}
+
+.custom-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.custom-form textarea,
+.custom-form .toggle-row,
+.custom-form button,
+.success-text {
+  grid-column: 1 / -1;
+}
+
+.toggle-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  justify-content: start;
+}
+
+.toggle-row input {
+  width: auto;
+  min-height: auto;
+}
+
+.success-text {
+  color: var(--green);
+  font-weight: 800;
 }
 
 .user-row {

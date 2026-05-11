@@ -7,6 +7,17 @@ This workspace has two apps:
 
 Reference/setup-only files are kept in `z-extra-files/` so the runtime folders stay focused and appears after the main app folders.
 
+## Client Customization
+
+Admin/Manager users can configure the app from the frontend Settings page:
+
+- App name, client company name, industry, and theme color
+- Custom lead labels and sales stages
+- Currency, quotation prefix, and order prefix
+- Bot greeting, bot handoff keywords, and inventory fields
+
+These settings are persisted in the backend `app_settings` table and let each buyer adapt the same product to their workflow without code changes.
+
 ## Demo Login
 
 ```text

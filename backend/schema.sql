@@ -149,6 +149,12 @@ CREATE TABLE IF NOT EXISTS whatsapp_templates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 INSERT INTO whatsapp_templates (name, language, body)
 VALUES
   ('quotation_followup', 'en', 'Your quotation is ready. Please confirm.'),

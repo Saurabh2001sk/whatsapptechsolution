@@ -22,8 +22,32 @@ import './App.css'
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000' })
 
-const labels = ['all', 'New Enquiry', 'Quotation Required', 'Dispatch Query', 'Payment Follow-up', 'Complaint', 'Review Required']
-const stages = ['new', 'qualified', 'quoted', 'won', 'lost']
+const defaultAppSettings = {
+  appName: 'WhatsApp Sales CRM',
+  companyName: 'Your Company',
+  industry: 'General Sales',
+  primaryColor: '#0b7f69',
+  currency: 'INR',
+  labels: ['New Enquiry', 'Quotation Required', 'Dispatch Query', 'Payment Follow-up', 'Complaint', 'Review Required'],
+  stages: ['new', 'qualified', 'quoted', 'won', 'lost'],
+  quotationPrefix: 'QT-WA',
+  orderPrefix: 'SO-WA',
+  botEnabled: false,
+  botGreeting: 'Hello, please share the product, size, and quantity you need.',
+  handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
+  inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
+}
+
+function toCsv(value) {
+  return Array.isArray(value) ? value.join(', ') : value || ''
+}
+
+function fromCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
 
 function setAuth(token) {
   if (token) api.defaults.headers.common.Authorization = `Bearer ${token}`
@@ -43,7 +67,7 @@ function initials(name = '') {
     .join('') || 'C'
 }
 
-function Login({ onLogin }) {
+function Login({ onLogin, appSettings }) {
   const [form, setForm] = useState({ email: '', password: '' })
   const [error, setError] = useState('')
 
@@ -70,15 +94,15 @@ function Login({ onLogin }) {
         <div className="login-brand">
           <MessageCircle size={34} />
           <div>
-            <h1>BOS WhatsApp CRM</h1>
-            <span>Sales inbox for one WhatsApp API number</span>
+            <h1>{appSettings.appName}</h1>
+            <span>{appSettings.companyName} - {appSettings.industry}</span>
           </div>
         </div>
         <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
         <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" />
         {error && <p className="error-text">{error}</p>}
         <button type="submit">Login</button>
-        <small>Use your assigned BOS CRM credentials.</small>
+        <small>Use your assigned CRM credentials.</small>
       </form>
     </main>
   )
@@ -115,10 +139,21 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [profileOpen, setProfileOpen] = useState(false)
+  const [appSettings, setAppSettings] = useState(defaultAppSettings)
+  const [customForm, setCustomForm] = useState({
+    ...defaultAppSettings,
+    labelsText: toCsv(defaultAppSettings.labels),
+    stagesText: toCsv(defaultAppSettings.stages),
+    handoffKeywordsText: toCsv(defaultAppSettings.handoffKeywords),
+    inventoryFieldsText: toCsv(defaultAppSettings.inventoryFields),
+  })
+  const [settingsSaved, setSettingsSaved] = useState('')
 
   const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
   const selected = useMemo(() => conversations.find((item) => item.id === selectedId) || conversations[0], [conversations, selectedId])
+  const labels = useMemo(() => ['all', ...(appSettings.labels || defaultAppSettings.labels)], [appSettings.labels])
+  const stages = useMemo(() => appSettings.stages || defaultAppSettings.stages, [appSettings.stages])
 
   const pageItems = useMemo(() => {
     const common = [
@@ -138,6 +173,17 @@ function App() {
     setAuth(token)
   }, [token])
 
+  useEffect(() => {
+    api.get('/api/public/app-settings')
+      .then((res) => setAppSettings({ ...defaultAppSettings, ...res.data }))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--green', appSettings.primaryColor || defaultAppSettings.primaryColor)
+    document.title = appSettings.appName || defaultAppSettings.appName
+  }, [appSettings])
+
   async function loadAll() {
     if (!localStorage.getItem('bosToken')) return
     setLoading(true)
@@ -151,12 +197,13 @@ function App() {
         api.get('/api/enquiry-drafts'),
         api.get('/api/quotations'),
         api.get('/api/orders'),
+        api.get('/api/app-settings').catch(() => ({ data: defaultAppSettings })),
       ]
       if (canMonitor) {
         calls.push(api.get('/api/users'))
         calls.push(api.get('/api/whatsapp/config'))
       }
-      const [statusRes, dashRes, convoRes, templateRes, draftRes, quoteRes, orderRes, usersRes, whatsappConfigRes] = await Promise.all(calls)
+      const [statusRes, dashRes, convoRes, templateRes, draftRes, quoteRes, orderRes, appSettingsRes, usersRes, whatsappConfigRes] = await Promise.all(calls)
       setStatus(statusRes.data)
       setDashboard(dashRes.data)
       setConversations(convoRes.data)
@@ -164,6 +211,15 @@ function App() {
       setDrafts(draftRes.data)
       setQuotations(quoteRes.data)
       setOrders(orderRes.data)
+      const nextSettings = { ...defaultAppSettings, ...appSettingsRes.data }
+      setAppSettings(nextSettings)
+      setCustomForm({
+        ...nextSettings,
+        labelsText: toCsv(nextSettings.labels),
+        stagesText: toCsv(nextSettings.stages),
+        handoffKeywordsText: toCsv(nextSettings.handoffKeywords),
+        inventoryFieldsText: toCsv(nextSettings.inventoryFields),
+      })
       if (usersRes) setUsers(usersRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
@@ -208,7 +264,7 @@ function App() {
     })
   }, [selected?.id])
 
-  if (!user) return <Login onLogin={setUser} />
+  if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
 
   function logout() {
     localStorage.removeItem('bosToken')
@@ -315,6 +371,30 @@ function App() {
     await loadAll()
   }
 
+  async function saveCustomization(event) {
+    event.preventDefault()
+    setSettingsSaved('')
+    const payload = {
+      ...customForm,
+      labels: fromCsv(customForm.labelsText),
+      stages: fromCsv(customForm.stagesText),
+      handoffKeywords: fromCsv(customForm.handoffKeywordsText),
+      inventoryFields: fromCsv(customForm.inventoryFieldsText),
+    }
+    const res = await api.put('/api/app-settings', payload)
+    const nextSettings = { ...defaultAppSettings, ...res.data }
+    setAppSettings(nextSettings)
+    setCustomForm({
+      ...nextSettings,
+      labelsText: toCsv(nextSettings.labels),
+      stagesText: toCsv(nextSettings.stages),
+      handoffKeywordsText: toCsv(nextSettings.handoffKeywords),
+      inventoryFieldsText: toCsv(nextSettings.inventoryFields),
+    })
+    setSettingsSaved('Customization saved')
+    await loadAll()
+  }
+
   async function sendTestMessage(event) {
     event.preventDefault()
     setTestResult('')
@@ -355,8 +435,8 @@ function App() {
       <section className="module-panel">
         <div className="app-title inbox-title">
           <div>
-            <h1>BOS WhatsApp CRM</h1>
-            <span>{user.name} - {user.role}</span>
+            <h1>{appSettings.appName}</h1>
+            <span>{appSettings.companyName} - {user.name} / {user.role}</span>
           </div>
           <button type="button" onClick={loadAll} disabled={loading}><RefreshCw size={17} /> Refresh</button>
         </div>
@@ -385,7 +465,7 @@ function App() {
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} onCreate={createUser} onToggle={toggleUser} />}
-        {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} />}
+        {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} />}
 
         {!chatPages && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
@@ -584,30 +664,53 @@ function UsersPage({ users, newUser, setNewUser, onCreate, onToggle }) {
   )
 }
 
-function SettingsPage({ whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate }) {
+function SettingsPage({ whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved }) {
   return (
-    <section className="table-module">
-      <div className="module-title"><Settings size={18} /><h3>WhatsApp Setup</h3></div>
-      <div className="setup-grid">
-        <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
-        <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
-        <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
-      </div>
-      <p className="setup-copy">Webhook: {whatsappConfig?.callbackUrl || '-'}</p>
-      <form className="dual-form" onSubmit={onTest}>
-        <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
-        <input placeholder="Test message" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
-        <button type="submit">Send Test</button>
-      </form>
-      {testResult && <small>{testResult}</small>}
-      <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
-      <form className="sim-form" onSubmit={onSimulate}>
-        <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
-        <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
-        <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
-        <button type="submit">Capture Message</button>
-      </form>
-    </section>
+    <div className="settings-stack">
+      <section className="table-module">
+        <div className="module-title"><Settings size={18} /><h3>Business Customization</h3></div>
+        <form className="custom-form" onSubmit={onSaveCustomization}>
+          <label>App Name<input value={customForm.appName} onChange={(e) => setCustomForm({ ...customForm, appName: e.target.value })} /></label>
+          <label>Company Name<input value={customForm.companyName} onChange={(e) => setCustomForm({ ...customForm, companyName: e.target.value })} /></label>
+          <label>Industry<input value={customForm.industry} onChange={(e) => setCustomForm({ ...customForm, industry: e.target.value })} /></label>
+          <label>Theme Color<input type="color" value={customForm.primaryColor} onChange={(e) => setCustomForm({ ...customForm, primaryColor: e.target.value })} /></label>
+          <label>Currency<input value={customForm.currency} onChange={(e) => setCustomForm({ ...customForm, currency: e.target.value })} /></label>
+          <label>Quotation Prefix<input value={customForm.quotationPrefix} onChange={(e) => setCustomForm({ ...customForm, quotationPrefix: e.target.value })} /></label>
+          <label>Order Prefix<input value={customForm.orderPrefix} onChange={(e) => setCustomForm({ ...customForm, orderPrefix: e.target.value })} /></label>
+          <label>Labels<textarea value={customForm.labelsText} onChange={(e) => setCustomForm({ ...customForm, labelsText: e.target.value })} /></label>
+          <label>Sales Stages<textarea value={customForm.stagesText} onChange={(e) => setCustomForm({ ...customForm, stagesText: e.target.value })} /></label>
+          <label>Bot Greeting<textarea value={customForm.botGreeting} onChange={(e) => setCustomForm({ ...customForm, botGreeting: e.target.value })} /></label>
+          <label>Handoff Keywords<textarea value={customForm.handoffKeywordsText} onChange={(e) => setCustomForm({ ...customForm, handoffKeywordsText: e.target.value })} /></label>
+          <label>Inventory Fields<textarea value={customForm.inventoryFieldsText} onChange={(e) => setCustomForm({ ...customForm, inventoryFieldsText: e.target.value })} /></label>
+          <label className="toggle-row"><input type="checkbox" checked={Boolean(customForm.botEnabled)} onChange={(e) => setCustomForm({ ...customForm, botEnabled: e.target.checked })} /> Enable Auto Bot</label>
+          <button type="submit">Save Customization</button>
+          {settingsSaved && <small className="success-text">{settingsSaved}</small>}
+        </form>
+      </section>
+
+      <section className="table-module">
+        <div className="module-title"><Settings size={18} /><h3>WhatsApp Setup</h3></div>
+        <div className="setup-grid">
+          <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
+          <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
+          <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
+        </div>
+        <p className="setup-copy">Webhook: {whatsappConfig?.callbackUrl || '-'}</p>
+        <form className="dual-form" onSubmit={onTest}>
+          <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
+          <input placeholder="Test message" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
+          <button type="submit">Send Test</button>
+        </form>
+        {testResult && <small>{testResult}</small>}
+        <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
+        <form className="sim-form" onSubmit={onSimulate}>
+          <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
+          <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
+          <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
+          <button type="submit">Capture Message</button>
+        </form>
+      </section>
+    </div>
   )
 }
 
