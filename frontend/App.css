@@ -112,7 +112,9 @@ textarea {
 .user-form button,
 .user-row button,
 .dual-form button,
-.sim-form button {
+.sim-form button,
+.inventory-toolbar button,
+.product-form button {
   border: 0;
   border-radius: 7px;
   background: var(--green);
@@ -685,9 +687,61 @@ textarea {
 .user-form,
 .dual-form,
 .custom-form,
+.product-form,
 .settings-stack {
   display: grid;
   gap: 8px;
+}
+
+.inventory-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.product-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #f9fbf7;
+}
+
+.product-form button,
+.product-form .toggle-row {
+  grid-column: span 1;
+}
+
+.product-list {
+  display: grid;
+  gap: 8px;
+}
+
+.product-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 90px 1fr auto auto auto;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.product-row small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.product-row em,
+.product-row i {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.product-row .doc-actions {
+  grid-column: 1 / -1;
 }
 
 .custom-form {

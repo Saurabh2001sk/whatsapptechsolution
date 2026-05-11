@@ -119,6 +119,7 @@ function App() {
   const [messages, setMessages] = useState([])
   const [templates, setTemplates] = useState([])
   const [drafts, setDrafts] = useState([])
+  const [products, setProducts] = useState([])
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
   const [whatsappConfig, setWhatsappConfig] = useState(null)
@@ -148,6 +149,10 @@ function App() {
     inventoryFieldsText: toCsv(defaultAppSettings.inventoryFields),
   })
   const [settingsSaved, setSettingsSaved] = useState('')
+  const emptyProduct = { sku: '', name: '', category: '', grade: '', size: '', shape: '', unit: 'pcs', price: '', stock_qty: '', active: true }
+  const [productForm, setProductForm] = useState(emptyProduct)
+  const [editingProductId, setEditingProductId] = useState('')
+  const [productSearch, setProductSearch] = useState('')
 
   const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
@@ -160,6 +165,7 @@ function App() {
       { id: 'inbox', label: 'Inbox', icon: Inbox },
       { id: 'new', label: 'New Enquiries', icon: Bell },
       { id: 'sales', label: 'Sales Pipeline', icon: BarChart3 },
+      { id: 'inventory', label: 'Inventory', icon: PackageCheck },
       { id: 'quotes', label: 'Quotations', icon: FileText },
       { id: 'orders', label: 'Orders', icon: PackageCheck },
       { id: 'activeOrders', label: 'Active Orders', icon: Clock3 },
@@ -195,6 +201,7 @@ function App() {
         api.get('/api/conversations', { params: { label: filter, q: search, window: windowFilter } }),
         api.get('/api/templates'),
         api.get('/api/enquiry-drafts'),
+        api.get('/api/products', { params: { q: productSearch } }),
         api.get('/api/quotations'),
         api.get('/api/orders'),
         api.get('/api/app-settings').catch(() => ({ data: defaultAppSettings })),
@@ -203,12 +210,13 @@ function App() {
         calls.push(api.get('/api/users'))
         calls.push(api.get('/api/whatsapp/config'))
       }
-      const [statusRes, dashRes, convoRes, templateRes, draftRes, quoteRes, orderRes, appSettingsRes, usersRes, whatsappConfigRes] = await Promise.all(calls)
+      const [statusRes, dashRes, convoRes, templateRes, draftRes, productRes, quoteRes, orderRes, appSettingsRes, usersRes, whatsappConfigRes] = await Promise.all(calls)
       setStatus(statusRes.data)
       setDashboard(dashRes.data)
       setConversations(convoRes.data)
       setTemplates(templateRes.data)
       setDrafts(draftRes.data)
+      setProducts(productRes.data)
       setQuotations(quoteRes.data)
       setOrders(orderRes.data)
       const nextSettings = { ...defaultAppSettings, ...appSettingsRes.data }
@@ -359,6 +367,45 @@ function App() {
     await loadAll()
   }
 
+  async function saveProduct(event) {
+    event.preventDefault()
+    const payload = {
+      ...productForm,
+      price: Number(productForm.price || 0),
+      stock_qty: Number(productForm.stock_qty || 0),
+    }
+    if (editingProductId) await api.patch(`/api/products/${editingProductId}`, payload)
+    else await api.post('/api/products', payload)
+    setProductForm(emptyProduct)
+    setEditingProductId('')
+    await loadAll()
+  }
+
+  function editProduct(product) {
+    setEditingProductId(product.id)
+    setProductForm({
+      sku: product.sku || '',
+      name: product.name || '',
+      category: product.category || '',
+      grade: product.grade || '',
+      size: product.size || '',
+      shape: product.shape || '',
+      unit: product.unit || 'pcs',
+      price: product.price || '',
+      stock_qty: product.stock_qty || '',
+      active: product.active !== false,
+    })
+  }
+
+  async function deleteProduct(product) {
+    await api.delete(`/api/products/${product.id}`)
+    if (editingProductId === product.id) {
+      setEditingProductId('')
+      setProductForm(emptyProduct)
+    }
+    await loadAll()
+  }
+
   async function createUser(event) {
     event.preventDefault()
     await api.post('/api/users', newUser)
@@ -461,13 +508,14 @@ function App() {
           </>
         )}
 
+        {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} />}
         {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} />}
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} onCreate={createUser} onToggle={toggleUser} />}
         {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} />}
 
-        {!chatPages && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
+        {!chatPages && activePage !== 'inventory' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
@@ -603,6 +651,53 @@ function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp }) {
             )}
           </div>
         ))}
+      </div>
+    </section>
+  )
+}
+
+function InventoryPage({ products, productForm, setProductForm, editingProductId, onSave, onEdit, onDelete, onCancel, productSearch, setProductSearch, onSearch, canManage, currency }) {
+  return (
+    <section className="table-module inventory-module">
+      <div className="module-title"><PackageCheck size={18} /><h3>Inventory</h3></div>
+      <div className="inventory-toolbar">
+        <div className="search-box"><Search size={17} /><input placeholder="Search SKU, product, grade, size" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') onSearch() }} /></div>
+        <button type="button" onClick={onSearch}>Search</button>
+      </div>
+      {canManage && (
+        <form className="product-form" onSubmit={onSave}>
+          <input placeholder="SKU" value={productForm.sku} onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })} />
+          <input placeholder="Product name" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
+          <input placeholder="Category" value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} />
+          <input placeholder="Grade" value={productForm.grade} onChange={(e) => setProductForm({ ...productForm, grade: e.target.value })} />
+          <input placeholder="Size" value={productForm.size} onChange={(e) => setProductForm({ ...productForm, size: e.target.value })} />
+          <input placeholder="Shape" value={productForm.shape} onChange={(e) => setProductForm({ ...productForm, shape: e.target.value })} />
+          <input placeholder="Unit" value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })} />
+          <input placeholder="Price" type="number" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} />
+          <input placeholder="Stock" type="number" value={productForm.stock_qty} onChange={(e) => setProductForm({ ...productForm, stock_qty: e.target.value })} />
+          <label className="toggle-row"><input type="checkbox" checked={Boolean(productForm.active)} onChange={(e) => setProductForm({ ...productForm, active: e.target.checked })} /> Active</label>
+          <button type="submit">{editingProductId ? 'Update Product' : 'Add Product'}</button>
+          {editingProductId && <button type="button" onClick={onCancel}>Cancel</button>}
+        </form>
+      )}
+      <div className="product-list">
+        {products.map((product) => (
+          <div className="product-row" key={product.id}>
+            <strong>{product.sku}</strong>
+            <span>{product.name}</span>
+            <small>{[product.category, product.grade, product.size, product.shape].filter(Boolean).join(' | ') || 'No attributes'}</small>
+            <b>{currency || 'INR'} {Number(product.price || 0).toLocaleString('en-IN')}</b>
+            <em>{Number(product.stock_qty || 0).toLocaleString('en-IN')} {product.unit || 'pcs'}</em>
+            <i className={product.active ? 'ok' : 'warn'}>{product.active ? 'Active' : 'Inactive'}</i>
+            {canManage && (
+              <div className="doc-actions">
+                <button type="button" onClick={() => onEdit(product)}>Edit</button>
+                <button type="button" onClick={() => onDelete(product)}>Delete</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {!products.length && <div className="empty-list"><strong>No products found</strong><span>Add products so the bot can match inventory and prepare quotations.</span></div>}
       </div>
     </section>
   )

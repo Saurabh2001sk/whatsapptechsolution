@@ -98,7 +98,7 @@ const memory = {
     },
   ],
   products: [
-    { id: 'prod-1', sku: 'BOS-001', name: 'Standard Product', price: 1200, stock_qty: 40 },
+    { id: 'prod-1', sku: 'SKU-001', name: 'Standard Product', category: 'General', grade: '', size: '', shape: '', unit: 'pcs', price: 1200, stock_qty: 40, active: true, created_at: now() },
   ],
   quotations: [],
   quotationItems: [],
@@ -226,6 +226,21 @@ function normalizeAppSettings(input = {}) {
     botGreeting: String(input.botGreeting || DEFAULT_APP_SETTINGS.botGreeting).trim().slice(0, 500),
     handoffKeywords: cleanList(input.handoffKeywords, DEFAULT_APP_SETTINGS.handoffKeywords),
     inventoryFields: cleanList(input.inventoryFields, DEFAULT_APP_SETTINGS.inventoryFields),
+  };
+}
+
+function normalizeProduct(input = {}) {
+  return {
+    sku: String(input.sku || '').trim().slice(0, 80),
+    name: String(input.name || '').trim().slice(0, 160),
+    category: String(input.category || '').trim().slice(0, 80),
+    grade: String(input.grade || '').trim().slice(0, 80),
+    size: String(input.size || '').trim().slice(0, 80),
+    shape: String(input.shape || '').trim().slice(0, 80),
+    unit: String(input.unit || 'pcs').trim().slice(0, 20) || 'pcs',
+    price: Number(input.price || 0),
+    stock_qty: Number(input.stock_qty || 0),
+    active: input.active === undefined ? true : Boolean(input.active),
   };
 }
 
@@ -1209,22 +1224,86 @@ app.post('/api/enquiry-drafts/:id/create-quote', requireAuth, asyncHandler(async
 }));
 
 app.get('/api/products', requireAuth, asyncHandler(async (req, res) => {
+  const { q, active } = req.query;
   if (hasDatabase) {
-    const result = await query('SELECT * FROM products ORDER BY created_at DESC');
+    const params = [];
+    const where = [];
+    if (q) {
+      params.push(`%${q}%`);
+      where.push(`(sku ILIKE $${params.length} OR name ILIKE $${params.length} OR category ILIKE $${params.length} OR grade ILIKE $${params.length} OR size ILIKE $${params.length} OR shape ILIKE $${params.length})`);
+    }
+    if (active === 'true' || active === 'false') {
+      params.push(active === 'true');
+      where.push(`active = $${params.length}`);
+    }
+    const result = await query(
+      `SELECT * FROM products
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY active DESC, created_at DESC`,
+      params,
+    );
     return res.json(result.rows);
   }
-  res.json(memory.products);
+  let rows = [...memory.products];
+  if (q) {
+    const needle = q.toLowerCase();
+    rows = rows.filter((item) => `${item.sku} ${item.name} ${item.category} ${item.grade} ${item.size} ${item.shape}`.toLowerCase().includes(needle));
+  }
+  if (active === 'true' || active === 'false') rows = rows.filter((item) => Boolean(item.active) === (active === 'true'));
+  res.json(rows);
 }));
 
 app.post('/api/products', requireAuth, asyncHandler(async (req, res) => {
-  const { sku, name, price, stock_qty } = req.body;
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  const product = normalizeProduct(req.body);
+  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
   if (hasDatabase) {
-    const result = await query('INSERT INTO products (sku, name, price, stock_qty) VALUES ($1, $2, $3, $4) RETURNING *', [sku, name, Number(price || 0), Number(stock_qty || 0)]);
+    const result = await query(
+      `INSERT INTO products (sku, name, category, grade, size, shape, unit, price, stock_qty, active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active],
+    );
     return res.status(201).json(result.rows[0]);
   }
-  const product = { id: makeId('prod'), sku, name, price: Number(price || 0), stock_qty: Number(stock_qty || 0) };
-  memory.products.unshift(product);
-  res.status(201).json(product);
+  const created = { id: makeId('prod'), ...product, created_at: now() };
+  memory.products.unshift(created);
+  res.status(201).json(created);
+}));
+
+app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  const product = normalizeProduct(req.body);
+  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
+  if (hasDatabase) {
+    const result = await query(
+      `UPDATE products
+       SET sku = $2, name = $3, category = $4, grade = $5, size = $6, shape = $7,
+           unit = $8, price = $9, stock_qty = $10, active = $11
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
+    return res.json(result.rows[0]);
+  }
+  const index = memory.products.findIndex((item) => item.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: 'Product not found' });
+  memory.products[index] = { ...memory.products[index], ...product };
+  res.json(memory.products[index]);
+}));
+
+app.delete('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  if (hasDatabase) {
+    const result = await query('DELETE FROM products WHERE id = $1 RETURNING id', [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
+    return res.json({ ok: true });
+  }
+  const before = memory.products.length;
+  memory.products = memory.products.filter((item) => item.id !== req.params.id);
+  if (memory.products.length === before) return res.status(404).json({ error: 'Product not found' });
+  res.json({ ok: true });
 }));
 
 app.get('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
