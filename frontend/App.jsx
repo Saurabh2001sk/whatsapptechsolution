@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   BarChart3,
   Bell,
+  Bot,
   CheckCircle2,
   Clock3,
   FileText,
@@ -211,10 +212,12 @@ function App() {
 
   const pageItems = useMemo(() => {
     const common = [
+      { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
       { id: 'inbox', label: 'Inbox', icon: Inbox },
       { id: 'new', label: 'New Enquiries', icon: Bell },
       { id: 'sales', label: 'Sales Pipeline', icon: BarChart3 },
       { id: 'inventory', label: 'Inventory', icon: PackageCheck },
+      { id: 'bot', label: 'Bot Studio', icon: Bot },
       { id: 'quotes', label: 'Quotations', icon: FileText },
       { id: 'orders', label: 'Orders', icon: PackageCheck },
       { id: 'activeOrders', label: 'Active Orders', icon: Clock3 },
@@ -519,6 +522,9 @@ function App() {
   const newEnquiries = drafts.filter((item) => item.status === 'draft')
   const activeOrders = orders.filter((item) => item.status !== 'closed')
   const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
+  const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
+  const openQuotes = quotations.filter((item) => !['converted', 'lost'].includes(item.status))
+  const pendingOrders = orders.filter((item) => item.status !== 'closed' || item.payment_status !== 'paid' || item.dispatch_status !== 'dispatched')
 
   return (
     <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
@@ -565,14 +571,16 @@ function App() {
           </>
         )}
 
+        {activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
         {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
+        {activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
         {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} />}
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} onCreate={createUser} onToggle={toggleUser} />}
         {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} />}
 
-        {!chatPages && activePage !== 'inventory' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
+        {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
@@ -717,6 +725,133 @@ function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp }) {
   )
 }
 
+function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onOpenPage }) {
+  const cards = [
+    { label: 'Conversations', value: dashboard?.total_conversations || conversations.length, action: 'inbox' },
+    { label: 'Open Windows', value: dashboard?.open_windows || 0, action: 'inbox' },
+    { label: 'Draft Enquiries', value: drafts.filter((item) => item.status === 'draft').length, action: 'new' },
+    { label: 'Products', value: products.length, action: 'inventory' },
+    { label: 'Low Stock', value: lowStockProducts.length, action: 'inventory' },
+    { label: 'Open Quotes', value: quotations.filter((item) => !['converted', 'lost'].includes(item.status)).length, action: 'quotes' },
+    { label: 'Active Orders', value: orders.filter((item) => item.status !== 'closed').length, action: 'activeOrders' },
+    { label: 'Pending Dispatch', value: orders.filter((item) => item.dispatch_status !== 'dispatched').length, action: 'orders' },
+  ]
+  return (
+    <section className="workspace-page">
+      <div className="workspace-head">
+        <div>
+          <h2>Control Dashboard</h2>
+          <span>Sales, inventory, quotations, and WhatsApp activity in one view.</span>
+        </div>
+      </div>
+      <div className="kpi-grid">
+        {cards.map((card) => (
+          <button type="button" key={card.label} onClick={() => onOpenPage(card.action)}>
+            <strong>{card.value}</strong>
+            <span>{card.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="dashboard-grid">
+        <section className="table-module">
+          <div className="module-title"><Inbox size={18} /><h3>Recent Chats</h3></div>
+          {conversations.slice(0, 5).map((item) => (
+            <div className="mini-row" key={item.id}>
+              <strong>{item.name || item.phone}</strong>
+              <span>{item.label} - {item.last_message || 'No message yet'}</span>
+            </div>
+          ))}
+          {!conversations.length && <EmptyState title="No chats yet" text="Incoming WhatsApp conversations will appear here." />}
+        </section>
+        <section className="table-module">
+          <div className="module-title"><PackageCheck size={18} /><h3>Inventory Alerts</h3></div>
+          {lowStockProducts.slice(0, 5).map((item) => (
+            <div className="mini-row" key={item.id}>
+              <strong>{item.sku} - {item.name}</strong>
+              <span>{Number(item.stock_qty || 0).toLocaleString('en-IN')} {item.unit || 'pcs'} remaining</span>
+            </div>
+          ))}
+          {!lowStockProducts.length && <EmptyState title="Stock healthy" text="No active product is currently at low stock threshold." />}
+        </section>
+        <section className="table-module">
+          <div className="module-title"><FileText size={18} /><h3>Enquiry Drafts</h3></div>
+          {drafts.slice(0, 5).map((item) => (
+            <div className="mini-row" key={item.id}>
+              <strong>{item.contact_name || 'Customer'} - {item.status}</strong>
+              <span>{[item.grade, item.size, item.shape, item.quantity].filter(Boolean).join(' | ') || 'Needs review'}</span>
+            </div>
+          ))}
+          {!drafts.length && <EmptyState title="No drafts" text="Product enquiries extracted from WhatsApp will appear here." />}
+        </section>
+        <section className="table-module">
+          <div className="module-title"><Clock3 size={18} /><h3>Order Attention</h3></div>
+          {orders.filter((item) => item.status !== 'closed' || item.payment_status !== 'paid' || item.dispatch_status !== 'dispatched').slice(0, 5).map((item) => (
+            <div className="mini-row" key={item.id}>
+              <strong>{item.order_no}</strong>
+              <span>Pay: {item.payment_status} | Dispatch: {item.dispatch_status}</span>
+            </div>
+          ))}
+          {!orders.length && <EmptyState title="No orders" text="Converted quotations and confirmed WhatsApp orders will appear here." />}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function BotStudioPage({ appSettings, products, drafts, lowStockProducts, onOpenSettings }) {
+  const activeProducts = products.filter((item) => item.active !== false)
+  const matchedDrafts = drafts.filter((item) => item.grade || item.size || item.shape || item.quantity)
+  const flow = [
+    'Receive WhatsApp enquiry',
+    'Extract product, size, grade, quantity',
+    'Match live inventory',
+    appSettings.botEnabled ? 'Send configured bot reply or quote draft' : 'Prepare reply draft for sales review',
+    'Handoff on keywords or low confidence',
+  ]
+  return (
+    <section className="workspace-page">
+      <div className="workspace-head">
+        <div>
+          <h2>Bot Studio</h2>
+          <span>Configure and monitor the automation layer before making it fully automatic.</span>
+        </div>
+        <button type="button" onClick={onOpenSettings}>Open Settings</button>
+      </div>
+      <div className="kpi-grid">
+        <button type="button"><strong>{appSettings.botEnabled ? 'On' : 'Off'}</strong><span>Auto Bot</span></button>
+        <button type="button"><strong>{activeProducts.length}</strong><span>Active Products</span></button>
+        <button type="button"><strong>{matchedDrafts.length}</strong><span>Parsed Enquiries</span></button>
+        <button type="button"><strong>{lowStockProducts.length}</strong><span>Low Stock Risks</span></button>
+      </div>
+      <div className="dashboard-grid">
+        <section className="table-module">
+          <div className="module-title"><Bot size={18} /><h3>Automation Flow</h3></div>
+          <div className="flow-list">
+            {flow.map((item, index) => <p key={item}><b>{index + 1}</b><span>{item}</span></p>)}
+          </div>
+        </section>
+        <section className="table-module">
+          <div className="module-title"><MessageCircle size={18} /><h3>Bot Greeting</h3></div>
+          <div className="preview-card">{appSettings.botGreeting}</div>
+          <small>Handoff keywords: {(appSettings.handoffKeywords || []).join(', ') || '-'}</small>
+        </section>
+        <section className="table-module">
+          <div className="module-title"><PackageCheck size={18} /><h3>Inventory Fields</h3></div>
+          <div className="chip-list">{(appSettings.inventoryFields || []).map((item) => <span key={item}>{item}</span>)}</div>
+        </section>
+        <section className="table-module">
+          <div className="module-title"><Shield size={18} /><h3>Sales Handoff Rules</h3></div>
+          <div className="mini-row"><strong>Always handoff when:</strong><span>Complaint, urgent keyword, no stock, unclear product, expired 24h reply window, or order exception.</span></div>
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function EmptyState({ title, text }) {
+  return <div className="empty-list"><strong>{title}</strong><span>{text}</span></div>
+}
+
 function InventoryPage({ products, productForm, setProductForm, editingProductId, onSave, onEdit, onDelete, onCancel, productSearch, setProductSearch, onSearch, canManage, currency, inventoryColumnsText, setInventoryColumnsText, onImport, importResult }) {
   const templateColumns = fromCsv(inventoryColumnsText)
   const sample = templateColumns.map((header) => {
@@ -782,6 +917,7 @@ function InventoryPage({ products, productForm, setProductForm, editingProductId
             <strong>{product.sku}</strong>
             <span>{product.name}</span>
             <small>{[product.category, product.grade, product.size, product.shape].filter(Boolean).join(' | ') || 'No attributes'}</small>
+            {product.custom_fields && Object.keys(product.custom_fields).length > 0 && <small className="custom-field-line">Custom: {Object.entries(product.custom_fields).slice(0, 3).map(([key, value]) => `${key}: ${value}`).join(' | ')}</small>}
             <b>{currency || 'INR'} {Number(product.price || 0).toLocaleString('en-IN')}</b>
             <em>{Number(product.stock_qty || 0).toLocaleString('en-IN')} {product.unit || 'pcs'}</em>
             <i className={product.active ? 'ok' : 'warn'}>{product.active ? 'Active' : 'Inactive'}</i>
@@ -803,6 +939,7 @@ function QuotesPage({ quotations, onStatus, onConvert }) {
   return (
     <section className="table-module">
       <div className="module-title"><FileText size={18} /><h3>Quotations</h3></div>
+      {!quotations.length && <EmptyState title="No quotations" text="Quotation drafts created from WhatsApp enquiries will appear here." />}
       {quotations.map((quote) => (
         <div className="doc-row" key={quote.id}>
           <strong>{quote.quote_no}</strong>
@@ -823,6 +960,7 @@ function OrdersPage({ orders, onUpdate, title = 'Orders' }) {
   return (
     <section className="table-module">
       <div className="module-title"><PackageCheck size={18} /><h3>{title}</h3></div>
+      {!orders.length && <EmptyState title="No orders" text="Converted quotations and confirmed orders will appear here." />}
       {orders.map((order) => (
         <div className="doc-row" key={order.id}>
           <strong>{order.order_no}</strong>
@@ -850,6 +988,7 @@ function UsersPage({ users, newUser, setNewUser, onCreate, onToggle }) {
         <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">sales</option><option value="manager">manager</option><option value="admin">admin</option></select>
         <button type="submit">Create User</button>
       </form>
+      {!users.length && <EmptyState title="No users" text="Create sales, manager, and admin users for this client." />}
       {users.map((item) => <div className="user-row" key={item.id}><strong>{item.name}</strong><span>{item.email} - {item.role}</span><button type="button" onClick={() => onToggle(item)}>{item.active ? 'Deactivate' : 'Activate'}</button></div>)}
     </section>
   )

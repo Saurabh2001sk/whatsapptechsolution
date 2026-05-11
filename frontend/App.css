@@ -779,6 +779,10 @@ textarea {
   color: var(--muted);
 }
 
+.custom-field-line {
+  grid-column: 2 / -1;
+}
+
 .product-row em,
 .product-row i {
   font-style: normal;
@@ -850,6 +854,136 @@ textarea {
   font-weight: 800;
 }
 
+.workspace-page {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-head {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-head h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.workspace-head span,
+.mini-row span,
+.flow-list span,
+.chip-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-head button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 800;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.kpi-grid button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  min-height: 82px;
+  display: grid;
+  gap: 4px;
+  place-items: center;
+}
+
+.kpi-grid strong {
+  font-size: 26px;
+}
+
+.kpi-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.dashboard-grid .table-module,
+.workspace-page .table-module {
+  margin: 0;
+}
+
+.mini-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.flow-list {
+  display: grid;
+  gap: 8px;
+}
+
+.flow-list p {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.flow-list b {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--green-2);
+  color: var(--green);
+}
+
+.preview-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 12px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-list span {
+  border-radius: 999px;
+  background: var(--green-2);
+  color: var(--green);
+  padding: 7px 10px;
+  font-weight: 800;
+}
+
 @media (max-width: 1280px) {
   .app-shell {
     grid-template-columns: 76px 340px 1fr;
@@ -891,7 +1025,9 @@ textarea {
 @media (max-width: 640px) {
   .composer,
   .doc-row,
+  .dashboard-grid,
   .inline-actions,
+  .kpi-grid,
   .setup-grid,
   .filter-row,
   .connection-strip,
