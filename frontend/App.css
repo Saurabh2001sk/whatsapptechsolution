@@ -21,6 +21,14 @@
   overflow: hidden;
 }
 
+.app-shell.workspace-mode {
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+
+.workspace-mode .module-panel {
+  min-width: 0;
+}
+
 button,
 input,
 select,
@@ -114,7 +122,9 @@ textarea {
 .dual-form button,
 .sim-form button,
 .inventory-toolbar button,
-.product-form button {
+.product-form button,
+.import-actions button,
+.file-button {
   border: 0;
   border-radius: 7px;
   background: var(--green);
@@ -122,6 +132,15 @@ textarea {
   min-height: 38px;
   padding: 0 12px;
   font-weight: 800;
+}
+
+.file-button {
+  display: inline-grid;
+  place-items: center;
+}
+
+.file-button input {
+  display: none;
 }
 
 .error-text,
@@ -699,8 +718,31 @@ textarea {
   gap: 8px;
 }
 
+.import-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.import-panel label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .product-form {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
@@ -723,9 +765,13 @@ textarea {
   background: #f9fbf7;
   padding: 10px;
   display: grid;
-  grid-template-columns: 90px 1fr auto auto auto;
+  grid-template-columns: 120px 1fr auto auto auto;
   gap: 6px 10px;
   align-items: center;
+}
+
+.workspace-mode .table-module {
+  max-width: none;
 }
 
 .product-row small {
@@ -808,6 +854,10 @@ textarea {
   .app-shell {
     grid-template-columns: 76px 340px 1fr;
   }
+
+  .app-shell.workspace-mode {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 920px) {
@@ -844,7 +894,10 @@ textarea {
   .inline-actions,
   .setup-grid,
   .filter-row,
-  .connection-strip {
+  .connection-strip,
+  .inventory-toolbar,
+  .product-form,
+  .product-row {
     grid-template-columns: 1fr;
   }
 

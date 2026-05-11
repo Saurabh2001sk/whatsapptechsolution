@@ -49,6 +49,53 @@ function fromCsv(value) {
     .filter(Boolean)
 }
 
+function parseCsv(text) {
+  const rows = []
+  let row = []
+  let value = ''
+  let quoted = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const next = text[index + 1]
+    if (char === '"' && quoted && next === '"') {
+      value += '"'
+      index += 1
+    } else if (char === '"') {
+      quoted = !quoted
+    } else if (char === ',' && !quoted) {
+      row.push(value)
+      value = ''
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1
+      row.push(value)
+      if (row.some((cell) => String(cell).trim())) rows.push(row)
+      row = []
+      value = ''
+    } else {
+      value += char
+    }
+  }
+  row.push(value)
+  if (row.some((cell) => String(cell).trim())) rows.push(row)
+  const headers = rows.shift()?.map((item) => item.trim()) || []
+  return rows.map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] || ''])))
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '')
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+function downloadCsv(filename, headers, sample) {
+  const csv = [headers, sample].map((row) => row.map(csvEscape).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
 function setAuth(token) {
   if (token) api.defaults.headers.common.Authorization = `Bearer ${token}`
   else delete api.defaults.headers.common.Authorization
@@ -153,6 +200,8 @@ function App() {
   const [productForm, setProductForm] = useState(emptyProduct)
   const [editingProductId, setEditingProductId] = useState('')
   const [productSearch, setProductSearch] = useState('')
+  const [inventoryColumnsText, setInventoryColumnsText] = useState(toCsv(defaultAppSettings.inventoryFields))
+  const [importResult, setImportResult] = useState('')
 
   const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
@@ -228,6 +277,7 @@ function App() {
         handoffKeywordsText: toCsv(nextSettings.handoffKeywords),
         inventoryFieldsText: toCsv(nextSettings.inventoryFields),
       })
+      setInventoryColumnsText(toCsv(nextSettings.inventoryFields))
       if (usersRes) setUsers(usersRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
@@ -406,6 +456,13 @@ function App() {
     await loadAll()
   }
 
+  async function importProducts(rows) {
+    setImportResult('')
+    const res = await api.post('/api/products/import', { rows })
+    setImportResult(`Imported: ${res.data.inserted} new, ${res.data.updated} updated, ${res.data.skipped?.length || 0} skipped`)
+    await loadAll()
+  }
+
   async function createUser(event) {
     event.preventDefault()
     await api.post('/api/users', newUser)
@@ -464,7 +521,7 @@ function App() {
   const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
       <aside className="nav-rail">
         <div className="rail-logo"><MessageCircle size={26} /></div>
         {pageItems.map((item) => {
@@ -508,7 +565,7 @@ function App() {
           </>
         )}
 
-        {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} />}
+        {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
         {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} />}
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
@@ -520,34 +577,38 @@ function App() {
         )}
       </section>
 
-      <section className="chat-shell">
-        <ChatHeader selected={selected} onProfile={() => setProfileOpen(true)} />
-        <div className="message-list">
-          {messages.map((message) => (
-            <div className={`message ${message.direction}`} key={message.id}>
-              <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
-              <span>{message.body}</span>
-              <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
+      {chatPages && (
+        <>
+          <section className="chat-shell">
+            <ChatHeader selected={selected} onProfile={() => setProfileOpen(true)} />
+            <div className="message-list">
+              {messages.map((message) => (
+                <div className={`message ${message.direction}`} key={message.id}>
+                  <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
+                  <span>{message.body}</span>
+                  <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
+                </div>
+              ))}
+              {!messages.length && <div className="empty-chat">Select a customer conversation</div>}
             </div>
-          ))}
-          {!messages.length && <div className="empty-chat">Select a customer conversation</div>}
-        </div>
-        <form className="composer" onSubmit={sendMessage}>
-          {sendError && <p>{sendError}</p>}
-          <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Use approved template after 24h'} disabled={Boolean(templateName) || sendingMessage} />
-          <select value={templateName} onChange={(e) => { setTemplateName(e.target.value); setSendError('') }} disabled={sendingMessage}>
-            <option value="">Text Reply</option>
-            {templates.map((template) => <option key={template.id} value={template.name}>{template.name}</option>)}
-          </select>
-          <button type="submit" disabled={sendingMessage}>{sendingMessage ? 'Sending' : <Send size={18} />}</button>
-        </form>
-      </section>
+            <form className="composer" onSubmit={sendMessage}>
+              {sendError && <p>{sendError}</p>}
+              <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Use approved template after 24h'} disabled={Boolean(templateName) || sendingMessage} />
+              <select value={templateName} onChange={(e) => { setTemplateName(e.target.value); setSendError('') }} disabled={sendingMessage}>
+                <option value="">Text Reply</option>
+                {templates.map((template) => <option key={template.id} value={template.name}>{template.name}</option>)}
+              </select>
+              <button type="submit" disabled={sendingMessage}>{sendingMessage ? 'Sending' : <Send size={18} />}</button>
+            </form>
+          </section>
 
-      {profileOpen && <button className="drawer-backdrop" type="button" aria-label="Close profile" onClick={() => setProfileOpen(false)} />}
-      <aside className={`profile-panel ${profileOpen ? 'open' : ''}`}>
-        <button className="drawer-close" type="button" onClick={() => setProfileOpen(false)}>Close</button>
-        <ProfilePanel selected={selected} leadForm={leadForm} setLeadForm={setLeadForm} users={users} canMonitor={canMonitor} stages={stages} labels={labels} onSave={saveLead} assignmentHistory={assignmentHistory} />
-      </aside>
+          {profileOpen && <button className="drawer-backdrop" type="button" aria-label="Close profile" onClick={() => setProfileOpen(false)} />}
+          <aside className={`profile-panel ${profileOpen ? 'open' : ''}`}>
+            <button className="drawer-close" type="button" onClick={() => setProfileOpen(false)}>Close</button>
+            <ProfilePanel selected={selected} leadForm={leadForm} setLeadForm={setLeadForm} users={users} canMonitor={canMonitor} stages={stages} labels={labels} onSave={saveLead} assignmentHistory={assignmentHistory} />
+          </aside>
+        </>
+      )}
     </main>
   )
 }
@@ -656,10 +717,45 @@ function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp }) {
   )
 }
 
-function InventoryPage({ products, productForm, setProductForm, editingProductId, onSave, onEdit, onDelete, onCancel, productSearch, setProductSearch, onSearch, canManage, currency }) {
+function InventoryPage({ products, productForm, setProductForm, editingProductId, onSave, onEdit, onDelete, onCancel, productSearch, setProductSearch, onSearch, canManage, currency, inventoryColumnsText, setInventoryColumnsText, onImport, importResult }) {
+  const templateColumns = fromCsv(inventoryColumnsText)
+  const sample = templateColumns.map((header) => {
+    const key = header.toLowerCase()
+    if (key.includes('sku') || key.includes('code')) return 'SKU-001'
+    if (key.includes('name') || key.includes('product') || key.includes('item')) return 'Round Bar'
+    if (key.includes('category')) return 'Steel'
+    if (key.includes('grade')) return 'EN8'
+    if (key.includes('size')) return '20mm'
+    if (key.includes('shape')) return 'Round'
+    if (key.includes('unit') || key.includes('uom')) return 'pcs'
+    if (key.includes('price') || key.includes('rate')) return '1200'
+    if (key.includes('stock') || key.includes('qty')) return '50'
+    if (key.includes('active')) return 'true'
+    return 'Custom value'
+  })
+
+  async function handleImport(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const text = await file.text()
+    await onImport(parseCsv(text))
+    event.target.value = ''
+  }
+
   return (
     <section className="table-module inventory-module">
       <div className="module-title"><PackageCheck size={18} /><h3>Inventory</h3></div>
+      {canManage && (
+        <div className="import-panel">
+          <label>Template Columns<textarea value={inventoryColumnsText} onChange={(e) => setInventoryColumnsText(e.target.value)} /></label>
+          <div className="import-actions">
+            <button type="button" onClick={() => downloadCsv('inventory-template.csv', templateColumns, sample)}>Download Template</button>
+            <label className="file-button">Import CSV<input type="file" accept=".csv,text/csv" onChange={handleImport} /></label>
+          </div>
+          <small>Known columns are mapped automatically. Extra columns are saved as custom fields for that product.</small>
+          {importResult && <small className="success-text">{importResult}</small>}
+        </div>
+      )}
       <div className="inventory-toolbar">
         <div className="search-box"><Search size={17} /><input placeholder="Search SKU, product, grade, size" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') onSearch() }} /></div>
         <button type="button" onClick={onSearch}>Search</button>

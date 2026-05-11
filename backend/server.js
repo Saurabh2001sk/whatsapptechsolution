@@ -98,7 +98,7 @@ const memory = {
     },
   ],
   products: [
-    { id: 'prod-1', sku: 'SKU-001', name: 'Standard Product', category: 'General', grade: '', size: '', shape: '', unit: 'pcs', price: 1200, stock_qty: 40, active: true, created_at: now() },
+    { id: 'prod-1', sku: 'SKU-001', name: 'Standard Product', category: 'General', grade: '', size: '', shape: '', unit: 'pcs', price: 1200, stock_qty: 40, active: true, custom_fields: {}, created_at: now() },
   ],
   quotations: [],
   quotationItems: [],
@@ -230,6 +230,9 @@ function normalizeAppSettings(input = {}) {
 }
 
 function normalizeProduct(input = {}) {
+  const customFields = input.custom_fields && typeof input.custom_fields === 'object' && !Array.isArray(input.custom_fields)
+    ? input.custom_fields
+    : {};
   return {
     sku: String(input.sku || '').trim().slice(0, 80),
     name: String(input.name || '').trim().slice(0, 160),
@@ -241,7 +244,54 @@ function normalizeProduct(input = {}) {
     price: Number(input.price || 0),
     stock_qty: Number(input.stock_qty || 0),
     active: input.active === undefined ? true : Boolean(input.active),
+    custom_fields: customFields,
   };
+}
+
+const PRODUCT_FIELD_ALIASES = {
+  sku: ['sku', 'item code', 'item_code', 'product code', 'product_code', 'code'],
+  name: ['name', 'product', 'product name', 'product_name', 'item', 'item name', 'item_name'],
+  category: ['category', 'group', 'product group', 'product_group'],
+  grade: ['grade', 'material grade'],
+  size: ['size', 'dimension'],
+  shape: ['shape', 'type'],
+  unit: ['unit', 'uom'],
+  price: ['price', 'rate', 'sales price', 'sale price'],
+  stock_qty: ['stock_qty', 'stock qty', 'stock', 'qty', 'quantity', 'available qty', 'available_qty'],
+  active: ['active', 'status', 'enabled'],
+};
+
+function normalizeHeader(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function findProductValue(row, field) {
+  const aliases = PRODUCT_FIELD_ALIASES[field] || [field];
+  const entries = Object.entries(row || {});
+  for (const alias of aliases) {
+    const found = entries.find(([key]) => normalizeHeader(key) === normalizeHeader(alias));
+    if (found) return found[1];
+  }
+  return undefined;
+}
+
+function productFromImportRow(row = {}) {
+  const knownHeaders = new Set(Object.values(PRODUCT_FIELD_ALIASES).flat().map(normalizeHeader));
+  const base = {};
+  Object.keys(PRODUCT_FIELD_ALIASES).forEach((field) => {
+    const value = findProductValue(row, field);
+    if (value !== undefined) base[field] = value;
+  });
+  if (base.active !== undefined) {
+    base.active = !['false', 'inactive', 'no', '0'].includes(String(base.active).trim().toLowerCase());
+  }
+  const custom_fields = {};
+  Object.entries(row).forEach(([key, value]) => {
+    if (!knownHeaders.has(normalizeHeader(key)) && String(value || '').trim() !== '') {
+      custom_fields[key.trim()] = value;
+    }
+  });
+  return normalizeProduct({ ...base, custom_fields });
 }
 
 async function getAppSettings() {
@@ -1259,10 +1309,10 @@ app.post('/api/products', requireAuth, asyncHandler(async (req, res) => {
   if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
   if (hasDatabase) {
     const result = await query(
-      `INSERT INTO products (sku, name, category, grade, size, shape, unit, price, stock_qty, active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO products (sku, name, category, grade, size, shape, unit, price, stock_qty, active, custom_fields)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active],
+      [product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
     );
     return res.status(201).json(result.rows[0]);
   }
@@ -1279,10 +1329,10 @@ app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
     const result = await query(
       `UPDATE products
        SET sku = $2, name = $3, category = $4, grade = $5, size = $6, shape = $7,
-           unit = $8, price = $9, stock_qty = $10, active = $11
+           unit = $8, price = $9, stock_qty = $10, active = $11, custom_fields = $12
        WHERE id = $1
        RETURNING *`,
-      [req.params.id, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active],
+      [req.params.id, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
     return res.json(result.rows[0]);
@@ -1291,6 +1341,58 @@ app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
   if (index < 0) return res.status(404).json({ error: 'Product not found' });
   memory.products[index] = { ...memory.products[index], ...product };
   res.json(memory.products[index]);
+}));
+
+app.post('/api/products/import', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'CSV rows required' });
+
+  let inserted = 0;
+  let updated = 0;
+  const skipped = [];
+
+  for (const [index, row] of rows.entries()) {
+    const product = productFromImportRow(row);
+    if (!product.sku || !product.name) {
+      skipped.push({ row: index + 1, reason: 'SKU and product name required' });
+      continue;
+    }
+
+    if (hasDatabase) {
+      const result = await query(
+        `INSERT INTO products (sku, name, category, grade, size, shape, unit, price, stock_qty, active, custom_fields)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (sku)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           category = EXCLUDED.category,
+           grade = EXCLUDED.grade,
+           size = EXCLUDED.size,
+           shape = EXCLUDED.shape,
+           unit = EXCLUDED.unit,
+           price = EXCLUDED.price,
+           stock_qty = EXCLUDED.stock_qty,
+           active = EXCLUDED.active,
+           custom_fields = EXCLUDED.custom_fields
+         RETURNING (xmax = 0) AS inserted`,
+        [product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
+      );
+      if (result.rows[0]?.inserted) inserted += 1;
+      else updated += 1;
+    } else {
+      const existing = memory.products.find((item) => item.sku === product.sku);
+      if (existing) {
+        Object.assign(existing, product);
+        updated += 1;
+      } else {
+        memory.products.unshift({ id: makeId('prod'), ...product, created_at: now() });
+        inserted += 1;
+      }
+    }
+  }
+
+  res.json({ inserted, updated, skipped });
 }));
 
 app.delete('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
