@@ -1371,6 +1371,7 @@ app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
 
   res.json({
     database: 'Connected through DATABASE_URL',
+    webhookSignatureRequired: isProduction,
     webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
     webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
     whatsappTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
@@ -1400,6 +1401,7 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
     accessTokenMasked: maskValue(process.env.WHATSAPP_ACCESS_TOKEN || ''),
     verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
     appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
+    webhookSignatureRequired: isProduction,
     webhookPath: '/webhook',
     callbackUrl: process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook` : 'Set PUBLIC_BASE_URL to show full webhook URL',
   });

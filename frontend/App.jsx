@@ -1025,7 +1025,7 @@ async function saveCustomization(event) {
               <button type="button" onClick={() => showPage('new')}><strong>{newEnquiries.length}</strong><span>New</span></button>
               <button type="button" onClick={() => showPage('inbox', { window: 'expired' })}><strong>{dashboard?.expired_windows || 0}</strong><span>Expired</span></button>
             </div>
-            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} isProduction={isProduction} />
+            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
             <div className="filter-toolbar">
               <div className="search-box"><Search size={17} /><input placeholder="Search customer, phone, company" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') loadAll() }} /></div>
               <div className="filter-row">
@@ -1146,11 +1146,12 @@ async function saveCustomization(event) {
   )
 }
 
-function ConnectionStrip({ status, whatsappConfig, canMonitor, isProduction }) {
+function ConnectionStrip({ status, whatsappConfig, canMonitor }) {
   const outgoingOk = canMonitor ? Boolean(whatsappConfig?.configured) : Boolean(status?.whatsappTokenSet && status?.phoneNumberIdSet)
   const hasCallbackUrl = canMonitor ? Boolean(whatsappConfig?.callbackUrl && !String(whatsappConfig.callbackUrl).startsWith('Set ')) : Boolean(status?.webhookVerifyTokenSet)
   const phoneMapped = canMonitor ? Boolean(whatsappConfig?.phoneNumberMapped) : Boolean(status?.phoneNumberMapped)
-  const signatureReady = !isProduction || (canMonitor ? Boolean(whatsappConfig?.appSecretSet) : Boolean(status?.webhookAppSecretSet))
+  const signatureRequired = canMonitor ? Boolean(whatsappConfig?.webhookSignatureRequired) : Boolean(status?.webhookSignatureRequired)
+  const signatureReady = !signatureRequired || (canMonitor ? Boolean(whatsappConfig?.appSecretSet) : Boolean(status?.webhookAppSecretSet))
   const incomingReady = hasCallbackUrl && phoneMapped && signatureReady
   const incomingLabel = incomingReady
     ? 'ready'
@@ -1670,7 +1671,7 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
           <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
           <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
           <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
-          <span className={whatsappConfig?.appSecretSet || !isProduction ? 'ok' : 'warn'}>App secret</span>
+          <span className={whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn'}>App secret</span>
         </div>
         {whatsappConfig?.phoneNumberMappedTenantSlug && (
           <p className="setup-copy">Incoming messages map to tenant: {whatsappConfig.phoneNumberMappedTenantSlug}</p>
