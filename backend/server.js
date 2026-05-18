@@ -1387,6 +1387,9 @@ app.post('/webhook', asyncHandler(async (req, res) => {
     entries: req.body?.entry?.length || 0,
     hasSignature: Boolean(req.headers['x-hub-signature-256']),
   });
+
+  console.log('FULL WA BODY:', JSON.stringify(req.body, null, 2));
+
   if (!verifyMetaWebhookSignature(req)) {
     return res.status(403).json({ error: 'Invalid webhook signature' });
   }
