@@ -681,7 +681,17 @@ function normalizeWhatsAppMessage(message = {}) {
   if (type === 'image') {
     const media = message.image || {};
     const caption = media.caption || '';
-    return { ...base, body: caption || '[image]', normalizedText: caption, caption, mediaId: media.id || null, mimeType: media.mime_type || null, sha256: media.sha256 || null };
+    const mediaId = media.id || null;
+
+    return {
+      ...base,
+      body: caption || (mediaId ? '[image]' : '[image: missing media_id]'),
+      normalizedText: caption || '',
+      caption: caption || null,
+      mediaId,
+      mimeType: media.mime_type || null,
+      sha256: media.sha256 || null,
+    };
   }
   if (type === 'document') {
     const media = message.document || {};
@@ -1372,6 +1382,11 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', asyncHandler(async (req, res) => {
+    console.log('WA webhook received:', {
+    object: req.body?.object || null,
+    entries: req.body?.entry?.length || 0,
+    hasSignature: Boolean(req.headers['x-hub-signature-256']),
+  });
   if (!verifyMetaWebhookSignature(req)) {
     return res.status(403).json({ error: 'Invalid webhook signature' });
   }
@@ -1381,7 +1396,19 @@ app.post('/webhook', asyncHandler(async (req, res) => {
   for (const entry of entries) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
+            console.log('WA webhook change value:', {
+        phoneNumberId: value?.metadata?.phone_number_id || null,
+        displayPhoneNumber: value?.metadata?.display_phone_number || null,
+        contactsCount: value?.contacts?.length || 0,
+        messagesCount: value?.messages?.length || 0,
+        statusesCount: value?.statuses?.length || 0,
+      });
       const tenantId = await getTenantIdForWebhookValue(value);
+
+            console.log('WA webhook tenant mapping:', {
+        phoneNumberId: value?.metadata?.phone_number_id || null,
+        tenantId,
+      });
 
       if (!tenantId) {
         console.warn('Webhook ignored: no active tenant mapped for phone_number_id', {
