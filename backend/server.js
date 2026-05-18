@@ -28,6 +28,10 @@ if (isProduction && !process.env.JWT_SECRET) {
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-only-local-secret';
 
+const loginAttempts = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
   'http://localhost:5173',
@@ -46,7 +50,40 @@ app.use(express.json({
   verify: (req, res, buf) => { req.rawBody = buf; },
 }));
 
-app.use('/media/whatsapp', express.static(mediaRoot));
+app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) => {
+  const fileName = String(req.params.fileName || '');
+
+  if (!/^[a-zA-Z0-9_.-]+$/.test(fileName)) {
+    return res.status(400).json({ error: 'Invalid media file name' });
+  }
+
+  const mediaUrl = `/media/whatsapp/${fileName}`;
+
+  const result = await query(
+    `SELECT id
+     FROM messages
+     WHERE tenant_id = $1
+       AND media_url = $2
+     LIMIT 1`,
+    [req.user.tenantId, mediaUrl],
+  );
+
+  if (!result.rows[0]) {
+    return res.status(404).json({ error: 'Media not found' });
+  }
+
+  const filePath = path.join(mediaRoot, fileName);
+
+  if (!filePath.startsWith(mediaRoot)) {
+    return res.status(400).json({ error: 'Invalid media path' });
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Media file missing' });
+  }
+
+  return res.sendFile(filePath);
+}));
 
 // =========================================================
 // CONSTANTS
@@ -104,6 +141,44 @@ function maskValue(value) {
   if (!value) return '';
   if (value.length <= 8) return '********';
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function getLoginAttemptKey(req, email) {
+  return `${req.ip || req.headers['x-forwarded-for'] || 'unknown'}:${email}`;
+}
+
+function isLoginLocked(req, email) {
+  const key = getLoginAttemptKey(req, email);
+  const entry = loginAttempts.get(key);
+
+  if (!entry) return false;
+
+  if (entry.lockedUntil && entry.lockedUntil > Date.now()) {
+    return true;
+  }
+
+  if (entry.lockedUntil && entry.lockedUntil <= Date.now()) {
+    loginAttempts.delete(key);
+  }
+
+  return false;
+}
+
+function recordFailedLogin(req, email) {
+  const key = getLoginAttemptKey(req, email);
+  const entry = loginAttempts.get(key) || { count: 0, lockedUntil: null };
+
+  entry.count += 1;
+
+  if (entry.count >= MAX_LOGIN_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+  }
+
+  loginAttempts.set(key, entry);
+}
+
+function clearLoginAttempts(req, email) {
+  loginAttempts.delete(getLoginAttemptKey(req, email));
 }
 
 function cleanList(value, fallback) {
@@ -437,7 +512,10 @@ function productFromImportRow(row = {}) {
 
 function verifyMetaWebhookSignature(req) {
   const appSecret = process.env.WHATSAPP_APP_SECRET;
-  if (!appSecret) return true;
+
+  if (!hasRealValue(appSecret)) {
+    return !isProduction;
+  }
   const signature = req.headers['x-hub-signature-256'];
   if (!signature || !signature.startsWith('sha256=')) return false;
   const expectedSignature = `sha256=${crypto.createHmac('sha256', appSecret).update(req.rawBody || Buffer.from('')).digest('hex')}`;
@@ -450,6 +528,44 @@ function verifyMetaWebhookSignature(req) {
 function isReplyWindowOpen(contact) {
   if (!contact?.last_inbound_at) return false;
   return Date.now() - new Date(contact.last_inbound_at).getTime() <= 24 * 60 * 60 * 1000;
+}
+
+function normalizeUserText(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function isOptOutMessage(value = '') {
+  const text = normalizeUserText(value);
+
+  if (!text) return false;
+
+  const exactKeywords = new Set([
+    'stop',
+    'unsubscribe',
+    'do not message',
+    'dont message',
+    "don't message",
+    'do not send',
+    'dont send',
+    "don't send",
+    'remove me',
+    'opt out',
+    'block',
+    'band karo',
+    'mat bhejo',
+    'message mat bhejo',
+    'msg mat bhejo',
+  ]);
+
+  if (exactKeywords.has(text)) return true;
+
+  return /\b(stop|unsubscribe|opt\s*out)\b/i.test(text)
+    || /do\s*not\s*(message|send)/i.test(text)
+    || /don'?t\s*(message|send)/i.test(text)
+    || /(band\s*karo|mat\s*bhejo|message\s*mat\s*bhejo|msg\s*mat\s*bhejo)/i.test(text);
 }
 
 function categorizeMessage(text) {
@@ -495,6 +611,35 @@ function normalizeSalesItem(item = {}) {
 
 function sumItems(items) {
   return items.reduce((total, item) => total + Number(item.amount || 0), 0);
+}
+
+async function validateSalesItemsForTenant(tenantId, items = []) {
+  const productIds = [
+    ...new Set(
+      items
+        .map((item) => item.product_id)
+        .filter(Boolean),
+    ),
+  ];
+
+  if (!productIds.length) return;
+
+  const result = await query(
+    `SELECT id
+     FROM products
+     WHERE tenant_id = $1
+       AND id = ANY($2::uuid[])`,
+    [tenantId, productIds],
+  );
+
+  const validIds = new Set(result.rows.map((row) => row.id));
+  const invalidIds = productIds.filter((id) => !validIds.has(id));
+
+  if (invalidIds.length) {
+    const error = new Error('One or more products do not belong to this company');
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 function extractText(message) {
@@ -681,6 +826,13 @@ async function addMessage({
 async function updateMessageStatus({ tenantId, waMessageId, status, rawPayload }) {
   if (!tenantId || !waMessageId || !status) return null;
 
+  const allowedStatuses = new Set(['sent', 'delivered', 'read', 'failed']);
+  const cleanStatus = String(status || '').trim().toLowerCase();
+
+  if (!allowedStatuses.has(cleanStatus)) {
+    return null;
+  }
+
   const result = await query(
     `UPDATE messages
      SET status = $3,
@@ -689,7 +841,7 @@ async function updateMessageStatus({ tenantId, waMessageId, status, rawPayload }
      WHERE tenant_id = $1
        AND wa_message_id = $2
      RETURNING *`,
-    [tenantId, waMessageId, status, rawPayload || null],
+    [tenantId, waMessageId, cleanStatus, rawPayload || null],
   );
 
   const message = result.rows[0] || null;
@@ -700,7 +852,7 @@ async function updateMessageStatus({ tenantId, waMessageId, status, rawPayload }
       action: 'message.status_updated',
       entityType: 'message',
       entityId: message.id,
-      metadata: { waMessageId, status },
+        metadata: { waMessageId, status: cleanStatus },
     });
   }
 
@@ -760,15 +912,8 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
 
     const label = categorizeMessage(textForIntent);
 
-  const optOutText = String(textForIntent || '').trim().toLowerCase();
-  const isOptOut =
-    optOutText === 'stop'
-    || optOutText === 'unsubscribe'
-    || optOutText === 'do not message'
-    || optOutText === 'dont message'
-    || optOutText === "don't message"
-    || optOutText === 'band karo'
-    || optOutText === 'mat bhejo';
+  const optOutText = normalizeUserText(textForIntent);
+  const isOptOut = isOptOutMessage(optOutText);
 
   const contact = await upsertContact({ tenantId, waId, name, phone: waId, label });
 
@@ -841,39 +986,51 @@ async function getEnquiryDraftById(id, tenantId) {
 
 async function createQuotation({ tenantId, contactId, notes, items, source = 'WhatsApp Auto', validUntil }) {
   const normalizedItems = items.map(normalizeSalesItem);
+
+  await validateSalesItemsForTenant(tenantId, normalizedItems);
+
   const amount = sumItems(normalizedItems);
   const settings = await getAppSettings(tenantId);
   const quoteNo = `${settings.quotationPrefix || DEFAULT_APP_SETTINGS.quotationPrefix}-${Date.now()}`;
+
   const quote = await query(
     `INSERT INTO quotations (tenant_id, contact_id, quote_no, amount, notes, source, valid_until)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [tenantId, contactId || null, quoteNo, amount, notes || null, source, validUntil || null],
   );
+
   await Promise.all(normalizedItems.map((item) => query(
     `INSERT INTO quotation_items (tenant_id, quotation_id, product_id, description, grade, size, shape, quantity, unit, rate, amount)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [tenantId, quote.rows[0].id, item.product_id, item.description, item.grade, item.size, item.shape, item.quantity, item.unit, item.rate, item.amount],
   )));
+
   return quote.rows[0];
 }
 
 async function createSalesOrder({ tenantId, contactId, notes, items, source = 'WhatsApp', paymentStatus = 'pending', dispatchStatus = 'pending' }) {
   const normalizedItems = items.map(normalizeSalesItem);
+
+  await validateSalesItemsForTenant(tenantId, normalizedItems);
+
   const amount = sumItems(normalizedItems);
   const settings = await getAppSettings(tenantId);
   const orderNo = `${settings.orderPrefix || DEFAULT_APP_SETTINGS.orderPrefix}-${Date.now()}`;
+
   const order = await query(
     `INSERT INTO sales_orders (tenant_id, contact_id, order_no, amount, notes, source, payment_status, dispatch_status)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [tenantId, contactId || null, orderNo, amount, notes || null, source, paymentStatus, dispatchStatus],
   );
+
   await Promise.all(normalizedItems.map((item) => query(
     `INSERT INTO sales_order_items (tenant_id, order_id, product_id, description, grade, size, shape, quantity, unit, rate, amount)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [tenantId, order.rows[0].id, item.product_id, item.description, item.grade, item.size, item.shape, item.quantity, item.unit, item.rate, item.amount],
   )));
+
   return order.rows[0];
 }
 
@@ -1002,11 +1159,25 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/test-db', asyncHandler(async (req, res) => {
+  if (isProduction) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
   try {
     const result = await query('SELECT now() AS server_time');
-    return res.json({ ok: true, mode: 'postgres', message: 'PostgreSQL connection working hai.', serverTime: result.rows[0].server_time });
+    return res.json({
+      ok: true,
+      mode: 'postgres',
+      message: 'PostgreSQL connection working hai.',
+      serverTime: result.rows[0].server_time,
+    });
   } catch (error) {
-    return res.status(500).json({ ok: false, mode: 'postgres', message: 'PostgreSQL connect nahi ho raha.', error: error.message });
+    return res.status(500).json({
+      ok: false,
+      mode: 'postgres',
+      message: 'PostgreSQL connect nahi ho raha.',
+      error: error.message,
+    });
   }
 }));
 
@@ -1026,6 +1197,10 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
 
   if (!cleanEmail || !password) {
     return res.status(400).json({ error: 'Email and password required' });
+  }
+
+    if (isLoginLocked(req, cleanEmail)) {
+    return res.status(429).json({ error: 'Too many failed login attempts. Please try again later.' });
   }
 
   const result = await query(
@@ -1048,8 +1223,11 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const user = result.rows[0];
 
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    recordFailedLogin(req, cleanEmail);
     return res.status(401).json({ error: 'Invalid login' });
   }
+
+  clearLoginAttempts(req, cleanEmail);
 
   if (!user.active) {
     return res.status(403).json({ error: 'User is inactive' });
@@ -1105,7 +1283,6 @@ app.get('/api/whatsapp/config', requireAuth, (req, res) => {
     accessTokenMasked: maskValue(process.env.WHATSAPP_ACCESS_TOKEN || ''),
     verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
     appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
     webhookPath: '/webhook',
     callbackUrl: process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook` : 'Set PUBLIC_BASE_URL to show full webhook URL',
   });
@@ -1119,7 +1296,16 @@ app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) return res.status(200).send(challenge);
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+
+  if (!hasRealValue(verifyToken)) {
+    return res.sendStatus(403);
+  }
+
+  if (mode === 'subscribe' && token === verifyToken) {
+    return res.status(200).send(challenge);
+  }
+
   return res.sendStatus(403);
 });
 
@@ -1175,6 +1361,10 @@ app.post('/webhook', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
+  if (isProduction) {
+    return res.status(403).json({ error: 'Local inbound simulator is disabled in production' });
+  }
+
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const cleanPhone = String(req.body.phone || '').replace(/\D/g, '');
   const body = String(req.body.message || '').trim();
@@ -1245,6 +1435,12 @@ app.post('/api/whatsapp/test-message', requireAuth, asyncHandler(async (req, res
   if (contact.opted_out) {
     return res.status(403).json({
       error: 'Customer has opted out. Do not send WhatsApp messages to this contact.',
+    });
+  }
+
+  if (!isReplyWindowOpen(contact)) {
+    return res.status(400).json({
+      error: '24-hour reply window expired. Free-form test message is not allowed. Ask customer to message first or use an approved WhatsApp template.',
     });
   }
 
@@ -1342,16 +1538,15 @@ app.post('/api/users', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const existingUser = await query(
-    `SELECT id
+    `SELECT id, tenant_id
      FROM users
-     WHERE tenant_id = $1
-       AND lower(email) = $2
+     WHERE lower(email) = $1
      LIMIT 1`,
-    [req.user.tenantId, cleanEmail],
+    [cleanEmail],
   );
 
   if (existingUser.rows[0]) {
-    return res.status(409).json({ error: 'User with this email already exists in this company' });
+    return res.status(409).json({ error: 'User with this email already exists' });
   }
 
   const hash = await bcrypt.hash(cleanPassword, 10);
@@ -1489,7 +1684,11 @@ app.delete('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const result = await query(
-    'DELETE FROM users WHERE id = $1 AND tenant_id = $2 RETURNING id, tenant_id, name, email, role, active',
+    `UPDATE users
+     SET active = false
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, tenant_id, name, email, role, active`,
     [req.params.id, req.user.tenantId],
   );
 
@@ -1542,7 +1741,7 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
       COUNT(*)::int AS total_conversations,
       COUNT(*) FILTER (WHERE c.assigned_to IS NULL)::int AS unassigned,
       COUNT(*) FILTER (WHERE c.last_inbound_at >= now() - interval '24 hours')::int AS open_windows,
-      COUNT(*) FILTER (WHERE c.last_inbound_at < now() - interval '24 hours')::int AS expired_windows
+      COUNT(*) FILTER (WHERE c.last_inbound_at IS NULL OR c.last_inbound_at < now() - interval '24 hours')::int AS expired_windows
      FROM contacts c ${scopeWhere}`,
     params,
   );
@@ -1669,11 +1868,24 @@ app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
   if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
   if (assigned_to !== undefined && !canMonitor(req.user)) return res.status(403).json({ error: 'Only manager/admin can assign' });
+
+  if (stage !== undefined) {
+    const settings = await getAppSettings(req.user.tenantId);
+    const allowedStages = new Set((settings.stages || DEFAULT_APP_SETTINGS.stages).map((item) => String(item).trim().toLowerCase()));
+    const cleanStage = String(stage || '').trim().toLowerCase();
+
+    if (!allowedStages.has(cleanStage)) {
+      return res.status(400).json({ error: 'Invalid contact stage' });
+    }
+  }
+
   const shouldUpdateAssignment = assigned_to !== undefined;
   const assignedToValue = assigned_to === '' ? null : assigned_to;
   if (assignedToValue) {
-    const assignedUser = await query('SELECT id FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1', [assignedToValue, req.user.tenantId]);
-    if (!assignedUser.rows[0]) return res.status(400).json({ error: 'Assigned user not found for this company' });
+    const assignedUser = await query(
+      'SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND active = true LIMIT 1',
+      [assignedToValue, req.user.tenantId],
+    );    if (!assignedUser.rows[0]) return res.status(400).json({ error: 'Assigned user not found for this company' });
   }
   const before = await query('SELECT assigned_to FROM contacts WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
   const result = await query(
@@ -1839,7 +2051,7 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const cleanName = String(req.body?.name || '').trim().toLowerCase();
-  const cleanLanguage = String(req.body?.language || 'en').trim().toLowerCase() || 'en';
+  const cleanLanguage = String(req.body?.language || 'en').trim() || 'en';
   const cleanBody = String(req.body?.body || '').trim();
   const active = req.body?.active === undefined ? true : Boolean(req.body.active);
 
@@ -1913,7 +2125,7 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
 
   const cleanLanguage = req.body?.language === undefined
     ? existing.language
-    : String(req.body.language || 'en').trim().toLowerCase() || 'en';
+     : String(req.body.language || 'en').trim() || 'en';
 
   const cleanBody = req.body?.body === undefined
     ? existing.body
@@ -1937,6 +2149,21 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
 
   if (cleanBody.length > 1000) {
     return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
+  }
+
+    const duplicateTemplate = await query(
+    `SELECT id
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND id <> $4
+     LIMIT 1`,
+    [req.user.tenantId, cleanName, cleanLanguage, req.params.id],
+  );
+
+  if (duplicateTemplate.rows[0]) {
+    return res.status(409).json({ error: 'Template with this name and language already exists' });
   }
 
   const result = await query(
@@ -2046,6 +2273,21 @@ app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const product = normalizeProduct(req.body);
   if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
+  
+    const duplicate = await query(
+    `SELECT id
+     FROM products
+     WHERE tenant_id = $1
+       AND lower(sku) = lower($2)
+       AND id <> $3
+     LIMIT 1`,
+    [req.user.tenantId, product.sku, req.params.id],
+  );
+
+  if (duplicate.rows[0]) {
+    return res.status(409).json({ error: 'Product SKU already exists' });
+  }
+
   const result = await query(
     'UPDATE products SET sku=$3, name=$4, category=$5, grade=$6, size=$7, shape=$8, unit=$9, price=$10, stock_qty=$11, active=$12, custom_fields=$13 WHERE id=$1 AND tenant_id=$2 RETURNING *',
     [req.params.id, req.user.tenantId, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
@@ -2058,7 +2300,14 @@ app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
 app.post('/api/products/import', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-  if (!rows.length) return res.status(400).json({ error: 'CSV rows required' });
+
+  if (!rows.length) {
+    return res.status(400).json({ error: 'CSV rows required' });
+  }
+
+  if (rows.length > 1000) {
+    return res.status(400).json({ error: 'Maximum 1000 products can be imported at once' });
+  }
   let inserted = 0;
   let updated = 0;
   const skipped = [];
@@ -2083,7 +2332,29 @@ app.post('/api/products/import', requireAuth, asyncHandler(async (req, res) => {
 
 app.delete('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const result = await query('DELETE FROM products WHERE id = $1 AND tenant_id = $2 RETURNING id', [req.params.id, req.user.tenantId]);
+  const linked = await query(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM quotation_items
+         WHERE tenant_id = $1 AND product_id = $2
+       ) AS used_in_quotation,
+       EXISTS (
+         SELECT 1 FROM sales_order_items
+         WHERE tenant_id = $1 AND product_id = $2
+       ) AS used_in_order`,
+    [req.user.tenantId, req.params.id],
+  );
+
+  if (linked.rows[0]?.used_in_quotation || linked.rows[0]?.used_in_order) {
+    return res.status(409).json({
+      error: 'Product is used in quotation/order history. Deactivate it instead of deleting.',
+    });
+  }
+
+  const result = await query(
+    'DELETE FROM products WHERE id = $1 AND tenant_id = $2 RETURNING id',
+    [req.params.id, req.user.tenantId],
+  );
   if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
   await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'product.deleted', entityType: 'product', entityId: result.rows[0].id, metadata: {} });
   res.json({ ok: true });
@@ -2123,6 +2394,16 @@ app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
 
 app.patch('/api/quotations/:id', requireAuth, asyncHandler(async (req, res) => {
   const { status, valid_until, notes } = req.body;
+
+  if (status !== undefined) {
+    const allowedQuotationStatuses = new Set(['draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'lost']);
+    const cleanStatus = String(status || '').trim().toLowerCase();
+
+    if (!allowedQuotationStatuses.has(cleanStatus)) {
+      return res.status(400).json({ error: 'Invalid quotation status' });
+    }
+  }
+
   const existingQuote = (await query('SELECT * FROM quotations WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
   if (!existingQuote) return res.status(404).json({ error: 'Quotation not found' });
   if (!(await canAccessContactId(req.user, existingQuote.contact_id))) return res.status(403).json({ error: 'Quotation assigned to another user' });
@@ -2207,6 +2488,32 @@ app.post('/api/orders', requireAuth, asyncHandler(async (req, res) => {
 
 app.patch('/api/orders/:id', requireAuth, asyncHandler(async (req, res) => {
   const { status, payment_status, dispatch_status, notes } = req.body;
+
+  if (status !== undefined) {
+    const allowedOrderStatuses = new Set(['pending', 'confirmed', 'processing', 'completed', 'closed', 'cancelled']);
+    const cleanStatus = String(status || '').trim().toLowerCase();
+
+    if (!allowedOrderStatuses.has(cleanStatus)) {
+      return res.status(400).json({ error: 'Invalid order status' });
+    }
+  }
+
+  if (payment_status !== undefined) {
+    const allowedPaymentStatuses = new Set(['pending', 'partial', 'paid', 'overdue', 'cancelled']);
+
+    if (!allowedPaymentStatuses.has(String(payment_status || '').trim().toLowerCase())) {
+      return res.status(400).json({ error: 'Invalid payment status' });
+    }
+  }
+
+  if (dispatch_status !== undefined) {
+    const allowedDispatchStatuses = new Set(['pending', 'packed', 'dispatched', 'delivered', 'cancelled']);
+
+    if (!allowedDispatchStatuses.has(String(dispatch_status || '').trim().toLowerCase())) {
+      return res.status(400).json({ error: 'Invalid dispatch status' });
+    }
+  }
+
   const existingOrder = (await query('SELECT * FROM sales_orders WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
   if (!existingOrder) return res.status(404).json({ error: 'Order not found' });
   if (!(await canAccessContactId(req.user, existingOrder.contact_id))) return res.status(403).json({ error: 'Order assigned to another user' });
@@ -2223,9 +2530,17 @@ app.patch('/api/orders/:id', requireAuth, asyncHandler(async (req, res) => {
 // =========================================================
 
 app.use((err, req, res, next) => {
-  if (err.code === '22P02') return res.status(400).json({ error: 'Invalid id format' });
+  if (err.code === '22P02') {
+    return res.status(400).json({ error: 'Invalid id format' });
+  }
+
   console.error(err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
+
+  if (isProduction) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+
+  return res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
 // =========================================================

@@ -699,6 +699,98 @@ ON contacts (tenant_id, phone);
 CREATE INDEX IF NOT EXISTS products_tenant_active_idx
 ON products (tenant_id, active);
 
+-- =========================================================
+-- 17. DATA QUALITY CONSTRAINTS
+-- =========================================================
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'messages_status_check_v2'
+  ) THEN
+    ALTER TABLE messages
+    ADD CONSTRAINT messages_status_check_v2
+    CHECK (status IN ('received', 'accepted', 'sent', 'delivered', 'read', 'failed'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'contacts_stage_not_blank_check'
+  ) THEN
+    ALTER TABLE contacts
+    ADD CONSTRAINT contacts_stage_not_blank_check
+    CHECK (length(trim(stage)) > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotations_status_check_v2'
+  ) THEN
+    ALTER TABLE quotations
+    ADD CONSTRAINT quotations_status_check_v2
+    CHECK (status IN ('draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'lost'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sales_orders_status_check_v2'
+  ) THEN
+    ALTER TABLE sales_orders
+    ADD CONSTRAINT sales_orders_status_check_v2
+    CHECK (status IN ('pending', 'confirmed', 'processing', 'completed', 'closed', 'cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sales_orders_payment_status_check_v2'
+  ) THEN
+    ALTER TABLE sales_orders
+    ADD CONSTRAINT sales_orders_payment_status_check_v2
+    CHECK (payment_status IN ('pending', 'partial', 'paid', 'overdue', 'cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sales_orders_dispatch_status_check_v2'
+  ) THEN
+    ALTER TABLE sales_orders
+    ADD CONSTRAINT sales_orders_dispatch_status_check_v2
+    CHECK (dispatch_status IN ('pending', 'packed', 'dispatched', 'delivered', 'cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_price_non_negative_check'
+  ) THEN
+    ALTER TABLE products
+    ADD CONSTRAINT products_price_non_negative_check
+    CHECK (price >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_stock_non_negative_check'
+  ) THEN
+    ALTER TABLE products
+    ADD CONSTRAINT products_stock_non_negative_check
+    CHECK (stock_qty >= 0);
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS quotations_tenant_status_idx
 ON quotations (tenant_id, status);
 

@@ -26,7 +26,7 @@ import {
 import './App.css'
 
 const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '')
-
+const isProduction = import.meta.env.PROD
 const api = axios.create({ baseURL: apiBaseUrl })
 
 api.interceptors.response.use(
@@ -35,7 +35,7 @@ api.interceptors.response.use(
     const status = error.response?.status
     const requestUrl = error.config?.url || ''
 
-    if ((status === 401 || status === 403) && !requestUrl.includes('/api/auth/login')) {
+    if (status === 401 && !requestUrl.includes('/api/auth/login')) {
       window.dispatchEvent(new Event('bos-auth-expired'))
     }
 
@@ -47,6 +47,64 @@ function mediaSrc(url) {
   if (!url) return ''
   if (url.startsWith('http')) return url
   return `${apiBaseUrl}${url}`
+}
+
+function ProtectedImage({ url, alt }) {
+  const [src, setSrc] = useState('')
+
+  useEffect(() => {
+    if (!url) return undefined
+
+    if (url.startsWith('http')) {
+      return undefined
+    }
+
+    let objectUrl = ''
+    let cancelled = false
+
+    api.get(url, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(res.data)
+        setSrc(objectUrl)
+      })
+      .catch(() => setSrc(''))
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [url])
+
+  const displaySrc = url?.startsWith('http') ? url : src
+
+  if (!displaySrc) return <span>Loading media...</span>
+
+  return <img src={displaySrc} alt={alt || 'WhatsApp media'} />
+}
+
+function ProtectedMediaLink({ url, children, className }) {
+  async function openMedia(event) {
+    event.preventDefault()
+
+    if (!url) return
+
+    if (url.startsWith('http')) {
+      window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    const res = await api.get(url, { responseType: 'blob' })
+    const objectUrl = URL.createObjectURL(res.data)
+    window.open(objectUrl, '_blank', 'noopener,noreferrer')
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)
+  }
+
+  return (
+    <a className={className} href={mediaSrc(url)} onClick={openMedia}>
+      {children}
+    </a>
+  )
 }
 
 const defaultAppSettings = {
@@ -200,7 +258,7 @@ async function submit(event) {
 
 function App() {
   const [user, setUser] = useState(null)
-const [authChecking, setAuthChecking] = useState(true)
+const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getItem('bosToken')))
   const [activePage, setActivePage] = useState('inbox')
   const [status, setStatus] = useState(null)
   const [dashboard, setDashboard] = useState(null)
@@ -257,7 +315,6 @@ const [authChecking, setAuthChecking] = useState(true)
   const [inventoryColumnsText, setInventoryColumnsText] = useState(toCsv(defaultAppSettings.inventoryFields))
   const [importResult, setImportResult] = useState('')
 
-  const token = localStorage.getItem('bosToken')
   const canMonitor = user?.role === 'admin' || user?.role === 'manager'
   const selected = useMemo(() => conversations.find((item) => item.id === selectedId) || conversations[0], [conversations, selectedId])
   const labels = useMemo(() => ['all', ...(appSettings.labels || defaultAppSettings.labels)], [appSettings.labels])
@@ -286,7 +343,6 @@ const [authChecking, setAuthChecking] = useState(true)
 
   if (!storedToken) {
     clearStoredSession()
-    setAuthChecking(false)
     return
   }
 
@@ -401,7 +457,7 @@ const [authChecking, setAuthChecking] = useState(true)
     } catch (err) {
       const message = err.response?.data?.error || err.message || 'Unable to load CRM data'
       setLoadError(message)
-      if (err.response?.status === 401 || err.response?.status === 403) {
+      if (err.response?.status === 401) {
         localStorage.removeItem('bosToken')
         localStorage.removeItem('bosUser')
         setAuth(null)
@@ -753,7 +809,7 @@ async function simulateInbound(event) {
 
   const payload = {
     name: templateForm.name.trim().toLowerCase(),
-    language: templateForm.language.trim().toLowerCase() || 'en',
+    language: templateForm.language.trim() || 'en',
     body: templateForm.body.trim(),
     active: Boolean(templateForm.active),
   }
@@ -936,7 +992,8 @@ async function saveCustomization(event) {
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
-        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} />}
+        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
+        {activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
         {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
@@ -953,7 +1010,7 @@ async function saveCustomization(event) {
 
     {message.type === 'image' && message.media_url ? (
       <div className="media-message">
-        <img src={mediaSrc(message.media_url)} alt={message.caption || 'WhatsApp image'} />
+       <ProtectedImage url={message.media_url} alt={message.caption || 'WhatsApp image'} />
         {(message.caption || message.body) && <span>{message.caption || message.body}</span>}
       </div>
     ) : message.type === 'image' ? (
@@ -963,9 +1020,9 @@ async function saveCustomization(event) {
         <small>Preview unavailable. Check Meta token/media download.</small>
       </div>
     ) : message.type === 'document' && message.media_url ? (
-      <a className="doc-message" href={mediaSrc(message.media_url)} target="_blank" rel="noreferrer">
-        {message.file_name || message.body || 'Open document'}
-      </a>
+<ProtectedMediaLink className="doc-message" url={message.media_url}>
+  {message.file_name || message.body || 'Open document'}
+</ProtectedMediaLink>
     ) : message.type === 'document' ? (
       <div className="media-placeholder">
         <FileText size={18} />
@@ -973,9 +1030,9 @@ async function saveCustomization(event) {
         <small>Download unavailable. Check Meta token/media download.</small>
       </div>
     ) : ['audio', 'video', 'sticker'].includes(message.type) && message.media_url ? (
-      <a className="doc-message" href={mediaSrc(message.media_url)} target="_blank" rel="noreferrer">
-        {message.file_name || message.body || `Open ${message.type}`}
-      </a>
+<ProtectedMediaLink className="doc-message" url={message.media_url}>
+  {message.file_name || message.body || `Open ${message.type}`}
+</ProtectedMediaLink>
     ) : (
       <span>{message.body}</span>
     )}
@@ -1517,8 +1574,8 @@ function AuditPage({ events }) {
   )
 }
 
-function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole }) {
-  const warnings = status?.warnings || []
+function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole, isProduction }) {
+    const warnings = status?.warnings || []
 
   return (
         <div className="settings-stack">
@@ -1560,21 +1617,26 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
   <>
     <form className="dual-form" onSubmit={onTest}>
       <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
-      <input placeholder="Test message" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
+      <input placeholder="Test message inside 24-hour window only" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
       <button type="submit">Send Test</button>
     </form>
+    <small className="setup-copy">Free-form test messages are allowed only inside the customer&apos;s 24-hour WhatsApp reply window.</small>
     {testResult && <small>{testResult}</small>}
   </>
 ) : (
   <p className="setup-copy">WhatsApp test message is admin-only.</p>
 )}
-        <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
-        <form className="sim-form" onSubmit={onSimulate}>
-          <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
-          <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
-          <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
-          <button type="submit">Capture Message</button>
-        </form>
+        {!isProduction && (
+          <>
+            <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
+            <form className="sim-form" onSubmit={onSimulate}>
+              <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
+              <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
+              <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
+              <button type="submit">Capture Message</button>
+            </form>
+          </>
+        )}
       </section>
             <section className="table-module">
         <div className="module-title"><MessageCircle size={18} /><h3>Approved WhatsApp Templates</h3></div>
@@ -1595,7 +1657,7 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
           <label>
             Language
             <input
-              placeholder="en"
+              placeholder="en_US"
               value={templateForm.language}
               onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })}
             />
