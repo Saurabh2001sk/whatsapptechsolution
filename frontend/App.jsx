@@ -11,17 +11,43 @@ import {
   LogOut,
   MessageCircle,
   PackageCheck,
+  Pencil,
   RefreshCw,
   Search,
   Send,
   Settings,
   Shield,
+  Trash2,
+  UserPlus,
   UserRound,
   Users,
+  X,
 } from 'lucide-react'
 import './App.css'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000' })
+const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '')
+
+const api = axios.create({ baseURL: apiBaseUrl })
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status
+    const requestUrl = error.config?.url || ''
+
+    if ((status === 401 || status === 403) && !requestUrl.includes('/api/auth/login')) {
+      window.dispatchEvent(new Event('bos-auth-expired'))
+    }
+
+    return Promise.reject(error)
+  },
+)
+
+function mediaSrc(url) {
+  if (!url) return ''
+  if (url.startsWith('http')) return url
+  return `${apiBaseUrl}${url}`
+}
 
 const defaultAppSettings = {
   appName: 'WhatsApp Sales CRM',
@@ -115,26 +141,40 @@ function initials(name = '') {
     .join('') || 'C'
 }
 
-function Login({ onLogin, appSettings }) {
-  const [form, setForm] = useState({ email: '', password: '' })
-  const [error, setError] = useState('')
+function clearStoredSession() {
+  localStorage.removeItem('bosToken')
+  localStorage.removeItem('bosUser')
+  setAuth(null)
+}
 
-  async function submit(event) {
-    event.preventDefault()
-    setError('')
-    try {
-      const res = await api.post('/api/auth/login', {
-        email: form.email.trim(),
-        password: form.password.trim(),
-      })
-      localStorage.setItem('bosToken', res.data.token)
-      localStorage.setItem('bosUser', JSON.stringify(res.data.user))
-      setAuth(res.data.token)
-      onLogin(res.data.user)
-    } catch (err) {
-      setError(err.response?.data?.error || 'Login failed')
-    }
+function Login({ onLogin, appSettings }) {
+const [form, setForm] = useState({ email: '', password: '' })
+const [error, setError] = useState('')
+const [submitting, setSubmitting] = useState(false)
+
+async function submit(event) {
+  event.preventDefault()
+  if (submitting) return
+
+  setError('')
+  setSubmitting(true)
+
+  try {
+    const res = await api.post('/api/auth/login', {
+      email: form.email.trim().toLowerCase(),
+      password: form.password,
+    })
+
+    localStorage.setItem('bosToken', res.data.token)
+    localStorage.setItem('bosUser', JSON.stringify(res.data.user))
+    setAuth(res.data.token)
+    onLogin(res.data.user)
+  } catch (err) {
+    setError(err.response?.data?.error || 'Login failed')
+  } finally {
+    setSubmitting(false)
   }
+}
 
   return (
     <main className="login-page">
@@ -149,7 +189,9 @@ function Login({ onLogin, appSettings }) {
         <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
         <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" />
         {error && <p className="error-text">{error}</p>}
-        <button type="submit">Login</button>
+        <button type="submit" disabled={submitting}>
+  {submitting ? 'Logging in...' : 'Login'}
+</button>
         <small>Use your assigned CRM credentials.</small>
       </form>
     </main>
@@ -157,7 +199,8 @@ function Login({ onLogin, appSettings }) {
 }
 
 function App() {
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('bosUser') || 'null'))
+  const [user, setUser] = useState(null)
+const [authChecking, setAuthChecking] = useState(true)
   const [activePage, setActivePage] = useState('inbox')
   const [status, setStatus] = useState(null)
   const [dashboard, setDashboard] = useState(null)
@@ -166,12 +209,18 @@ function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [messages, setMessages] = useState([])
   const [templates, setTemplates] = useState([])
+  const [managedTemplates, setManagedTemplates] = useState([])
+  const emptyTemplate = { name: '', language: 'en', body: '', active: true }
+  const [templateForm, setTemplateForm] = useState(emptyTemplate)
+  const [editingTemplateId, setEditingTemplateId] = useState('')
   const [drafts, setDrafts] = useState([])
   const [products, setProducts] = useState([])
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
   const [whatsappConfig, setWhatsappConfig] = useState(null)
   const [assignmentHistory, setAssignmentHistory] = useState([])
+  const [timeline, setTimeline] = useState([])
+  const [auditEvents, setAuditEvents] = useState([])
   const [filter, setFilter] = useState('all')
   const [windowFilter, setWindowFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -180,7 +229,9 @@ function App() {
   const [sendError, setSendError] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
   const [leadForm, setLeadForm] = useState({ name: '', company: '', stage: 'new', notes: '', label: 'New Enquiry', assigned_to: '', assignment_reason: '' })
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'sales' })
+  const emptyUser = { name: '', email: '', password: '', role: 'sales' }
+  const [newUser, setNewUser] = useState(emptyUser)
+  const [editingUserId, setEditingUserId] = useState('')
   const [simulator, setSimulator] = useState({ phone: '', name: '', message: 'Need quotation for round bar grade EN8 size 20mm qty 25 pcs' })
   const [testMessage, setTestMessage] = useState({ to: '', text: 'BOS WhatsApp CRM test message' })
   const [testResult, setTestResult] = useState('')
@@ -197,6 +248,8 @@ function App() {
     inventoryFieldsText: toCsv(defaultAppSettings.inventoryFields),
   })
   const [settingsSaved, setSettingsSaved] = useState('')
+  const [notice, setNotice] = useState(null)
+  const [currentTime, setCurrentTime] = useState(() => Date.now())
   const emptyProduct = { sku: '', name: '', category: '', grade: '', size: '', shape: '', unit: 'pcs', price: '', stock_qty: '', active: true }
   const [productForm, setProductForm] = useState(emptyProduct)
   const [editingProductId, setEditingProductId] = useState('')
@@ -223,13 +276,35 @@ function App() {
       { id: 'activeOrders', label: 'Active Orders', icon: Clock3 },
     ]
     if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
+    if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
     if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
     return common
   }, [canMonitor, user?.role])
 
-  useEffect(() => {
-    setAuth(token)
-  }, [token])
+ useEffect(() => {
+  const storedToken = localStorage.getItem('bosToken')
+
+  if (!storedToken) {
+    clearStoredSession()
+    setAuthChecking(false)
+    return
+  }
+
+  setAuth(storedToken)
+
+  api.get('/api/me')
+    .then((res) => {
+      localStorage.setItem('bosUser', JSON.stringify(res.data))
+      setUser(res.data)
+    })
+    .catch(() => {
+      clearStoredSession()
+      setUser(null)
+    })
+    .finally(() => {
+      setAuthChecking(false)
+    })
+}, [])
 
   useEffect(() => {
     api.get('/api/public/app-settings')
@@ -241,6 +316,20 @@ function App() {
     document.documentElement.style.setProperty('--green', appSettings.primaryColor || defaultAppSettings.primaryColor)
     document.title = appSettings.appName || defaultAppSettings.appName
   }, [appSettings])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 60000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  function notify(text, type = 'success') {
+    setNotice({ text, type })
+    window.setTimeout(() => setNotice(null), 3200)
+  }
+
+  function apiErrorMessage(err, fallback) {
+    return err.response?.data?.error || err.message || fallback
+  }
 
   async function loadAll() {
     if (!localStorage.getItem('bosToken')) return
@@ -259,14 +348,37 @@ function App() {
         api.get('/api/app-settings').catch(() => ({ data: defaultAppSettings })),
       ]
       if (canMonitor) {
-        calls.push(api.get('/api/users'))
-        calls.push(api.get('/api/whatsapp/config'))
+        calls.push(api.get('/api/users').catch(() => ({ data: [] })))
+        calls.push(api.get('/api/whatsapp/config').catch(() => ({ data: null })))
+        calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
+        calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
       }
-      const [statusRes, dashRes, convoRes, templateRes, draftRes, productRes, quoteRes, orderRes, appSettingsRes, usersRes, whatsappConfigRes] = await Promise.all(calls)
+
+      const [
+        statusRes,
+        dashRes,
+        convoRes,
+        templateRes,
+        draftRes,
+        productRes,
+        quoteRes,
+        orderRes,
+        appSettingsRes,
+        usersRes,
+        whatsappConfigRes,
+        auditRes,
+        manageTemplateRes,
+      ] = await Promise.all(calls)
+
       setStatus(statusRes.data)
       setDashboard(dashRes.data)
       setConversations(convoRes.data)
+
+      // Composer should use only active templates.
       setTemplates(templateRes.data)
+
+      // Settings page can use manageTemplateRes later if we separate state.
+
       setDrafts(draftRes.data)
       setProducts(productRes.data)
       setQuotations(quoteRes.data)
@@ -283,6 +395,8 @@ function App() {
       setInventoryColumnsText(toCsv(nextSettings.inventoryFields))
       if (usersRes) setUsers(usersRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
+      if (auditRes) setAuditEvents(auditRes.data)
+      if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
     } catch (err) {
       const message = err.response?.data?.error || err.message || 'Unable to load CRM data'
@@ -306,14 +420,20 @@ function App() {
   }
 
   useEffect(() => {
+    // Data fetch is intentionally triggered by auth/filter changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, filter, windowFilter])
 
   useEffect(() => {
     if (!selected?.id) return
+    // Selection drives the editable profile form and read receipt state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSendError('')
     loadMessages(selected.id, true).then(() => loadAll())
     if (canMonitor) api.get(`/api/contacts/${selected.id}/assignment-history`).then((res) => setAssignmentHistory(res.data))
+    api.get(`/api/contacts/${selected.id}/timeline`).then((res) => setTimeline(res.data)).catch(() => setTimeline([]))
     setLeadForm({
       name: selected.name || '',
       company: selected.company || '',
@@ -323,58 +443,130 @@ function App() {
       assigned_to: selected.assigned_to || '',
       assignment_reason: '',
     })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
 
-  if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
+function logout() {
+  localStorage.removeItem('bosToken')
+  localStorage.removeItem('bosUser')
+  setAuth(null)
+  setUser(null)
+  setSelectedId(null)
+  setMessages([])
+  setConversations([])
+  setDashboard(null)
+  setDraft('')
+  setTemplateName('')
+  setSendError('')
+  setLoadError('')
+}
 
-  function logout() {
-    localStorage.removeItem('bosToken')
-    localStorage.removeItem('bosUser')
-    setAuth(null)
-    setUser(null)
+useEffect(() => {
+  window.addEventListener('bos-auth-expired', logout)
+  return () => window.removeEventListener('bos-auth-expired', logout)
+}, [])
+
+if (authChecking) {
+  return (
+    <main className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <MessageCircle size={34} />
+          <div>
+            <h1>{appSettings.appName}</h1>
+            <span>Checking secure session...</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
+
+function showPage(page, pageFilter = {}) {
+  const monitorOnlyPages = ['settings', 'audit']
+  const adminOnlyPages = ['users']
+
+  if (monitorOnlyPages.includes(page) && !canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    setActivePage('inbox')
+    return
   }
 
-  function showPage(page, pageFilter = {}) {
-    setActivePage(page)
-    if (page === 'inbox') {
-      setFilter(pageFilter.label || 'all')
-      setWindowFilter(pageFilter.window || 'all')
-      setSearch('')
-    } else if (page === 'new') {
-      setFilter('New Enquiry')
-      setWindowFilter('all')
-    } else if (page === 'sales') {
-      setFilter('all')
-      setWindowFilter('open')
-    } else {
-      if (pageFilter.label) setFilter(pageFilter.label)
-      if (pageFilter.window) setWindowFilter(pageFilter.window)
-    }
+  if (adminOnlyPages.includes(page) && user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    setActivePage('inbox')
+    return
   }
 
-  async function sendMessage(event) {
-    event.preventDefault()
-    if (!selected || sendingMessage) return
-    setSendError('')
-    const payload = templateName ? { templateName } : { text: draft.trim() }
-    if (!payload.templateName && !payload.text) return setSendError('Message text required hai, ya template select karo.')
-    setSendingMessage(true)
-    try {
-      await api.post(`/api/conversations/${selected.id}/messages`, payload)
-      setDraft('')
-      setTemplateName('')
-      await Promise.all([loadMessages(selected.id), loadAll()])
-    } catch (err) {
-      setSendError(err.response?.data?.error || 'Message send failed')
-    } finally {
-      setSendingMessage(false)
-    }
+  setActivePage(page)
+
+  if (page === 'inbox') {
+    setFilter(pageFilter.label || 'all')
+    setWindowFilter(pageFilter.window || 'all')
+    setSearch('')
+  } else if (page === 'new') {
+    setFilter('New Enquiry')
+    setWindowFilter('all')
+  } else if (page === 'sales') {
+    setFilter('all')
+    setWindowFilter('open')
+  } else {
+    if (pageFilter.label) setFilter(pageFilter.label)
+    if (pageFilter.window) setWindowFilter(pageFilter.window)
   }
+}
+
+async function sendMessage(event) {
+  event.preventDefault()
+
+  if (!selected || sendingMessage) return
+
+  if (selected.opted_out) {
+    setSendError('Customer has opted out. Do not send WhatsApp messages to this contact.')
+    return
+  }
+
+  const cleanText = draft.trim()
+  const selectedTemplate = templates.find((template) => template.name === templateName)
+
+  setSendError('')
+
+  if (!selected.reply_window_open && !templateName) {
+    setSendError('24-hour reply window expired. Use an approved WhatsApp template.')
+    return
+  }
+
+  const payload = templateName
+    ? { templateName, language: selectedTemplate?.language || 'en' }
+    : { text: cleanText }
+
+  if (!payload.templateName && !payload.text) {
+    setSendError('Message text required hai, ya template select karo.')
+    return
+  }
+
+  setSendingMessage(true)
+
+  try {
+    await api.post(`/api/conversations/${selected.id}/messages`, payload)
+    setDraft('')
+    setTemplateName('')
+    notify('Message queued/sent')
+    await Promise.all([loadMessages(selected.id), loadAll()])
+  } catch (err) {
+    setSendError(apiErrorMessage(err, 'Message send failed'))
+  } finally {
+    setSendingMessage(false)
+  }
+}
 
   async function saveLead(event) {
     event.preventDefault()
     if (!selected) return
     await api.patch(`/api/contacts/${selected.id}`, leadForm)
+    notify('Customer profile saved')
     await loadAll()
     if (canMonitor) {
       const res = await api.get(`/api/contacts/${selected.id}/assignment-history`)
@@ -382,13 +574,24 @@ function App() {
     }
   }
 
-  async function simulateInbound(event) {
-    event.preventDefault()
+async function simulateInbound(event) {
+  event.preventDefault()
+
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  try {
     await api.post('/api/local/inbound-message', simulator)
+    notify('Inbound message captured')
     setActivePage('inbox')
     setFilter('all')
     await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Inbound simulator failed'), 'error')
   }
+}
 
   async function createQuoteFromDraft(draftItem) {
     await api.post(`/api/enquiry-drafts/${draftItem.id}/create-quote`, {
@@ -396,27 +599,32 @@ function App() {
       notes: `Quote for ${draftItem.grade || ''} ${draftItem.size || ''} ${draftItem.quantity || ''}`.trim(),
     })
     setQuoteRates({ ...quoteRates, [draftItem.id]: '' })
+    notify('Quotation created')
     await loadAll()
   }
 
   async function createErp(draftId) {
     await api.post(`/api/enquiry-drafts/${draftId}/create-erp`)
+    notify('ERP enquiry marked')
     await loadAll()
   }
 
   async function updateQuote(quote, statusValue) {
     await api.patch(`/api/quotations/${quote.id}`, { status: statusValue })
+    notify(`Quotation marked ${statusValue}`)
     await loadAll()
   }
 
   async function convertQuote(quote) {
     await api.post(`/api/quotations/${quote.id}/convert-order`)
+    notify('Quotation converted to order')
     setActivePage('orders')
     await loadAll()
   }
 
   async function updateOrder(order, patch) {
     await api.patch(`/api/orders/${order.id}`, patch)
+    notify('Order updated')
     await loadAll()
   }
 
@@ -427,11 +635,16 @@ function App() {
       price: Number(productForm.price || 0),
       stock_qty: Number(productForm.stock_qty || 0),
     }
-    if (editingProductId) await api.patch(`/api/products/${editingProductId}`, payload)
-    else await api.post('/api/products', payload)
-    setProductForm(emptyProduct)
-    setEditingProductId('')
-    await loadAll()
+    try {
+      if (editingProductId) await api.patch(`/api/products/${editingProductId}`, payload)
+      else await api.post('/api/products', payload)
+      notify(editingProductId ? 'Product updated' : 'Product added')
+      setProductForm(emptyProduct)
+      setEditingProductId('')
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Product save failed'), 'error')
+    }
   }
 
   function editProduct(product) {
@@ -452,6 +665,7 @@ function App() {
 
   async function deleteProduct(product) {
     await api.delete(`/api/products/${product.id}`)
+    notify('Product deleted')
     if (editingProductId === product.id) {
       setEditingProductId('')
       setProductForm(emptyProduct)
@@ -463,33 +677,162 @@ function App() {
     setImportResult('')
     const res = await api.post('/api/products/import', { rows })
     setImportResult(`Imported: ${res.data.inserted} new, ${res.data.updated} updated, ${res.data.skipped?.length || 0} skipped`)
+    notify('Inventory import completed')
     await loadAll()
   }
 
   async function createUser(event) {
     event.preventDefault()
-    await api.post('/api/users', newUser)
-    setNewUser({ name: '', email: '', password: '', role: 'sales' })
-    await loadAll()
+    try {
+      if (editingUserId) {
+        const payload = { name: newUser.name, role: newUser.role }
+        if (newUser.password) payload.password = newUser.password
+        await api.patch(`/api/users/${editingUserId}`, payload)
+        notify('User updated')
+      } else {
+        await api.post('/api/users', newUser)
+        notify('User created')
+      }
+      setNewUser(emptyUser)
+      setEditingUserId('')
+      await loadAll()
+      return true
+    } catch (err) {
+      notify(apiErrorMessage(err, editingUserId ? 'User update failed' : 'User create failed'), 'error')
+      return false
+    }
+  }
+
+  function editUser(userItem) {
+    setEditingUserId(userItem.id)
+    setNewUser({
+      name: userItem.name || '',
+      email: userItem.email || '',
+      password: '',
+      role: userItem.role || 'sales',
+    })
+  }
+
+  function cancelUserEdit() {
+    setEditingUserId('')
+    setNewUser(emptyUser)
   }
 
   async function toggleUser(userItem) {
-    await api.patch(`/api/users/${userItem.id}`, { active: !userItem.active })
-    await loadAll()
+    try {
+      await api.patch(`/api/users/${userItem.id}`, { active: !userItem.active })
+      notify('User status updated')
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'User status update failed'), 'error')
+    }
   }
 
-  async function saveCustomization(event) {
-    event.preventDefault()
-    setSettingsSaved('')
-    const payload = {
-      ...customForm,
-      labels: fromCsv(customForm.labelsText),
-      stages: fromCsv(customForm.stagesText),
-      handoffKeywords: fromCsv(customForm.handoffKeywordsText),
-      inventoryFields: fromCsv(customForm.inventoryFieldsText),
+  async function deleteUser(userItem) {
+    if (userItem.id === user.id) {
+      notify('You cannot delete your own logged-in user', 'error')
+      return
     }
+    try {
+      await api.delete(`/api/users/${userItem.id}`)
+      notify('User deleted')
+      if (editingUserId === userItem.id) cancelUserEdit()
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'User delete failed'), 'error')
+    }
+  }
+
+  async function saveTemplate(event) {
+  event.preventDefault()
+
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  const payload = {
+    name: templateForm.name.trim().toLowerCase(),
+    language: templateForm.language.trim().toLowerCase() || 'en',
+    body: templateForm.body.trim(),
+    active: Boolean(templateForm.active),
+  }
+
+  if (!payload.name || !payload.body) {
+    notify('Template name and body required', 'error')
+    return
+  }
+
+  try {
+    if (editingTemplateId) {
+      await api.patch(`/api/templates/${editingTemplateId}`, payload)
+      notify('Template updated')
+    } else {
+      await api.post('/api/templates', payload)
+      notify('Template saved')
+    }
+
+    setTemplateForm(emptyTemplate)
+    setEditingTemplateId('')
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Template save failed'), 'error')
+  }
+}
+
+function editTemplate(template) {
+  setEditingTemplateId(template.id)
+  setTemplateForm({
+    name: template.name || '',
+    language: template.language || 'en',
+    body: template.body || '',
+    active: template.active !== false,
+  })
+}
+
+function cancelTemplateEdit() {
+  setEditingTemplateId('')
+  setTemplateForm(emptyTemplate)
+}
+
+async function toggleTemplate(template) {
+  try {
+    await api.patch(`/api/templates/${template.id}`, {
+      name: template.name,
+      language: template.language,
+      body: template.body,
+      active: !template.active,
+    })
+
+    notify(template.active ? 'Template deactivated' : 'Template activated')
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Template update failed'), 'error')
+  }
+}
+
+async function saveCustomization(event) {
+  event.preventDefault()
+
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  setSettingsSaved('')
+
+  const payload = {
+    ...customForm,
+    labels: fromCsv(customForm.labelsText),
+    stages: fromCsv(customForm.stagesText),
+    handoffKeywords: fromCsv(customForm.handoffKeywordsText),
+    inventoryFields: fromCsv(customForm.inventoryFieldsText),
+  }
+
+  try {
     const res = await api.put('/api/app-settings', payload)
     const nextSettings = { ...defaultAppSettings, ...res.data }
+
     setAppSettings(nextSettings)
     setCustomForm({
       ...nextSettings,
@@ -499,8 +842,12 @@ function App() {
       inventoryFieldsText: toCsv(nextSettings.inventoryFields),
     })
     setSettingsSaved('Customization saved')
+    notify('Customization saved')
     await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Customization save failed'), 'error')
   }
+}
 
   async function sendTestMessage(event) {
     event.preventDefault()
@@ -508,6 +855,7 @@ function App() {
     try {
       const res = await api.post('/api/whatsapp/test-message', testMessage)
       setTestResult(`Accepted by Meta. To: ${res.data.to}. Message ID: ${res.data.messageId || 'not returned'}`)
+      notify('Test message accepted')
       setActivePage('inbox')
       setFilter('all')
       setWindowFilter('all')
@@ -519,15 +867,25 @@ function App() {
     }
   }
 
+  async function downloadQuote(quote) {
+    const res = await api.get(`/api/quotations/${quote.id}/print-text`, { responseType: 'blob' })
+    const blob = new Blob([res.data], { type: 'text/plain;charset=utf-8' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `${quote.quote_no}.txt`
+    link.click()
+    URL.revokeObjectURL(link.href)
+    notify('Quotation file downloaded')
+  }
+
   const newEnquiries = drafts.filter((item) => item.status === 'draft')
   const activeOrders = orders.filter((item) => item.status !== 'closed')
   const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
   const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
-  const openQuotes = quotations.filter((item) => !['converted', 'lost'].includes(item.status))
-  const pendingOrders = orders.filter((item) => item.status !== 'closed' || item.payment_status !== 'paid' || item.dispatch_status !== 'dispatched')
 
   return (
     <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
+      {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail">
         <div className="rail-logo"><MessageCircle size={26} /></div>
         {pageItems.map((item) => {
@@ -574,13 +932,12 @@ function App() {
         {activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
         {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
         {activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
-        {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} />}
+        {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} />}
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
-        {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} onCreate={createUser} onToggle={toggleUser} />}
-        {activePage === 'settings' && canMonitor && <SettingsPage whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} />}
-
-        {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && (
+        {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
+        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} />}
+        {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
@@ -588,32 +945,91 @@ function App() {
       {chatPages && (
         <>
           <section className="chat-shell">
-            <ChatHeader selected={selected} onProfile={() => setProfileOpen(true)} />
+            <ChatHeader selected={selected} onProfile={() => setProfileOpen(true)} currentTime={currentTime} />
             <div className="message-list">
-              {messages.map((message) => (
-                <div className={`message ${message.direction}`} key={message.id}>
-                  <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
-                  <span>{message.body}</span>
-                  <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
-                </div>
-              ))}
+           {messages.map((message) => (
+  <div className={`message ${message.direction}`} key={message.id}>
+    <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
+
+    {message.type === 'image' && message.media_url ? (
+      <div className="media-message">
+        <img src={mediaSrc(message.media_url)} alt={message.caption || 'WhatsApp image'} />
+        {(message.caption || message.body) && <span>{message.caption || message.body}</span>}
+      </div>
+    ) : message.type === 'image' ? (
+      <div className="media-placeholder">
+        <PackageCheck size={18} />
+        <span>{message.caption || message.body || 'Image received'}</span>
+        <small>Preview unavailable. Check Meta token/media download.</small>
+      </div>
+    ) : message.type === 'document' && message.media_url ? (
+      <a className="doc-message" href={mediaSrc(message.media_url)} target="_blank" rel="noreferrer">
+        {message.file_name || message.body || 'Open document'}
+      </a>
+    ) : message.type === 'document' ? (
+      <div className="media-placeholder">
+        <FileText size={18} />
+        <span>{message.file_name || message.body || 'Document received'}</span>
+        <small>Download unavailable. Check Meta token/media download.</small>
+      </div>
+    ) : ['audio', 'video', 'sticker'].includes(message.type) && message.media_url ? (
+      <a className="doc-message" href={mediaSrc(message.media_url)} target="_blank" rel="noreferrer">
+        {message.file_name || message.body || `Open ${message.type}`}
+      </a>
+    ) : (
+      <span>{message.body}</span>
+    )}
+
+    <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
+  </div>
+))}
               {!messages.length && <div className="empty-chat">Select a customer conversation</div>}
             </div>
-            <form className="composer" onSubmit={sendMessage}>
-              {sendError && <p>{sendError}</p>}
-              <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Use approved template after 24h'} disabled={Boolean(templateName) || sendingMessage} />
-              <select value={templateName} onChange={(e) => { setTemplateName(e.target.value); setSendError('') }} disabled={sendingMessage}>
-                <option value="">Text Reply</option>
-                {templates.map((template) => <option key={template.id} value={template.name}>{template.name}</option>)}
-              </select>
-              <button type="submit" disabled={sendingMessage}>{sendingMessage ? 'Sending' : <Send size={18} />}</button>
-            </form>
+<form className="composer" onSubmit={sendMessage}>
+  {selected?.opted_out && (
+    <p>Customer has opted out. WhatsApp sending is locked for this contact.</p>
+  )}
+
+  {!selected?.opted_out && selected && !selected.reply_window_open && !templateName && (
+    <p>24-hour window expired. Select approved template before sending.</p>
+  )}
+
+  {sendError && <p>{sendError}</p>}
+
+  <input
+    value={draft}
+    onChange={(e) => setDraft(e.target.value)}
+    placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Template required after 24h'}
+    disabled={!selected || selected.opted_out || Boolean(templateName) || sendingMessage || !selected.reply_window_open}
+  />
+
+  <select
+    value={templateName}
+    onChange={(e) => {
+      setTemplateName(e.target.value)
+      setDraft('')
+      setSendError('')
+    }}
+    disabled={!selected || selected.opted_out || sendingMessage}
+  >
+    <option value="">Text Reply</option>
+    {templates.map((template) => (
+      <option key={template.id} value={template.name}>
+        {template.name}{template.language ? ` (${template.language})` : ''}
+      </option>
+    ))}
+  </select>
+
+  <button type="submit" disabled={!selected || selected.opted_out || sendingMessage || (!selected.reply_window_open && !templateName)}>
+    {sendingMessage ? 'Sending' : <Send size={18} />}
+  </button>
+</form>
           </section>
 
           {profileOpen && <button className="drawer-backdrop" type="button" aria-label="Close profile" onClick={() => setProfileOpen(false)} />}
           <aside className={`profile-panel ${profileOpen ? 'open' : ''}`}>
             <button className="drawer-close" type="button" onClick={() => setProfileOpen(false)}>Close</button>
-            <ProfilePanel selected={selected} leadForm={leadForm} setLeadForm={setLeadForm} users={users} canMonitor={canMonitor} stages={stages} labels={labels} onSave={saveLead} assignmentHistory={assignmentHistory} />
+            <ProfilePanel selected={selected} leadForm={leadForm} setLeadForm={setLeadForm} users={users} canMonitor={canMonitor} stages={stages} labels={labels} onSave={saveLead} assignmentHistory={assignmentHistory} timeline={timeline} />
           </aside>
         </>
       )}
@@ -657,13 +1073,16 @@ function ConversationList({ conversations, selectedId, onSelect, onReset }) {
   )
 }
 
-function ChatHeader({ selected, onProfile }) {
+function ChatHeader({ selected, onProfile, currentTime }) {
+  const hoursLeft = selected?.last_inbound_at
+    ? Math.max(0, Math.ceil((24 * 60 * 60 * 1000 - (currentTime - new Date(selected.last_inbound_at).getTime())) / (60 * 60 * 1000)))
+    : 0
   return (
     <header className="chat-header">
       <span className="avatar large">{initials(selected?.name || selected?.phone)}</span>
       <div>
         <h2>{selected?.name || 'No conversation selected'}</h2>
-        <span>{selected?.phone || ''} {selected?.reply_window_open ? '- 24h window open' : '- template required'}</span>
+        <span>{selected?.phone || ''} {selected?.reply_window_open ? `- ${hoursLeft}h reply window left` : '- template required'}</span>
       </div>
       <span className={`status-pill ${selected?.reply_window_open ? 'ok' : 'warn'}`}>{selected?.label || 'No label'}</span>
       <button className="profile-toggle" type="button" onClick={onProfile} disabled={!selected}><UserRound size={18} /></button>
@@ -671,7 +1090,7 @@ function ChatHeader({ selected, onProfile }) {
   )
 }
 
-function ProfilePanel({ selected, leadForm, setLeadForm, users, canMonitor, stages, labels, onSave, assignmentHistory }) {
+function ProfilePanel({ selected, leadForm, setLeadForm, users, canMonitor, stages, labels, onSave, assignmentHistory, timeline }) {
   if (!selected) return <div className="empty-profile">Customer profile will appear here.</div>
   return (
     <div className="profile-content">
@@ -697,6 +1116,16 @@ function ProfilePanel({ selected, leadForm, setLeadForm, users, canMonitor, stag
           {!assignmentHistory.length && <small>No reassignment yet</small>}
         </section>
       )}
+      <section className="profile-section">
+        <h4>Customer Timeline</h4>
+        {timeline.slice(0, 10).map((item, index) => (
+          <p key={`${item.kind}-${item.at}-${index}`}>
+            {item.title}<span>{item.status || item.kind} - {new Date(item.at).toLocaleString()}</span>
+            <small>{item.text || '-'}</small>
+          </p>
+        ))}
+        {!timeline.length && <small>No activity yet</small>}
+      </section>
     </div>
   )
 }
@@ -935,7 +1364,7 @@ function InventoryPage({ products, productForm, setProductForm, editingProductId
   )
 }
 
-function QuotesPage({ quotations, onStatus, onConvert }) {
+function QuotesPage({ quotations, onStatus, onConvert, onDownload }) {
   return (
     <section className="table-module">
       <div className="module-title"><FileText size={18} /><h3>Quotations</h3></div>
@@ -949,6 +1378,7 @@ function QuotesPage({ quotations, onStatus, onConvert }) {
             <button type="button" onClick={() => onStatus(quote, 'sent')}>Sent</button>
             <button type="button" onClick={() => onStatus(quote, 'lost')}>Lost</button>
             <button type="button" onClick={() => onConvert(quote)}>Order</button>
+            <button type="button" onClick={() => onDownload(quote)}>Download</button>
           </div>
         </div>
       ))}
@@ -977,26 +1407,121 @@ function OrdersPage({ orders, onUpdate, title = 'Orders' }) {
   )
 }
 
-function UsersPage({ users, newUser, setNewUser, onCreate, onToggle }) {
+function UsersPage({ users, newUser, setNewUser, editingUserId, onCreate, onEdit, onCancel, onToggle, onDelete }) {
+  const [activeUserView, setActiveUserView] = useState('list')
+  const activeCount = users.filter((item) => item.active).length
+  const inactiveCount = users.length - activeCount
+
+  async function handleSubmit(event) {
+    const saved = await onCreate(event)
+    if (saved) setActiveUserView('list')
+  }
+
+  function handleEdit(userItem) {
+    onEdit(userItem)
+    setActiveUserView('form')
+  }
+
+  function handleCancel() {
+    onCancel()
+    setActiveUserView('list')
+  }
+
   return (
-    <section className="table-module">
-      <div className="module-title"><Users size={18} /><h3>User Management</h3></div>
-      <form className="user-form" onSubmit={onCreate}>
-        <input placeholder="Name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} />
-        <input placeholder="Email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} />
-        <input placeholder="Password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} />
-        <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">sales</option><option value="manager">manager</option><option value="admin">admin</option></select>
-        <button type="submit">Create User</button>
-      </form>
-      {!users.length && <EmptyState title="No users" text="Create sales, manager, and admin users for this client." />}
-      {users.map((item) => <div className="user-row" key={item.id}><strong>{item.name}</strong><span>{item.email} - {item.role}</span><button type="button" onClick={() => onToggle(item)}>{item.active ? 'Deactivate' : 'Activate'}</button></div>)}
+    <section className="table-module users-module">
+      <div className="module-title user-module-head">
+        <div><Users size={18} /><h3>User Management</h3></div>
+        <div className="user-summary">
+          <span>{users.length} total</span>
+          <span>{activeCount} active</span>
+          <span>{inactiveCount} inactive</span>
+        </div>
+      </div>
+      <div className="user-tabs">
+        <button className={activeUserView === 'form' ? 'active' : ''} type="button" onClick={() => setActiveUserView('form')}>
+          <UserPlus size={16} /> {editingUserId ? 'Edit User' : 'Add User'}
+        </button>
+        <button className={activeUserView === 'list' ? 'active' : ''} type="button" onClick={() => setActiveUserView('list')}>
+          <Users size={16} /> User List
+        </button>
+      </div>
+
+      {activeUserView === 'form' && (
+        <form className="user-form user-form-panel" onSubmit={handleSubmit}>
+          <div className="user-form-title">
+            <strong>{editingUserId ? 'Edit existing user' : 'Create new user'}</strong>
+            <span>{editingUserId ? 'Email stays locked for account identity.' : 'Add one team member with role-based access.'}</span>
+          </div>
+          <label>Name<input placeholder="Full name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} /></label>
+          <label>Email<input placeholder="name@company.com" value={newUser.email} disabled={Boolean(editingUserId)} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} /></label>
+          <label>Password<input placeholder={editingUserId ? 'Leave blank to keep old password' : 'Temporary password'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
+          <label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></label>
+          <div className="user-form-actions">
+            <button className="user-action-primary" type="submit">{editingUserId ? <CheckCircle2 size={16} /> : <UserPlus size={16} />} {editingUserId ? 'Update User' : 'Create User'}</button>
+            {editingUserId && <button className="user-action-neutral" type="button" onClick={handleCancel}><X size={16} /> Cancel</button>}
+          </div>
+        </form>
+      )}
+
+      {activeUserView === 'list' && (
+        <div className="user-list-panel">
+          {!users.length && <EmptyState title="No users" text="Create sales, manager, and admin users for this client." />}
+          {!!users.length && (
+            <div className="user-table">
+              <div className="user-table-head">
+                <span>User</span>
+                <span>Email</span>
+                <span>Role</span>
+                <span>Status</span>
+                <span>Actions</span>
+              </div>
+              {users.map((item) => (
+                <div className="user-row" key={item.id}>
+                  <div className="user-name-cell">
+                    <strong>{item.name}</strong>
+                    <small>ID: {String(item.id).slice(0, 8)}</small>
+                  </div>
+                  <span>{item.email}</span>
+                  <b className={`role-badge role-${item.role}`}>{item.role}</b>
+                  <i className={item.active ? 'status-active' : 'status-inactive'}>{item.active ? 'Active' : 'Inactive'}</i>
+                  <div className="user-actions">
+                    <button className="user-action-edit" type="button" onClick={() => handleEdit(item)}><Pencil size={15} /> Edit</button>
+                    <button className={item.active ? 'user-action-pause' : 'user-action-enable'} type="button" onClick={() => onToggle(item)}>
+                      {item.active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button className="user-action-delete" type="button" onClick={() => onDelete(item)}><Trash2 size={15} /> Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
 
-function SettingsPage({ whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved }) {
+function AuditPage({ events }) {
   return (
-    <div className="settings-stack">
+    <section className="table-module">
+      <div className="module-title"><Shield size={18} /><h3>Audit Log</h3></div>
+      {!events.length && <EmptyState title="No audit events" text="System and user actions will appear here." />}
+      {events.map((event) => (
+        <div className="audit-row" key={event.id}>
+          <strong>{event.action}</strong>
+          <span>{event.actor_name || 'System'} - {event.entity_type}</span>
+          <small>{new Date(event.created_at).toLocaleString()}</small>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole }) {
+  const warnings = status?.warnings || []
+
+  return (
+        <div className="settings-stack">
       <section className="table-module">
         <div className="module-title"><Settings size={18} /><h3>Business Customization</h3></div>
         <form className="custom-form" onSubmit={onSaveCustomization}>
@@ -1025,13 +1550,24 @@ function SettingsPage({ whatsappConfig, testMessage, setTestMessage, testResult,
           <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
           <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
         </div>
+        {warnings.length > 0 && (
+          <div className="warning-list">
+            {warnings.map((warning) => <span key={warning}>{warning}</span>)}
+          </div>
+        )}
         <p className="setup-copy">Webhook: {whatsappConfig?.callbackUrl || '-'}</p>
-        <form className="dual-form" onSubmit={onTest}>
-          <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
-          <input placeholder="Test message" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
-          <button type="submit">Send Test</button>
-        </form>
-        {testResult && <small>{testResult}</small>}
+        {userRole === 'admin' ? (
+  <>
+    <form className="dual-form" onSubmit={onTest}>
+      <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
+      <input placeholder="Test message" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
+      <button type="submit">Send Test</button>
+    </form>
+    {testResult && <small>{testResult}</small>}
+  </>
+) : (
+  <p className="setup-copy">WhatsApp test message is admin-only.</p>
+)}
         <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
         <form className="sim-form" onSubmit={onSimulate}>
           <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
@@ -1039,6 +1575,97 @@ function SettingsPage({ whatsappConfig, testMessage, setTestMessage, testResult,
           <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
           <button type="submit">Capture Message</button>
         </form>
+      </section>
+            <section className="table-module">
+        <div className="module-title"><MessageCircle size={18} /><h3>Approved WhatsApp Templates</h3></div>
+        <small className="setup-copy">
+          Add only templates that are already approved in Meta WhatsApp Manager. This does not create templates inside Meta.
+        </small>
+
+        <form className="custom-form" onSubmit={onSaveTemplate}>
+          <label>
+            Template Name
+            <input
+              placeholder="quotation_followup"
+              value={templateForm.name}
+              onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Language
+            <input
+              placeholder="en"
+              value={templateForm.language}
+              onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Body Preview
+            <textarea
+              placeholder="Your quotation is ready. Please confirm."
+              value={templateForm.body}
+              onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
+            />
+          </label>
+
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={Boolean(templateForm.active)}
+              onChange={(e) => setTemplateForm({ ...templateForm, active: e.target.checked })}
+            />
+            Active
+          </label>
+
+          <div className="user-form-actions">
+            <button className="user-action-primary" type="submit">
+              {editingTemplateId ? 'Update Template' : 'Save Template'}
+            </button>
+            {editingTemplateId && (
+              <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+
+        {!templates.length && <EmptyState title="No templates" text="Add approved Meta templates for expired 24-hour conversations." />}
+
+        {!!templates.length && (
+          <div className="user-table">
+            <div className="user-table-head">
+              <span>Name</span>
+              <span>Language</span>
+              <span>Status</span>
+              <span>Body</span>
+              <span>Actions</span>
+            </div>
+
+            {templates.map((template) => (
+              <div className="user-row" key={template.id}>
+                <div className="user-name-cell">
+                  <strong>{template.name}</strong>
+                  <small>ID: {String(template.id).slice(0, 8)}</small>
+                </div>
+                <span>{template.language}</span>
+                <i className={template.active ? 'status-active' : 'status-inactive'}>
+                  {template.active ? 'Active' : 'Inactive'}
+                </i>
+                <span>{template.body}</span>
+                <div className="user-actions">
+                  <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>
+                    Edit
+                  </button>
+                  <button className={template.active ? 'user-action-pause' : 'user-action-enable'} type="button" onClick={() => onToggleTemplate(template)}>
+                    {template.active ? 'Deactivate' : 'Activate'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   )
