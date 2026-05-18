@@ -731,28 +731,75 @@ function extensionFromMime(mimeType = '') {
 }
 
 async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '') {
-  if (!mediaId || !isWhatsAppConfigured()) {
+  if (!mediaId) {
+    console.warn('WA media skipped: mediaId missing');
     return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
+
+  if (!isWhatsAppConfigured()) {
+    console.warn('WA media skipped: WhatsApp token/phone number not configured');
+    return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
+  }
+
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
-  const metaRes = await axios.get(
-    `https://graph.facebook.com/${apiVersion}/${mediaId}`,
-    { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } },
-  );
-  const downloadUrl = metaRes.data?.url;
-  const mimeType = metaRes.data?.mime_type || fallbackMimeType || '';
-  const fileSize = metaRes.data?.file_size || null;
-  if (!downloadUrl) return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
-  const extension = extensionFromMime(mimeType);
-  const safeMediaId = String(mediaId).replace(/[^a-zA-Z0-9_-]/g, '_') || crypto.randomUUID();
-  const fileName = `${safeMediaId}-${Date.now()}.${extension}`;
-  const localPath = path.join(mediaRoot, fileName);
-  const fileRes = await axios.get(downloadUrl, {
-    responseType: 'arraybuffer',
-    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
-  });
-  fs.writeFileSync(localPath, Buffer.from(fileRes.data));
-  return { mediaUrl: `/media/whatsapp/${fileName}`, mediaLocalPath: localPath, mimeType: mimeType || null, fileSize };
+
+  try {
+    const metaRes = await axios.get(
+      `https://graph.facebook.com/${apiVersion}/${mediaId}`,
+      { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } },
+    );
+
+    const downloadUrl = metaRes.data?.url;
+    const mimeType = metaRes.data?.mime_type || fallbackMimeType || '';
+    const fileSize = metaRes.data?.file_size || null;
+
+    if (!downloadUrl) {
+      console.warn('WA media download URL missing:', {
+        mediaId,
+        mimeType,
+        fileSize,
+      });
+
+      return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
+    }
+
+    const extension = extensionFromMime(mimeType);
+    const safeMediaId = String(mediaId).replace(/[^a-zA-Z0-9_-]/g, '_') || crypto.randomUUID();
+    const fileName = `${safeMediaId}-${Date.now()}.${extension}`;
+    const localPath = path.join(mediaRoot, fileName);
+
+    const fileRes = await axios.get(downloadUrl, {
+      responseType: 'arraybuffer',
+      headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+    });
+
+    fs.writeFileSync(localPath, Buffer.from(fileRes.data));
+
+    const mediaUrl = `/media/whatsapp/${fileName}`;
+
+    console.log('WA media downloaded:', {
+      mediaId,
+      mediaUrl,
+      mimeType,
+      fileSize,
+    });
+
+    return {
+      mediaUrl,
+      mediaLocalPath: localPath,
+      mimeType: mimeType || null,
+      fileSize,
+    };
+  } catch (error) {
+    console.error('WA media download failed:', {
+      mediaId,
+      status: error.response?.status || null,
+      metaError: error.response?.data?.error?.message || error.response?.data || null,
+      message: error.message,
+    });
+
+    return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
+  }
 }
 
 // =========================================================
@@ -946,6 +993,21 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
     reactionPayload: normalized.reactionPayload, referralPayload: normalized.referralPayload,
     unsupportedPayload: normalized.unsupportedPayload, normalizedText: normalized.normalizedText,
   });
+
+  if (normalized.mediaId) {
+    console.log('WA media message saved:', {
+      tenantId,
+      contactId: contact.id,
+      messageId: saved?.id || null,
+      waMessageId,
+      type: normalized.type,
+      mediaId: normalized.mediaId,
+      mediaUrl: downloadedMedia.mediaUrl,
+      mimeType: downloadedMedia.mimeType || normalized.mimeType,
+      fileSize: downloadedMedia.fileSize,
+    });
+  }
+
   const enquiryDraft = await createEnquiryDraft({ tenantId, contactId: contact.id, messageId: saved?.id, text: textForIntent });
   return { contact, message: saved, enquiryDraft };
 }
