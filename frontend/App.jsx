@@ -29,11 +29,27 @@ const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').rep
 const isProduction = import.meta.env.PROD
 const api = axios.create({ baseURL: apiBaseUrl })
 
+function formatApiIssue(error) {
+  const status = error.response?.status
+  const method = String(error.config?.method || 'GET').toUpperCase()
+  const requestUrl = error.config?.url || 'unknown endpoint'
+  const backendMessage = error.response?.data?.error || error.response?.data?.message
+  const message = backendMessage || error.message || 'Unknown frontend/API issue'
+
+  return status
+    ? `${method} ${requestUrl} failed (${status}): ${message}`
+    : `${method} ${requestUrl} failed: ${message}`
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
     const requestUrl = error.config?.url || ''
+
+    window.dispatchEvent(new CustomEvent('bos-api-error', {
+      detail: { message: formatApiIssue(error) },
+    }))
 
     if (status === 401 && !requestUrl.includes('/api/auth/login')) {
       window.dispatchEvent(new Event('bos-auth-expired'))
@@ -382,6 +398,42 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
     setNotice({ text, type })
     window.setTimeout(() => setNotice(null), 3200)
   }
+
+  useEffect(() => {
+    function showIssueToast(text) {
+      setNotice({ text, type: 'error' })
+      window.setTimeout(() => {
+        setNotice((current) => (current?.text === text ? null : current))
+      }, 8000)
+    }
+
+    function showApiIssue(event) {
+      showIssueToast(event.detail?.message || 'Frontend/API issue detected')
+    }
+
+    function showFrontendIssue(event) {
+      const location = event.filename ? ` (${event.filename}:${event.lineno || 0}:${event.colno || 0})` : ''
+      showIssueToast(`Frontend error: ${event.message || 'Unknown browser error'}${location}`)
+    }
+
+    function showPromiseIssue(event) {
+      const reason = event.reason
+      const text = reason?.response || reason?.config
+        ? formatApiIssue(reason)
+        : reason?.message || String(reason || 'Unhandled promise rejection')
+      showIssueToast(`Frontend promise error: ${text}`)
+    }
+
+    window.addEventListener('bos-api-error', showApiIssue)
+    window.addEventListener('error', showFrontendIssue)
+    window.addEventListener('unhandledrejection', showPromiseIssue)
+
+    return () => {
+      window.removeEventListener('bos-api-error', showApiIssue)
+      window.removeEventListener('error', showFrontendIssue)
+      window.removeEventListener('unhandledrejection', showPromiseIssue)
+    }
+  }, [])
 
   function apiErrorMessage(err, fallback) {
     return err.response?.data?.error || err.message || fallback
@@ -973,7 +1025,7 @@ async function saveCustomization(event) {
               <button type="button" onClick={() => showPage('new')}><strong>{newEnquiries.length}</strong><span>New</span></button>
               <button type="button" onClick={() => showPage('inbox', { window: 'expired' })}><strong>{dashboard?.expired_windows || 0}</strong><span>Expired</span></button>
             </div>
-            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
+            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} isProduction={isProduction} />
             <div className="filter-toolbar">
               <div className="search-box"><Search size={17} /><input placeholder="Search customer, phone, company" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') loadAll() }} /></div>
               <div className="filter-row">
@@ -1094,13 +1146,24 @@ async function saveCustomization(event) {
   )
 }
 
-function ConnectionStrip({ status, whatsappConfig, canMonitor }) {
+function ConnectionStrip({ status, whatsappConfig, canMonitor, isProduction }) {
   const outgoingOk = canMonitor ? Boolean(whatsappConfig?.configured) : Boolean(status?.whatsappTokenSet && status?.phoneNumberIdSet)
-  const incomingReady = canMonitor ? Boolean(whatsappConfig?.callbackUrl && !String(whatsappConfig.callbackUrl).startsWith('Set ')) : Boolean(status?.webhookVerifyTokenSet)
+  const hasCallbackUrl = canMonitor ? Boolean(whatsappConfig?.callbackUrl && !String(whatsappConfig.callbackUrl).startsWith('Set ')) : Boolean(status?.webhookVerifyTokenSet)
+  const phoneMapped = canMonitor ? Boolean(whatsappConfig?.phoneNumberMapped) : Boolean(status?.phoneNumberMapped)
+  const signatureReady = !isProduction || (canMonitor ? Boolean(whatsappConfig?.appSecretSet) : Boolean(status?.webhookAppSecretSet))
+  const incomingReady = hasCallbackUrl && phoneMapped && signatureReady
+  const incomingLabel = incomingReady
+    ? 'ready'
+    : !phoneMapped
+      ? 'phone not mapped'
+      : !signatureReady
+        ? 'app secret missing'
+        : 'needs URL'
+
   return (
     <div className="connection-strip">
       <span className={outgoingOk ? 'ok' : 'warn'}><CheckCircle2 size={15} /> Outgoing {outgoingOk ? 'connected' : 'not ready'}</span>
-      <span className={incomingReady ? 'ok' : 'warn'}><Shield size={15} /> Incoming webhook {incomingReady ? 'ready' : 'needs URL'}</span>
+      <span className={incomingReady ? 'ok' : 'warn'}><Shield size={15} /> Incoming webhook {incomingLabel}</span>
     </div>
   )
 }
@@ -1605,8 +1668,13 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
         <div className="setup-grid">
           <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
           <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
+          <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
           <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
+          <span className={whatsappConfig?.appSecretSet || !isProduction ? 'ok' : 'warn'}>App secret</span>
         </div>
+        {whatsappConfig?.phoneNumberMappedTenantSlug && (
+          <p className="setup-copy">Incoming messages map to tenant: {whatsappConfig.phoneNumberMappedTenantSlug}</p>
+        )}
         {warnings.length > 0 && (
           <div className="warning-list">
             {warnings.map((warning) => <span key={warning}>{warning}</span>)}

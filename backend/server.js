@@ -309,6 +309,56 @@ async function getDemoTenantId() {
   return _demoTenantId;
 }
 
+async function ensureDefaultWhatsAppAccountMapping(displayPhoneNumber = null) {
+  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+
+  if (!hasRealValue(phoneNumberId)) {
+    return null;
+  }
+
+  const tenantId = await getDemoTenantId();
+  const result = await query(
+    `INSERT INTO whatsapp_accounts (tenant_id, phone_number_id, display_phone_number, active)
+     VALUES ($1, $2, $3, true)
+     ON CONFLICT (phone_number_id)
+     DO UPDATE SET display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
+                   active = true
+     RETURNING tenant_id`,
+    [tenantId, phoneNumberId, displayPhoneNumber || null],
+  );
+
+  return result.rows[0]?.tenant_id || null;
+}
+
+async function getEnvWhatsAppAccountStatus(tenantId = null) {
+  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+
+  if (!hasRealValue(phoneNumberId)) {
+    return {
+      phoneNumberMapped: false,
+      phoneNumberMappedToCurrentTenant: false,
+      phoneNumberMappedTenantSlug: null,
+    };
+  }
+
+  const result = await query(
+    `SELECT whatsapp_accounts.tenant_id, whatsapp_accounts.active, tenants.slug
+     FROM whatsapp_accounts
+     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
+     WHERE whatsapp_accounts.phone_number_id = $1
+     LIMIT 1`,
+    [phoneNumberId],
+  );
+
+  const account = result.rows[0];
+
+  return {
+    phoneNumberMapped: Boolean(account?.active),
+    phoneNumberMappedToCurrentTenant: Boolean(account?.active && tenantId && account.tenant_id === tenantId),
+    phoneNumberMappedTenantSlug: account?.slug || null,
+  };
+}
+
 async function getTenantIdForWebhookValue(value = {}) {
   const phoneNumberId = String(value?.metadata?.phone_number_id || '').trim();
 
@@ -331,28 +381,8 @@ async function getTenantIdForWebhookValue(value = {}) {
     return mapped.rows[0].id;
   }
 
-  if (
-    process.env.NODE_ENV !== 'production'
-    && process.env.WHATSAPP_PHONE_NUMBER_ID
-    && phoneNumberId === process.env.WHATSAPP_PHONE_NUMBER_ID
-  ) {
-    const demoTenantId = await getDemoTenantId();
-
-    await query(
-      `INSERT INTO whatsapp_accounts (tenant_id, phone_number_id, display_phone_number, active)
-       VALUES ($1, $2, $3, true)
-       ON CONFLICT (phone_number_id)
-       DO UPDATE SET tenant_id = EXCLUDED.tenant_id,
-                     display_phone_number = EXCLUDED.display_phone_number,
-                     active = true`,
-      [
-        demoTenantId,
-        phoneNumberId,
-        value?.metadata?.display_phone_number || null,
-      ],
-    );
-
-    return demoTenantId;
+  if (phoneNumberId === String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim()) {
+    return ensureDefaultWhatsAppAccountMapping(value?.metadata?.display_phone_number || null);
   }
 
   return null;
@@ -1332,25 +1362,40 @@ app.put('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
 
 app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
   const settings = await getAppSettings(req.user.tenantId);
+  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
+  const warnings = [...validateRuntimeConfig()];
+
+  if (hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID) && !accountStatus.phoneNumberMapped) {
+    warnings.push('WHATSAPP_PHONE_NUMBER_ID is not mapped to an active tenant. Incoming webhooks will be ignored.');
+  }
+
   res.json({
     database: 'Connected through DATABASE_URL',
     webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
     webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
     whatsappTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
     phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
+    phoneNumberMapped: accountStatus.phoneNumberMapped,
+    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
+    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
     webhookUrl: '/webhook',
     labels: settings.labels,
-    warnings: validateRuntimeConfig(),
+    warnings,
   });
 }));
 
-app.get('/api/whatsapp/config', requireAuth, (req, res) => {
+app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
+
   res.json({
     configured: isWhatsAppConfigured(),
     apiVersion: process.env.WHATSAPP_API_VERSION || 'v20.0',
     phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
     phoneNumberIdMasked: maskValue(process.env.WHATSAPP_PHONE_NUMBER_ID || ''),
+    phoneNumberMapped: accountStatus.phoneNumberMapped,
+    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
+    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
     accessTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
     accessTokenMasked: maskValue(process.env.WHATSAPP_ACCESS_TOKEN || ''),
     verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
@@ -1358,7 +1403,7 @@ app.get('/api/whatsapp/config', requireAuth, (req, res) => {
     webhookPath: '/webhook',
     callbackUrl: process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook` : 'Set PUBLIC_BASE_URL to show full webhook URL',
   });
-});
+}));
 
 // =========================================================
 // ROUTES — WEBHOOK
@@ -1382,15 +1427,14 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', asyncHandler(async (req, res) => {
-    console.log('WA webhook received:', {
+  console.log('WA webhook received:', {
     object: req.body?.object || null,
     entries: req.body?.entry?.length || 0,
     hasSignature: Boolean(req.headers['x-hub-signature-256']),
   });
 
-  console.log('FULL WA BODY:', JSON.stringify(req.body, null, 2));
-
   if (!verifyMetaWebhookSignature(req)) {
+    console.warn('WA webhook rejected: invalid signature');
     return res.status(403).json({ error: 'Invalid webhook signature' });
   }
 
@@ -1399,7 +1443,7 @@ app.post('/webhook', asyncHandler(async (req, res) => {
   for (const entry of entries) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
-            console.log('WA webhook change value:', {
+      console.log('WA webhook change value:', {
         phoneNumberId: value?.metadata?.phone_number_id || null,
         displayPhoneNumber: value?.metadata?.display_phone_number || null,
         contactsCount: value?.contacts?.length || 0,
@@ -1408,7 +1452,7 @@ app.post('/webhook', asyncHandler(async (req, res) => {
       });
       const tenantId = await getTenantIdForWebhookValue(value);
 
-            console.log('WA webhook tenant mapping:', {
+      console.log('WA webhook tenant mapping:', {
         phoneNumberId: value?.metadata?.phone_number_id || null,
         tenantId,
       });
@@ -2642,6 +2686,7 @@ app.use((err, req, res, next) => {
 async function startServer() {
   await ensureSchema();
   await ensureDefaultUsers();
+  await ensureDefaultWhatsAppAccountMapping();
   const warnings = validateRuntimeConfig();
   warnings.forEach((warning) => console.warn(`Config warning: ${warning}`));
   return app.listen(port, () => {
