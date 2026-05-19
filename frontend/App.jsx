@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import {
   BarChart3,
+  Activity,
+  Boxes,
+  ClipboardList,
+  LayoutDashboard,
+  ShoppingCart,
+  Sparkles,
   Bell,
   Bot,
   CheckCircle2,
@@ -338,15 +344,15 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
 
   const pageItems = useMemo(() => {
     const common = [
-      { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'inbox', label: 'Inbox', icon: Inbox },
-      { id: 'new', label: 'New Enquiries', icon: Bell },
-      { id: 'sales', label: 'Sales Pipeline', icon: BarChart3 },
-      { id: 'inventory', label: 'Inventory', icon: PackageCheck },
-      { id: 'bot', label: 'Bot Studio', icon: Bot },
-      { id: 'quotes', label: 'Quotations', icon: FileText },
-      { id: 'orders', label: 'Orders', icon: PackageCheck },
-      { id: 'activeOrders', label: 'Active Orders', icon: Clock3 },
+      { id: 'new', label: 'Enquiries', icon: Bell },
+      { id: 'sales', label: 'Pipeline', icon: Activity },
+      { id: 'inventory', label: 'Inventory', icon: Boxes },
+      { id: 'bot', label: 'Automation', icon: Sparkles },
+      { id: 'quotes', label: 'Quotes', icon: ClipboardList },
+      { id: 'orders', label: 'Orders', icon: ShoppingCart },
+      { id: 'activeOrders', label: 'Active', icon: Clock3 },
     ]
     if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
     if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })

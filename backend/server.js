@@ -60,7 +60,7 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
   const mediaUrl = `/media/whatsapp/${fileName}`;
 
   const result = await query(
-    `SELECT id
+    `SELECT id, media_id, mime_type
      FROM messages
      WHERE tenant_id = $1
        AND media_url = $2
@@ -68,7 +68,9 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
     [req.user.tenantId, mediaUrl],
   );
 
-  if (!result.rows[0]) {
+  const mediaMessage = result.rows[0];
+
+  if (!mediaMessage) {
     return res.status(404).json({ error: 'Media not found' });
   }
 
@@ -78,11 +80,39 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
     return res.status(400).json({ error: 'Invalid media path' });
   }
 
-  if (!fs.existsSync(filePath)) {
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+
+  if (!mediaMessage.media_id) {
     return res.status(404).json({ error: 'Media file missing' });
   }
 
-  return res.sendFile(filePath);
+  const restoredMedia = await downloadWhatsAppMedia(mediaMessage.media_id, mediaMessage.mime_type || '');
+
+  if (!restoredMedia.mediaUrl || !restoredMedia.mediaLocalPath || !fs.existsSync(restoredMedia.mediaLocalPath)) {
+    return res.status(404).json({ error: 'Media file missing' });
+  }
+
+  await query(
+    `UPDATE messages
+     SET media_url = $3,
+         media_local_path = $4,
+         mime_type = COALESCE($5, mime_type),
+         file_size = COALESCE($6, file_size)
+     WHERE id = $1
+       AND tenant_id = $2`,
+    [
+      mediaMessage.id,
+      req.user.tenantId,
+      restoredMedia.mediaUrl,
+      restoredMedia.mediaLocalPath,
+      restoredMedia.mimeType,
+      restoredMedia.fileSize,
+    ],
+  );
+
+  return res.sendFile(restoredMedia.mediaLocalPath);
 }));
 
 // =========================================================
