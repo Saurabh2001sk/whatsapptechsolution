@@ -139,7 +139,7 @@ const defaultAppSettings = {
   stages: ['new', 'qualified', 'quoted', 'won', 'lost'],
   quotationPrefix: 'QT-WA',
   orderPrefix: 'SO-WA',
-  botEnabled: false,
+  botEnabled: true,
   botGreeting: 'Hello, please share the product, size, and quantity you need.',
   handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
   inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
@@ -303,6 +303,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   const [auditEvents, setAuditEvents] = useState([])
   const [filter, setFilter] = useState('all')
   const [windowFilter, setWindowFilter] = useState('all')
+  const [stageFilter, setStageFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [templateName, setTemplateName] = useState('')
@@ -445,18 +446,22 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
     return err.response?.data?.error || err.message || fallback
   }
 
-  async function loadAll() {
+  async function loadAll(overrides = {}) {
     if (!localStorage.getItem('bosToken')) return
+    const requestFilter = overrides.filter ?? filter
+    const requestWindowFilter = overrides.windowFilter ?? windowFilter
+    const requestSearch = overrides.search ?? search
+    const requestProductSearch = overrides.productSearch ?? productSearch
     setLoading(true)
     setLoadError('')
     try {
       const calls = [
         api.get('/api/settings/status'),
         api.get('/api/dashboard'),
-        api.get('/api/conversations', { params: { label: filter, q: search, window: windowFilter } }),
+        api.get('/api/conversations', { params: { label: requestFilter, q: requestSearch, window: requestWindowFilter } }),
         api.get('/api/templates'),
         api.get('/api/enquiry-drafts'),
-        api.get('/api/products', { params: { q: productSearch } }),
+        api.get('/api/products', { params: { q: requestProductSearch } }),
         api.get('/api/quotations'),
         api.get('/api/orders'),
         api.get('/api/app-settings').catch(() => ({ data: defaultAppSettings })),
@@ -617,15 +622,23 @@ function showPage(page, pageFilter = {}) {
   setActivePage(page)
 
   if (page === 'inbox') {
-    setFilter(pageFilter.label || 'all')
-    setWindowFilter(pageFilter.window || 'all')
+    const nextFilter = pageFilter.label || 'all'
+    const nextWindowFilter = pageFilter.window || 'all'
+    setFilter(nextFilter)
+    setWindowFilter(nextWindowFilter)
+    setStageFilter('all')
     setSearch('')
+    loadAll({ filter: nextFilter, windowFilter: nextWindowFilter, search: '' })
   } else if (page === 'new') {
     setFilter('New Enquiry')
     setWindowFilter('all')
+    setStageFilter('all')
+    loadAll({ filter: 'New Enquiry', windowFilter: 'all' })
   } else if (page === 'sales') {
     setFilter('all')
     setWindowFilter('open')
+    setStageFilter('all')
+    loadAll({ filter: 'all', windowFilter: 'open' })
   } else {
     if (pageFilter.label) setFilter(pageFilter.label)
     if (pageFilter.window) setWindowFilter(pageFilter.window)
@@ -996,6 +1009,32 @@ async function saveCustomization(event) {
   const activeOrders = orders.filter((item) => item.status !== 'closed')
   const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
   const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
+  const stageOptions = useMemo(() => ['all', ...stages], [stages])
+  const visibleConversations = useMemo(() => {
+    if (stageFilter === 'all') return conversations
+    return conversations.filter((item) => String(item.stage || '').toLowerCase() === String(stageFilter).toLowerCase())
+  }, [conversations, stageFilter])
+  const chatMode = {
+    inbox: {
+      title: 'Inbox',
+      kicker: 'All conversations',
+      helper: 'Customer chats, owner, stage and reply window in one clean view.',
+    },
+    new: {
+      title: 'New Enquiries',
+      kicker: 'Fresh leads',
+      helper: 'Only new customer enquiries that need qualification or assignment.',
+    },
+    sales: {
+      title: 'Sales Pipeline',
+      kicker: 'Follow-up queue',
+      helper: 'Open-window conversations where sales action is pending.',
+    },
+  }[activePage] || {
+    title: 'Inbox',
+    kicker: 'All conversations',
+    helper: 'Customer chats, owner, stage and reply window in one clean view.',
+  }
 
   return (
     <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
@@ -1026,20 +1065,22 @@ async function saveCustomization(event) {
 
         {chatPages && (
           <>
-            <div className="chat-stats">
-              <button type="button" onClick={() => showPage('inbox', { label: 'all' })}><strong>{dashboard?.total_conversations || 0}</strong><span>Chats</span></button>
-              <button type="button" onClick={() => showPage('new')}><strong>{newEnquiries.length}</strong><span>New</span></button>
-              <button type="button" onClick={() => showPage('inbox', { window: 'expired' })}><strong>{dashboard?.expired_windows || 0}</strong><span>Expired</span></button>
-            </div>
-            <ConnectionStrip status={status} whatsappConfig={whatsappConfig} canMonitor={canMonitor} />
-            <div className="filter-toolbar">
-              <div className="search-box"><Search size={17} /><input placeholder="Search customer, phone, company" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') loadAll() }} /></div>
-              <div className="filter-row">
-                <select value={filter} onChange={(e) => setFilter(e.target.value)}>{labels.map((label) => <option key={label} value={label}>{label}</option>)}</select>
-                <select value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}><option value="all">All windows</option><option value="open">24h open</option><option value="expired">Expired</option></select>
+            <div className={`chat-mode-head chat-mode-${activePage}`}>
+              <div>
+                <span>{chatMode.kicker}</span>
+                <h2>{chatMode.title}</h2>
+                <small>{visibleConversations.length} chats shown - {chatMode.helper}</small>
               </div>
             </div>
-            <ConversationList conversations={conversations} selectedId={selected?.id} onSelect={setSelectedId} onReset={() => showPage('inbox')} />
+            <div className="filter-toolbar compact-filter">
+              <div className="search-box"><Search size={17} /><input placeholder="Search customer, phone, company" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') loadAll() }} /></div>
+              <div className="filter-row">
+                <select value={filter} onChange={(e) => { const next = e.target.value; setFilter(next); loadAll({ filter: next }) }} aria-label="Enquiry type">{labels.map((label) => <option key={label} value={label}>{label === 'all' ? 'All enquiry types' : label}</option>)}</select>
+                <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} aria-label="Enquiry stage">{stageOptions.map((stage) => <option key={stage} value={stage}>{stage === 'all' ? 'All stages' : `Stage: ${stage}`}</option>)}</select>
+                <select value={windowFilter} onChange={(e) => { const next = e.target.value; setWindowFilter(next); loadAll({ windowFilter: next }) }} aria-label="Reply window"><option value="all">All windows</option><option value="open">24h open</option><option value="expired">Expired</option></select>
+              </div>
+            </div>
+            <ConversationList conversations={visibleConversations} selectedId={selected?.id} onSelect={setSelectedId} onReset={() => { setStageFilter('all'); showPage('inbox') }} />
           </>
         )}
 
@@ -1190,7 +1231,11 @@ function ConversationList({ conversations, selectedId, onSelect, onReset }) {
           <span className="avatar">{initials(conversation.name || conversation.phone)}</span>
           <span className="conversation-copy">
             <strong>{conversation.name || conversation.phone}</strong>
-            <small>{conversation.label} - {conversation.assigned_name || 'Unassigned'}</small>
+            <small className="conversation-pills">
+              <span>{conversation.label || 'New Enquiry'}</span>
+              <span>{conversation.stage || 'new'}</span>
+            </small>
+            <small>{conversation.assigned_name || 'Unassigned'} - {conversation.reply_window_open ? '24h open' : 'template needed'}</small>
             <small>{conversation.last_message || 'No message yet'}</small>
           </span>
           {Number(conversation.unread_count || 0) > 0 ? <span className="badge">{conversation.unread_count}</span> : <span className={`window-dot ${conversation.reply_window_open ? 'open' : 'expired'}`} />}

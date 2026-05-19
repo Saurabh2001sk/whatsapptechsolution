@@ -47,7 +47,7 @@ body {
   height: 100dvh;
   min-height: 620px;
   display: grid;
-  grid-template-columns: 112px minmax(390px, 430px) minmax(0, 1fr);
+  grid-template-columns: 98px minmax(360px, 410px) minmax(0, 1fr);
   background:
     linear-gradient(135deg, rgba(238, 244, 241, 0.92), rgba(247, 250, 248, 0.96)),
     repeating-linear-gradient(90deg, rgba(10, 122, 99, 0.04) 0 1px, transparent 1px 36px);
@@ -56,7 +56,7 @@ body {
 }
 
 .app-shell.workspace-mode {
-  grid-template-columns: 112px minmax(0, 1fr);
+  grid-template-columns: 98px minmax(0, 1fr);
 }
 
 .workspace-mode .module-panel {
@@ -353,15 +353,15 @@ textarea:focus {
 }
 
 .inbox-title {
-  min-height: 86px;
-  padding: 18px 18px 16px;
+  min-height: 74px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(10px);
 }
 
 .app-title h1 {
-  font-size: 23px;
+  font-size: 20px;
   line-height: 1.15;
   max-width: 260px;
 }
@@ -427,13 +427,59 @@ textarea:focus {
   border: 1px solid rgba(10, 122, 99, 0.08);
 }
 
+.chat-mode-head {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(215, 225, 220, 0.72);
+  background: #fff;
+}
+
+.chat-mode-head div {
+  display: grid;
+  gap: 3px;
+}
+
+.chat-mode-head span {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.chat-mode-head h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.1;
+}
+
+.chat-mode-head small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.chat-mode-new {
+  border-left: 4px solid var(--blue);
+}
+
+.chat-mode-sales {
+  border-left: 4px solid #d97706;
+}
+
+.chat-mode-inbox {
+  border-left: 4px solid var(--green);
+}
+
 .filter-toolbar {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
-  padding: 0 16px 14px;
+  gap: 8px;
+  padding: 10px 16px 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.78);
+}
+
+.compact-filter {
+  background: #fff;
 }
 
 .search-box {
@@ -442,7 +488,7 @@ textarea:focus {
   gap: 8px;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 999px;
   padding: 0 10px;
   background: #fff;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
@@ -461,8 +507,18 @@ textarea:focus {
 
 .filter-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.filter-row select {
+  min-height: 36px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #33443c;
+  background: var(--surface-soft);
 }
 
 .conversation-list {
@@ -472,10 +528,8 @@ textarea:focus {
   flex-direction: column;
   gap: 8px;
   overflow: auto;
-  padding: 12px;
-  background:
-    linear-gradient(180deg, rgba(248, 251, 249, 0.88), rgba(241, 247, 244, 0.92)),
-    repeating-linear-gradient(0deg, rgba(16, 35, 29, 0.025) 0 1px, transparent 1px 32px);
+  padding: 10px 12px 14px;
+  background: #f6faf8;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
 }
@@ -506,7 +560,7 @@ textarea:focus {
 
 .conversation {
   width: 100%;
-  min-height: 82px;
+  min-height: 96px;
   border: 1px solid rgba(215, 225, 220, 0.86);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.88);
@@ -561,12 +615,32 @@ textarea:focus {
 .conversation-copy {
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 5px;
 }
 
 .conversation-copy strong {
   font-size: 15px;
   line-height: 1.15;
+}
+
+.conversation-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.conversation-pills span {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  background: #eef6f2;
+  color: #245146;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-copy strong,
@@ -1443,22 +1517,22 @@ textarea:focus {
 
 @media (max-width: 1280px) {
   .app-shell {
-    grid-template-columns: 100px minmax(360px, 390px) minmax(0, 1fr);
+    grid-template-columns: 92px minmax(340px, 380px) minmax(0, 1fr);
   }
 
   .app-shell.workspace-mode {
-    grid-template-columns: 100px minmax(0, 1fr);
+    grid-template-columns: 92px minmax(0, 1fr);
   }
 }
 
 @media (max-height: 760px) and (min-width: 921px) {
   .app-shell {
     min-height: 100dvh;
-    grid-template-columns: 96px minmax(360px, 390px) minmax(0, 1fr);
+    grid-template-columns: 88px minmax(340px, 380px) minmax(0, 1fr);
   }
 
   .app-shell.workspace-mode {
-    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 
   .nav-rail {
@@ -1682,9 +1756,11 @@ textarea:focus {
 .media-message img {
   width: 100%;
   max-width: 360px;
+  max-height: 320px;
   border-radius: 8px;
   border: 1px solid var(--line);
   display: block;
+  object-fit: cover;
   box-shadow: 0 10px 24px rgba(16, 35, 29, 0.1);
 }
 

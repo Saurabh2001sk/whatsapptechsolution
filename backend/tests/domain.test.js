@@ -2,9 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildBotReplyText,
   categorizeMessage,
   extractEnquiry,
   extractText,
+  getBotIntent,
   normalizeProduct,
   normalizeSalesItem,
   parseQuantity,
@@ -40,4 +42,20 @@ test('parses quantities and non-text WhatsApp messages', () => {
   assert.deepEqual(parseQuantity('12 kg'), { quantity: 12, unit: 'kg' });
   assert.equal(extractText({ type: 'image', image: { caption: 'Product photo', id: 'img-1' } }), 'Product photo');
   assert.equal(extractText({ type: 'document', document: { filename: 'invoice.pdf' } }), 'invoice.pdf');
+});
+
+test('builds policy-safe bot replies for greeting and order intent', () => {
+  const settings = {
+    companyName: 'BLUE OCEAN STEELS LLP',
+    appName: 'BOS CRM',
+    currency: 'INR',
+    botGreeting: 'Hello, please share the product, size, and quantity you need.',
+    handoffKeywords: ['urgent'],
+  };
+  const products = [{ sku: 'EN8-20', name: 'EN8 Round Bar', grade: 'EN8', size: '20mm', shape: 'round bar', unit: 'pcs', price: 120, stock_qty: 25 }];
+
+  assert.equal(getBotIntent('hii'), 'greeting');
+  assert.match(buildBotReplyText({ settings, text: 'hii', products }), /Welcome to BLUE OCEAN STEELS LLP/);
+  assert.match(buildBotReplyText({ settings, text: 'book order for EN8 20mm qty 5', products }), /Order booking/);
+  assert.equal(buildBotReplyText({ settings, text: 'STOP', products }), null);
 });

@@ -129,7 +129,7 @@ const DEFAULT_APP_SETTINGS = {
   stages: ['new', 'qualified', 'quoted', 'won', 'lost'],
   quotationPrefix: 'QT-WA',
   orderPrefix: 'SO-WA',
-  botEnabled: false,
+  botEnabled: true,
   botGreeting: 'Hello, please share the product, size, and quantity you need.',
   handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
   inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
@@ -647,6 +647,124 @@ function extractEnquiry(text) {
   return { grade, size, shape, quantity };
 }
 
+function getBotIntent(text) {
+  const body = normalizeUserText(text);
+
+  if (/^(hi|hii|hello|hey|namaste|good morning|good afternoon|good evening)\b/.test(body)) return 'greeting';
+  if (/(order|book|buy|purchase|confirm|place order|chahiye|chaiye|bhejo|required|require|need)/i.test(body)) return 'order';
+  if (/(quote|quotation|rate|price|offer|estimate|kitna|cost)/i.test(body)) return 'quotation';
+  if (/(dispatch|tracking|delivery|transport|lr|courier)/i.test(body)) return 'dispatch';
+  if (/(payment|paid|balance|utr|invoice|outstanding)/i.test(body)) return 'payment';
+  if (/(complaint|problem|issue|damage|wrong|not working)/i.test(body)) return 'complaint';
+  return 'general';
+}
+
+function botProductSearchTerms(text, enquiry) {
+  const stopWords = new Set([
+    'hi', 'hii', 'hello', 'hey', 'need', 'required', 'require', 'quotation', 'quote',
+    'rate', 'price', 'order', 'book', 'buy', 'qty', 'quantity', 'size', 'grade',
+    'please', 'pls', 'for', 'the', 'and', 'me', 'send', 'chahiye', 'chaiye',
+  ]);
+  const parts = [
+    enquiry.grade,
+    enquiry.size,
+    enquiry.shape,
+    ...(String(text || '').match(/[a-z0-9.-]+/gi) || []),
+  ]
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => item.length >= 2 && !stopWords.has(item));
+
+  return [...new Set(parts)].slice(0, 6);
+}
+
+async function findBotProductMatches(tenantId, text, enquiry) {
+  const terms = botProductSearchTerms(text, enquiry);
+  const params = [tenantId];
+  let searchClause = '';
+
+  if (terms.length) {
+    const clauses = terms.map((term) => {
+      params.push(`%${term}%`);
+      const index = params.length;
+      return `(sku ILIKE $${index} OR name ILIKE $${index} OR category ILIKE $${index} OR grade ILIKE $${index} OR size ILIKE $${index} OR shape ILIKE $${index})`;
+    });
+    searchClause = `AND (${clauses.join(' OR ')})`;
+  }
+
+  const result = await query(
+    `SELECT sku, name, category, grade, size, shape, unit, price, stock_qty
+     FROM products
+     WHERE tenant_id = $1
+       AND active = true
+       ${searchClause}
+     ORDER BY stock_qty DESC, name ASC
+     LIMIT 5`,
+    params,
+  );
+
+  return result.rows;
+}
+
+function formatBotProductLine(product, currency, index) {
+  const specs = [product.sku, product.name, product.grade, product.size, product.shape]
+    .filter(Boolean)
+    .join(' - ');
+  const price = Number(product.price || 0) > 0 ? ` | Rate: ${currency} ${Number(product.price).toFixed(2)}` : '';
+  const stock = Number(product.stock_qty || 0) > 0 ? ` | Stock: ${Number(product.stock_qty)} ${product.unit || 'pcs'}` : '';
+  return `${index + 1}. ${specs || 'Product'}${price}${stock}`;
+}
+
+function buildBotReplyText({ settings, text, products = [] }) {
+  const cleanText = String(text || '').trim();
+  const normalized = normalizeUserText(cleanText);
+
+  if (!normalized || isOptOutMessage(normalized)) return null;
+
+  const handoffWords = settings.handoffKeywords || [];
+  const needsHandoff = handoffWords.some((keyword) => keyword && normalized.includes(normalizeUserText(keyword)));
+  const company = settings.companyName || settings.appName || 'our business';
+  const currency = settings.currency || 'INR';
+  const enquiry = extractEnquiry(cleanText);
+  const hasProductDetail = Boolean(enquiry.grade || enquiry.size || enquiry.shape || enquiry.quantity);
+  const productLines = products.map((product, index) => formatBotProductLine(product, currency, index)).join('\n');
+  const productBlock = productLines ? `\n\nAvailable product details:\n${productLines}` : '';
+  const detailRequest = 'Please share product name/grade, size, quantity, delivery city and GST/company name.';
+  const intent = getBotIntent(cleanText);
+
+  if (needsHandoff || intent === 'complaint') {
+    return `Thanks for sharing this with ${company}. Your message is marked for team review. A team member will check and respond shortly.`;
+  }
+
+  if (intent === 'dispatch') {
+    return `Please share order number or invoice number. ${company} team will use it to check dispatch/tracking status.`;
+  }
+
+  if (intent === 'payment') {
+    return `Please share invoice number or payment UTR. ${company} team will verify and update your account status.`;
+  }
+
+  if (intent === 'greeting') {
+    return `${settings.botGreeting}\n\nWelcome to ${company}. You can ask for price, quotation, stock, product details or order booking.${productBlock}\n\n${detailRequest}`;
+  }
+
+  if (intent === 'order') {
+    return `Order booking ke liye details confirm kar dijiye.${productBlock}\n\n${detailRequest}\nAfter confirmation, our team will validate stock/rate and create the order.`;
+  }
+
+  if (intent === 'quotation' || hasProductDetail) {
+    return `Quotation ke liye details received.${productBlock}\n\n${detailRequest}\nIf the item is correct, reply "confirm" with required quantity.`;
+  }
+
+  return `${settings.botGreeting}\n\n${detailRequest}`;
+}
+
+async function buildBotReply({ tenantId, settings, text }) {
+  const enquiry = extractEnquiry(text);
+  const products = await findBotProductMatches(tenantId, text, enquiry);
+  const reply = buildBotReplyText({ settings, text, products });
+  return reply ? reply.slice(0, 1000) : null;
+}
+
 function parseQuantity(value) {
   const match = String(value || '').match(/([0-9.]+)\s*([a-zA-Z]*)/);
   return { quantity: toFiniteNumber(match?.[1], 1), unit: match?.[2] || 'pcs' };
@@ -991,6 +1109,80 @@ async function createEnquiryDraft({ tenantId, contactId, messageId, text }) {
   return result.rows[0];
 }
 
+async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }) {
+  if (!tenantId || !contact || !inboundMessage) return null;
+  if (contact.opted_out || isOptOutMessage(text)) return null;
+
+  const settings = await getAppSettings(tenantId);
+  if (!settings.botEnabled) return null;
+
+  if (!isReplyWindowOpen(contact)) {
+    console.warn('Bot auto-reply skipped: 24-hour window is not open', {
+      tenantId,
+      contactId: contact.id,
+    });
+    return null;
+  }
+
+  const replyText = await buildBotReply({ tenantId, settings, text });
+  if (!replyText) return null;
+
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppText(contact, replyText, tenantId);
+  } catch (error) {
+    console.error('Bot auto-reply failed:', {
+      tenantId,
+      contactId: contact.id,
+      status: error.response?.status || null,
+      message: error.response?.data?.error?.message || error.message,
+    });
+    await recordAudit({
+      tenantId,
+      action: 'bot.auto_reply_failed',
+      entityType: 'contact',
+      entityId: contact.id,
+      metadata: {
+        inboundMessageId: inboundMessage.id,
+        status: error.response?.status || null,
+      },
+    });
+    return null;
+  }
+
+  const status = waMessageId ? 'sent' : 'queued-local';
+
+  if (!waMessageId && !shouldAllowLocalMessageQueue()) {
+    return null;
+  }
+
+  const botMessage = await addMessage({
+    tenantId,
+    contactId: contact.id,
+    waMessageId,
+    direction: 'outbound',
+    type: 'text',
+    body: replyText,
+    status,
+    normalizedText: replyText,
+  });
+
+  await recordAudit({
+    tenantId,
+    action: 'bot.auto_reply_sent',
+    entityType: 'message',
+    entityId: botMessage?.id,
+    metadata: {
+      contactId: contact.id,
+      inboundMessageId: inboundMessage.id,
+      status,
+    },
+  });
+
+  return botMessage;
+}
+
 async function processInboundMessage({ tenantId, waId, name, body, waMessageId, rawPayload }) {
   if (waMessageId) {
     const duplicateResult = await query(
@@ -1079,7 +1271,8 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
   }
 
   const enquiryDraft = await createEnquiryDraft({ tenantId, contactId: contact.id, messageId: saved?.id, text: textForIntent });
-  return { contact, message: saved, enquiryDraft };
+  const botReply = await maybeSendBotAutoReply({ tenantId, contact, inboundMessage: saved, text: textForIntent });
+  return { contact, message: saved, enquiryDraft, botReply };
 }
 
 async function findContact(contactId, tenantId) {
@@ -2735,9 +2928,11 @@ if (require.main === module) {
 
 module.exports = {
   app,
+  buildBotReplyText,
   categorizeMessage,
   extractEnquiry,
   extractText,
+  getBotIntent,
   normalizeProduct,
   normalizeSalesItem,
   parseQuantity,
