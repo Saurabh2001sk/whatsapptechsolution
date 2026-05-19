@@ -133,6 +133,14 @@ const DEFAULT_APP_SETTINGS = {
   botGreeting: 'Hello, please share the product, size, and quantity you need.',
   handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
   inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
+
+  quoteApprovalEnabled: true,
+  quoteApprovalManagerName: '',
+  quoteApprovalManagerPhone: '',
+  quoteApprovalTemplateName: 'quote_manager_approval_request',
+  quoteApprovalTemplateLanguage: 'en',
+  customerQuoteTemplateName: 'quote_customer_approval_request',
+  customerQuoteTemplateLanguage: 'en',
 };
 
 // =========================================================
@@ -490,6 +498,14 @@ function normalizeAppSettings(input = {}) {
     botGreeting: String(input.botGreeting || DEFAULT_APP_SETTINGS.botGreeting).trim().slice(0, 500),
     handoffKeywords: cleanList(input.handoffKeywords, DEFAULT_APP_SETTINGS.handoffKeywords),
     inventoryFields: cleanList(input.inventoryFields, DEFAULT_APP_SETTINGS.inventoryFields),
+
+    quoteApprovalEnabled: input.quoteApprovalEnabled === undefined ? DEFAULT_APP_SETTINGS.quoteApprovalEnabled : Boolean(input.quoteApprovalEnabled),
+    quoteApprovalManagerName: String(input.quoteApprovalManagerName || '').trim().slice(0, 100),
+    quoteApprovalManagerPhone: String(input.quoteApprovalManagerPhone || '').replace(/\D/g, '').slice(0, 15),
+    quoteApprovalTemplateName: String(input.quoteApprovalTemplateName || DEFAULT_APP_SETTINGS.quoteApprovalTemplateName).trim().toLowerCase().slice(0, 80),
+    quoteApprovalTemplateLanguage: String(input.quoteApprovalTemplateLanguage || DEFAULT_APP_SETTINGS.quoteApprovalTemplateLanguage).trim().slice(0, 12),
+    customerQuoteTemplateName: String(input.customerQuoteTemplateName || DEFAULT_APP_SETTINGS.customerQuoteTemplateName).trim().toLowerCase().slice(0, 80),
+    customerQuoteTemplateLanguage: String(input.customerQuoteTemplateLanguage || DEFAULT_APP_SETTINGS.customerQuoteTemplateLanguage).trim().slice(0, 12),
   };
 }
 
@@ -581,6 +597,97 @@ function productFromImportRow(row = {}) {
     }
   });
   return normalizeProduct({ ...base, custom_fields });
+}
+
+// =========================================================
+// KNOWLEDGE BASE HELPERS
+// =========================================================
+
+function normalizeKnowledgeBaseItem(input = {}) {
+  const keywordList = Array.isArray(input.keywords)
+    ? input.keywords
+    : String(input.keywords || '').split(',');
+
+  return {
+    title: String(input.title || '').trim().slice(0, 140),
+    category: String(input.category || 'general').trim().toLowerCase().slice(0, 60) || 'general',
+    content: String(input.content || '').trim().slice(0, 3000),
+    keywords: [...new Set(keywordList.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean))].slice(0, 30),
+    active: input.active === undefined ? true : Boolean(input.active),
+  };
+}
+
+function shouldUseKnowledgeBase(text = '') {
+  const body = normalizeUserText(text);
+
+  if (!body) return false;
+
+  const blockedSensitiveIntents = /(ledger|outstanding|balance|credit limit|payment received|dispatch status|track order|order status|final rate|confirm order|book order|approve quote)/i;
+  if (blockedSensitiveIntents.test(body)) return false;
+
+  return /(about|company|profile|terms|condition|payment terms|delivery terms|freight|gst|address|location|facility|capability|quality|certificate|policy|complaint|return|warranty|material|grade equivalent|faq)/i.test(body);
+}
+
+function knowledgeSearchTerms(text = '') {
+  const stopWords = new Set([
+    'what', 'is', 'are', 'the', 'a', 'an', 'for', 'of', 'in', 'to', 'and', 'or',
+    'please', 'pls', 'tell', 'me', 'your', 'you', 'do', 'does', 'ka', 'kya',
+    'hai', 'hain', 'ke', 'ki', 'company', 'details',
+  ]);
+
+  return [...new Set(
+    String(text || '')
+      .toLowerCase()
+      .match(/[a-z0-9.-]+/gi) || [],
+  )]
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 3 && !stopWords.has(item))
+    .slice(0, 8);
+}
+
+async function findKnowledgeMatches(tenantId, text = '') {
+  if (!tenantId || !shouldUseKnowledgeBase(text)) return [];
+
+  const terms = knowledgeSearchTerms(text);
+
+  if (!terms.length) return [];
+
+  const params = [tenantId];
+  const clauses = terms.map((term) => {
+    params.push(`%${term}%`);
+    const index = params.length;
+    return `(title ILIKE $${index} OR category ILIKE $${index} OR content ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE $${index}))`;
+  });
+
+  const result = await query(
+    `SELECT id, title, category, content, keywords
+     FROM knowledge_base
+     WHERE tenant_id = $1
+       AND active = true
+       AND (${clauses.join(' OR ')})
+     ORDER BY updated_at DESC
+     LIMIT 3`,
+    params,
+  );
+
+  return result.rows;
+}
+
+function buildKnowledgeReply({ settings = {}, text = '', knowledgeMatches = [] }) {
+  if (!knowledgeMatches.length) return null;
+
+  const company = settings.companyName || settings.appName || 'our team';
+  const top = knowledgeMatches[0];
+
+  if (!top?.content) return null;
+
+  const cleanContent = String(top.content || '').trim().slice(0, 900);
+
+  return `Based on ${company} knowledge:
+
+${cleanContent}
+
+If you want quotation/order/account-specific details, our team will verify and respond.`;
 }
 
 // =========================================================
@@ -780,9 +887,17 @@ function buildBotReplyText({ settings, text, products = [] }) {
 }
 
 async function buildBotReply({ tenantId, settings, text }) {
+  const knowledgeMatches = await findKnowledgeMatches(tenantId, text);
+  const knowledgeReply = buildKnowledgeReply({ settings, text, knowledgeMatches });
+
+  if (knowledgeReply) {
+    return knowledgeReply.slice(0, 1000);
+  }
+
   const enquiry = extractEnquiry(text);
   const products = await findBotProductMatches(tenantId, text, enquiry);
   const reply = buildBotReplyText({ settings, text, products });
+
   return reply ? reply.slice(0, 1000) : null;
 }
 
@@ -855,6 +970,123 @@ function menuPayloadToText(menuPayload) {
   return `${body}\n\n${options}`;
 }
 
+async function getProductCategoriesForTenant(tenantId) {
+  const result = await query(
+    `SELECT category, COUNT(*)::int AS count
+     FROM products
+     WHERE tenant_id = $1
+       AND active = true
+       AND NULLIF(TRIM(category), '') IS NOT NULL
+     GROUP BY category
+     ORDER BY count DESC, category ASC
+     LIMIT 10`,
+    [tenantId],
+  );
+
+  return result.rows;
+}
+
+function buildCategoryMenuInteractive(settings = {}, categories = []) {
+  const companyName = settings.companyName || settings.appName || 'our team';
+
+  const rows = categories.length
+    ? categories.map((item) => ({
+        id: `category_${String(item.category || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}`,
+        title: String(item.category || 'Products').slice(0, 24),
+        description: `${item.count} active product${Number(item.count) === 1 ? '' : 's'}`,
+      }))
+    : [
+        { id: 'category_steel', title: 'Steel', description: 'Steel products and grades' },
+        { id: 'category_plates', title: 'Plates', description: 'Plate items' },
+        { id: 'category_round_bars', title: 'Round Bars', description: 'Round bar items' },
+        { id: 'category_coils', title: 'Coils', description: 'Coil items' },
+      ];
+
+  return {
+    messaging_product: 'whatsapp',
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: {
+        type: 'text',
+        text: companyName.slice(0, 60),
+      },
+      body: {
+        text: 'Please select a product category.',
+      },
+      footer: {
+        text: 'Select category to view products',
+      },
+      action: {
+        button: 'Select Category',
+        sections: [
+          {
+            title: 'Product Categories',
+            rows,
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function findExactProductCategory(tenantId, text = '') {
+  const cleanText = normalizeUserText(text);
+
+  if (!cleanText) return null;
+
+  const result = await query(
+    `SELECT category
+     FROM products
+     WHERE tenant_id = $1
+       AND active = true
+       AND LOWER(TRIM(category)) = $2
+     LIMIT 1`,
+    [tenantId, cleanText],
+  );
+
+  return result.rows[0]?.category || null;
+}
+
+async function buildCategoryProductsReply(tenantId, category, settings = {}) {
+  const currency = settings.currency || 'INR';
+
+  const result = await query(
+    `SELECT sku, name, grade, size, shape, unit, price, stock_qty
+     FROM products
+     WHERE tenant_id = $1
+       AND active = true
+       AND LOWER(TRIM(category)) = LOWER(TRIM($2))
+     ORDER BY stock_qty DESC, name ASC
+     LIMIT 8`,
+    [tenantId, category],
+  );
+
+  const products = result.rows;
+
+  if (!products.length) {
+    return `No active products found under ${category}. Please share product name/grade/size and our sales team will assist.`;
+  }
+
+  const lines = products.map((product, index) => {
+    const specs = [product.sku, product.name, product.grade, product.size, product.shape]
+      .filter(Boolean)
+      .join(' - ');
+
+    const stockText = Number(product.stock_qty || 0) > 0
+      ? ` | Stock: ${Number(product.stock_qty)} ${product.unit || 'pcs'}`
+      : ' | Stock: On request';
+
+    const priceText = Number(product.price || 0) > 0
+      ? ` | Rate: ${currency} ${Number(product.price).toFixed(2)}`
+      : ' | Rate: On request';
+
+    return `${index + 1}. ${specs || 'Product'}${stockText}${priceText}`;
+  });
+
+  return `Products in ${category}:\n\n${lines.join('\n')}\n\nFor quotation, reply with item number/product name, size, quantity, delivery city and GST/company name.`;
+}
+
 function buildMenuSelectionReply(text = '', settings = {}) {
   const selected = normalizeUserText(text);
   const company = settings.companyName || settings.appName || 'our team';
@@ -864,7 +1096,7 @@ function buildMenuSelectionReply(text = '', settings = {}) {
   }
 
   if (selected === 'browse products') {
-    return `Please share product category or material grade. Example: SS 316, EN8, EN24, plates, round bars, coils.`;
+    return null;
   }
 
   if (selected === 'check order status') {
@@ -880,6 +1112,170 @@ function buildMenuSelectionReply(text = '', settings = {}) {
   }
 
   return null;
+}
+
+function hasQuoteRequestSignal(text = '') {
+  const body = normalizeUserText(text);
+
+  if (!body) return false;
+
+  return /(quote|quotation|rate|price|offer|estimate|require|required|need|chahiye|chaiye|qty|quantity|mt|kg|tons?|nos|pcs|piece|delivery|gst|company)/i.test(body);
+}
+
+function hasEnoughQuoteDetails(enquiry = {}) {
+  return Boolean(
+    enquiry.grade ||
+    enquiry.size ||
+    enquiry.shape ||
+    enquiry.quantity,
+  );
+}
+
+function buildMissingQuoteDetailsReply(settings = {}) {
+  const company = settings.companyName || settings.appName || 'our team';
+
+  return `Quotation banane ke liye please ye details share kijiye:
+
+1. Product / Grade
+2. Size / Dimension
+3. Quantity
+4. Delivery city
+5. Company name / GST
+
+Example:
+Need SS 316 plate 3mm 4 MT delivery Pune
+
+${company} team details verify karke quote draft karegi.`;
+}
+
+async function findBestProductForQuote(tenantId, text = '', enquiry = {}) {
+  const terms = botProductSearchTerms(text, enquiry);
+
+  if (!terms.length) return null;
+
+  const params = [tenantId];
+  const clauses = terms.map((term) => {
+    params.push(`%${term}%`);
+    const index = params.length;
+    return `(sku ILIKE $${index} OR name ILIKE $${index} OR category ILIKE $${index} OR grade ILIKE $${index} OR size ILIKE $${index} OR shape ILIKE $${index})`;
+  });
+
+  const result = await query(
+    `SELECT id, sku, name, category, grade, size, shape, unit, price, stock_qty
+     FROM products
+     WHERE tenant_id = $1
+       AND active = true
+       AND (${clauses.join(' OR ')})
+     ORDER BY stock_qty DESC, price DESC, name ASC
+     LIMIT 1`,
+    params,
+  );
+
+  return result.rows[0] || null;
+}
+
+async function createStructuredQuoteDraft({ tenantId, contactId, messageId, text }) {
+  const cleanText = String(text || '').trim();
+  const enquiry = extractEnquiry(cleanText);
+
+  if (!cleanText || !hasQuoteRequestSignal(cleanText) || !hasEnoughQuoteDetails(enquiry)) {
+    return null;
+  }
+
+  const matchedProduct = await findBestProductForQuote(tenantId, cleanText, enquiry);
+
+  const draftGrade = enquiry.grade || matchedProduct?.grade || '';
+  const draftSize = enquiry.size || matchedProduct?.size || '';
+  const draftShape = enquiry.shape || matchedProduct?.shape || '';
+  const draftQuantity = enquiry.quantity || '';
+
+  const existing = await query(
+    `SELECT id
+     FROM enquiry_drafts
+     WHERE tenant_id = $1
+       AND contact_id = $2
+       AND status = 'draft'
+       AND created_at >= now() - interval '30 minutes'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [tenantId, contactId],
+  );
+
+  if (existing.rows[0]) {
+    const result = await query(
+      `UPDATE enquiry_drafts
+       SET message_id = COALESCE($3, message_id),
+           grade = COALESCE(NULLIF($4, ''), grade),
+           size = COALESCE(NULLIF($5, ''), size),
+           shape = COALESCE(NULLIF($6, ''), shape),
+           quantity = COALESCE(NULLIF($7, ''), quantity),
+           source = 'WhatsApp Structured Quote'
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [
+        existing.rows[0].id,
+        tenantId,
+        messageId || null,
+        draftGrade,
+        draftSize,
+        draftShape,
+        draftQuantity,
+      ],
+    );
+
+    return { draft: result.rows[0], matchedProduct, enquiry, updatedExisting: true };
+  }
+
+  const result = await query(
+    `INSERT INTO enquiry_drafts (tenant_id, contact_id, message_id, grade, size, shape, quantity, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'WhatsApp Structured Quote')
+     RETURNING *`,
+    [
+      tenantId,
+      contactId,
+      messageId || null,
+      draftGrade,
+      draftSize,
+      draftShape,
+      draftQuantity,
+    ],
+  );
+
+  return { draft: result.rows[0], matchedProduct, enquiry, updatedExisting: false };
+}
+
+function buildStructuredQuoteConfirmation({ draftResult, settings = {} }) {
+  if (!draftResult?.draft) return null;
+
+  const company = settings.companyName || settings.appName || 'our team';
+  const product = draftResult.matchedProduct;
+  const draft = draftResult.draft;
+
+  const matchedLine = product
+    ? `Matched product: ${[product.sku, product.name, product.grade, product.size, product.shape].filter(Boolean).join(' - ')}`
+    : 'Matched product: Sales team will verify manually';
+
+  const stockLine = product && Number(product.stock_qty || 0) > 0
+    ? `Available stock: ${Number(product.stock_qty)} ${product.unit || 'pcs'}`
+    : 'Available stock: To be verified';
+
+  const rateLine = product && Number(product.price || 0) > 0
+    ? `Indicative rate in master: ${settings.currency || 'INR'} ${Number(product.price).toFixed(2)}`
+    : 'Rate: To be quoted after verification';
+
+  return `✅ Quote request captured.
+
+${matchedLine}
+Grade: ${draft.grade || '-'}
+Size: ${draft.size || '-'}
+Shape: ${draft.shape || '-'}
+Quantity: ${draft.quantity || '-'}
+
+${stockLine}
+${rateLine}
+
+${company} team will verify price, stock, delivery terms and share the official quotation.`;
 }
 
 function parseQuantity(value) {
@@ -1212,18 +1608,20 @@ async function updateMessageStatus({ tenantId, waMessageId, status, rawPayload }
 }
 
 async function createEnquiryDraft({ tenantId, contactId, messageId, text }) {
-  const enquiry = extractEnquiry(text);
   const cleanText = String(text || '').trim();
-  if (!cleanText || /^\[(image|audio|video|sticker|location|contacts|reaction|unsupported)/i.test(cleanText)) return null;
-  const hasEnquirySignal = enquiry.grade || enquiry.size || enquiry.shape || enquiry.quantity || /(quote|quotation|rate|price|qty|quantity|size|grade)/i.test(cleanText);
-  if (!hasEnquirySignal) return null;
-  const result = await query(
-    `INSERT INTO enquiry_drafts (tenant_id, contact_id, message_id, grade, size, shape, quantity, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'WhatsApp Auto')
-     RETURNING *`,
-    [tenantId, contactId, messageId || null, enquiry.grade, enquiry.size, enquiry.shape, enquiry.quantity],
-  );
-  return result.rows[0];
+
+  if (!cleanText || /^\[(image|audio|video|sticker|location|contacts|reaction|unsupported)/i.test(cleanText)) {
+    return null;
+  }
+
+  const structuredDraft = await createStructuredQuoteDraft({
+    tenantId,
+    contactId,
+    messageId,
+    text: cleanText,
+  });
+
+  return structuredDraft?.draft || null;
 }
 
 async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }) {
@@ -1241,19 +1639,62 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
     return null;
   }
 
+  const normalizedText = normalizeUserText(text);
   const useMainMenu = shouldSendMainMenu(text);
-  const menuPayload = useMainMenu ? buildMainMenuInteractive(settings) : null;
-  const replyText = useMainMenu
-    ? menuPayloadToText(menuPayload)
-    : await buildBotReply({ tenantId, settings, text });
+  const useCategoryMenu = normalizedText === 'browse products';
+  const selectedCategory = !useMainMenu && !useCategoryMenu
+    ? await findExactProductCategory(tenantId, text)
+    : null;
+
+  let menuPayload = null;
+  let replyText = null;
+  let messageType = 'text';
+  let auditAction = 'bot.auto_reply_sent';
+
+  if (useMainMenu) {
+    menuPayload = buildMainMenuInteractive(settings);
+    replyText = menuPayloadToText(menuPayload);
+    messageType = 'interactive';
+    auditAction = 'bot.menu_sent';
+  } else if (useCategoryMenu) {
+    const categories = await getProductCategoriesForTenant(tenantId);
+    menuPayload = buildCategoryMenuInteractive(settings, categories);
+    replyText = menuPayloadToText(menuPayload);
+    messageType = 'interactive';
+    auditAction = 'bot.category_menu_sent';
+  } else if (selectedCategory) {
+    replyText = await buildCategoryProductsReply(tenantId, selectedCategory, settings);
+    messageType = 'text';
+    auditAction = 'bot.category_products_sent';
+  } else if (hasQuoteRequestSignal(text)) {
+    const enquiry = extractEnquiry(text);
+
+    if (!hasEnoughQuoteDetails(enquiry)) {
+      replyText = buildMissingQuoteDetailsReply(settings);
+      messageType = 'text';
+      auditAction = 'bot.quote_missing_details';
+    } else {
+      const draftResult = await createStructuredQuoteDraft({
+        tenantId,
+        contactId: contact.id,
+        messageId: inboundMessage.id,
+        text,
+      });
+
+      replyText = buildStructuredQuoteConfirmation({ draftResult, settings });
+      messageType = 'text';
+      auditAction = 'bot.quote_request_captured';
+    }
+  } else {
+    replyText = await buildBotReply({ tenantId, settings, text });
+  }
 
   if (!replyText) return null;
 
   let waMessageId = null;
-  let messageType = useMainMenu ? 'interactive' : 'text';
 
   try {
-    waMessageId = useMainMenu
+    waMessageId = messageType === 'interactive'
       ? await sendWhatsAppInteractiveList(contact, menuPayload, tenantId)
       : await sendWhatsAppText(contact, replyText, tenantId);
   } catch (error) {
@@ -1300,7 +1741,7 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
 
   await recordAudit({
     tenantId,
-    action: useMainMenu ? 'bot.menu_sent' : 'bot.auto_reply_sent',
+    action: auditAction,
     entityType: 'message',
     entityId: botMessage?.id,
     metadata: {
@@ -1308,6 +1749,7 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       inboundMessageId: inboundMessage.id,
       status,
       type: messageType,
+      selectedCategory,
     },
   });
 
@@ -1401,8 +1843,27 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
     });
   }
 
-  const enquiryDraft = await createEnquiryDraft({ tenantId, contactId: contact.id, messageId: saved?.id, text: textForIntent });
+  const managerApproval = await handleManagerApprovalInbound({
+    tenantId,
+    contact,
+    inboundMessage: saved,
+    text: textForIntent,
+    rawPayload,
+  });
+
+  if (managerApproval?.handled) {
+    return {
+      contact,
+      message: saved,
+      enquiryDraft: null,
+      botReply: managerApproval.botReply || null,
+      managerApproval,
+    };
+  }
+
   const botReply = await maybeSendBotAutoReply({ tenantId, contact, inboundMessage: saved, text: textForIntent });
+  const enquiryDraft = await createEnquiryDraft({ tenantId, contactId: contact.id, messageId: saved?.id, text: textForIntent });
+
   return { contact, message: saved, enquiryDraft, botReply };
 }
 
@@ -1595,6 +2056,380 @@ async function sendWhatsAppTemplate(contact, templateName, language = 'en', tena
   return response.data?.messages?.[0]?.id || null;
 }
 
+async function sendWhatsAppTemplateToNumber({ tenantId, to, templateName, language = 'en', bodyParams = [] }) {
+  const config = await getWhatsAppSendConfig(tenantId);
+
+  if (!config) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Template message was not sent.');
+  }
+
+  const cleanTo = String(to || '').replace(/\D/g, '');
+
+  if (cleanTo.length < 11 || cleanTo.length > 15) {
+    throw new Error('Manager WhatsApp number must include country code. Example: 91XXXXXXXXXX');
+  }
+
+  const components = bodyParams.length
+    ? [
+        {
+          type: 'body',
+          parameters: bodyParams.map((value) => ({
+            type: 'text',
+            text: String(value ?? '').slice(0, 1024),
+          })),
+        },
+      ]
+    : [];
+
+  const response = await axios.post(
+    whatsappMessagesUrl(config),
+    {
+      messaging_product: 'whatsapp',
+      to: cleanTo,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: language },
+        ...(components.length ? { components } : {}),
+      },
+    },
+    { headers: whatsappHeaders(config) },
+  );
+
+  return response.data?.messages?.[0]?.id || null;
+}
+
+function formatQuotationItemsForApproval(items = []) {
+  const lines = items.slice(0, 5).map((item, index) => {
+    const description = String(item.description || [item.grade, item.size, item.shape].filter(Boolean).join(' ') || 'Item').trim();
+    const qty = `${Number(item.quantity || 0)} ${item.unit || ''}`.trim();
+    const rate = Number(item.rate || 0).toLocaleString('en-IN');
+    const amount = Number(item.amount || 0).toLocaleString('en-IN');
+
+    return `${index + 1}. ${description} | ${qty} x ${rate} = ${amount}`;
+  });
+
+  if (items.length > 5) {
+    lines.push(`+${items.length - 5} more item(s)`);
+  }
+
+  return lines.join('\n').slice(0, 900);
+}
+
+async function recordQuotationApprovalEvent({
+  tenantId,
+  quotationId,
+  actorType = 'system',
+  actorUserId = null,
+  actorPhone = null,
+  action,
+  reason = null,
+  rawPayload = null,
+}) {
+  if (!tenantId || !quotationId || !action) return null;
+
+  const result = await query(
+    `INSERT INTO quotation_approval_events
+       (tenant_id, quotation_id, actor_type, actor_user_id, actor_phone, action, reason, raw_payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [
+      tenantId,
+      quotationId,
+      actorType,
+      actorUserId,
+      actorPhone,
+      action,
+      reason,
+      rawPayload,
+    ],
+  );
+
+  return result.rows[0];
+}
+
+function isManagerApproveText(text = '') {
+  const body = normalizeUserText(text);
+  return body === 'approve quote'
+    || body === 'approve'
+    || body === 'approved'
+    || body === 'yes approve'
+    || body === 'ok approve';
+}
+
+function isManagerRejectText(text = '') {
+  const body = normalizeUserText(text);
+  return body === 'reject quote'
+    || body === 'reject'
+    || body === 'rejected'
+    || body === 'no reject'
+    || body === 'reject quotation';
+}
+
+async function findLatestManagerQuote({ tenantId, managerPhone, statuses = [] }) {
+  const cleanPhone = String(managerPhone || '').replace(/\D/g, '');
+
+  if (!tenantId || !cleanPhone) return null;
+
+  const params = [tenantId, cleanPhone];
+  let statusSql = '';
+
+  if (statuses.length) {
+    params.push(statuses);
+    statusSql = `AND manager_approval_status = ANY($${params.length}::text[])`;
+  }
+
+  const result = await query(
+    `SELECT *
+     FROM quotations
+     WHERE tenant_id = $1
+       AND manager_phone = $2
+       ${statusSql}
+     ORDER BY manager_approval_requested_at DESC NULLS LAST, created_at DESC
+     LIMIT 1`,
+    params,
+  );
+
+  return result.rows[0] || null;
+}
+
+async function sendManagerApprovalSystemReply({ tenantId, contactId, contact, text, action, quoteId }) {
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppText(contact, text, tenantId);
+  } catch (error) {
+    console.error('Manager approval system reply failed:', {
+      tenantId,
+      contactId,
+      quoteId,
+      action,
+      status: error.response?.status || null,
+      message: error.response?.data?.error?.message || error.message,
+    });
+    return null;
+  }
+
+  return addMessage({
+    tenantId,
+    contactId,
+    waMessageId,
+    direction: 'outbound',
+    type: 'text',
+    body: text,
+    status: waMessageId ? 'sent' : 'accepted',
+    rawPayload: { action, quoteId },
+    normalizedText: text,
+  });
+}
+
+async function handleManagerApprovalInbound({ tenantId, contact, inboundMessage, text, rawPayload }) {
+  const managerPhone = String(contact?.wa_id || contact?.phone || '').replace(/\D/g, '');
+  const cleanText = String(text || '').trim();
+
+  if (!tenantId || !contact || !inboundMessage || !managerPhone || !cleanText) {
+    return null;
+  }
+
+  const waitingReasonQuote = await findLatestManagerQuote({
+    tenantId,
+    managerPhone,
+    statuses: ['waiting_reason'],
+  });
+
+  if (waitingReasonQuote && !isManagerApproveText(cleanText) && !isManagerRejectText(cleanText)) {
+    const reason = cleanText.slice(0, 1000);
+
+    const updatedQuote = await query(
+      `UPDATE quotations
+       SET status = 'revision_required',
+           approval_status = 'revision_required',
+           manager_approval_status = 'revision_required',
+           manager_rejection_reason = $3,
+           revision_no = COALESCE(revision_no, 0) + 1
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [waitingReasonQuote.id, tenantId, reason],
+    );
+
+    await recordQuotationApprovalEvent({
+      tenantId,
+      quotationId: waitingReasonQuote.id,
+      actorType: 'manager',
+      actorPhone: managerPhone,
+      action: 'manager_rejection_reason_received',
+      reason,
+      rawPayload,
+    });
+
+    await recordAudit({
+      tenantId,
+      action: 'quotation.manager_rejection_reason_received',
+      entityType: 'quotation',
+      entityId: waitingReasonQuote.id,
+      metadata: {
+        managerPhone: maskValue(managerPhone),
+        reason,
+        inboundMessageId: inboundMessage.id,
+      },
+    });
+
+    const replyText = `Rejection reason captured for quotation ${waitingReasonQuote.quote_no}.
+
+Reason:
+${reason}
+
+Status is now revision_required. Sales team will update the quotation and send it again for your approval.`;
+
+    const botReply = await sendManagerApprovalSystemReply({
+      tenantId,
+      contactId: contact.id,
+      contact,
+      text: replyText,
+      action: 'manager_rejection_reason_received',
+      quoteId: waitingReasonQuote.id,
+    });
+
+    return {
+      handled: true,
+      action: 'manager_rejection_reason_received',
+      quotation: updatedQuote.rows[0],
+      botReply,
+    };
+  }
+
+  if (!isManagerApproveText(cleanText) && !isManagerRejectText(cleanText)) {
+    return null;
+  }
+
+  const pendingQuote = await findLatestManagerQuote({
+    tenantId,
+    managerPhone,
+    statuses: ['pending'],
+  });
+
+  if (!pendingQuote) {
+    return null;
+  }
+
+  if (isManagerApproveText(cleanText)) {
+    const updatedQuote = await query(
+      `UPDATE quotations
+       SET status = 'manager_approved',
+           approval_status = 'manager_approved',
+           manager_approval_status = 'approved',
+           manager_approved_at = now()
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [pendingQuote.id, tenantId],
+    );
+
+    await recordQuotationApprovalEvent({
+      tenantId,
+      quotationId: pendingQuote.id,
+      actorType: 'manager',
+      actorPhone: managerPhone,
+      action: 'manager_approved',
+      reason: null,
+      rawPayload,
+    });
+
+    await recordAudit({
+      tenantId,
+      action: 'quotation.manager_approved',
+      entityType: 'quotation',
+      entityId: pendingQuote.id,
+      metadata: {
+        managerPhone: maskValue(managerPhone),
+        inboundMessageId: inboundMessage.id,
+      },
+    });
+
+    const replyText = `Quotation ${pendingQuote.quote_no} approved.
+
+Customer has not been sent the quotation yet. Sales team can now send the approved quotation to the customer.`;
+
+    const botReply = await sendManagerApprovalSystemReply({
+      tenantId,
+      contactId: contact.id,
+      contact,
+      text: replyText,
+      action: 'manager_approved',
+      quoteId: pendingQuote.id,
+    });
+
+    return {
+      handled: true,
+      action: 'manager_approved',
+      quotation: updatedQuote.rows[0],
+      botReply,
+    };
+  }
+
+  if (isManagerRejectText(cleanText)) {
+    const updatedQuote = await query(
+      `UPDATE quotations
+       SET status = 'manager_rejected_waiting_reason',
+           approval_status = 'manager_rejected_waiting_reason',
+           manager_approval_status = 'waiting_reason',
+           manager_rejected_at = now()
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [pendingQuote.id, tenantId],
+    );
+
+    await recordQuotationApprovalEvent({
+      tenantId,
+      quotationId: pendingQuote.id,
+      actorType: 'manager',
+      actorPhone: managerPhone,
+      action: 'manager_rejected',
+      reason: null,
+      rawPayload,
+    });
+
+    await recordAudit({
+      tenantId,
+      action: 'quotation.manager_rejected',
+      entityType: 'quotation',
+      entityId: pendingQuote.id,
+      metadata: {
+        managerPhone: maskValue(managerPhone),
+        inboundMessageId: inboundMessage.id,
+      },
+    });
+
+    const replyText = `Quotation ${pendingQuote.quote_no} rejected.
+
+Please send the rejection reason or required changes in your next message.
+
+Example:
+Reduce rate by ₹3/kg and add freight separately.`;
+
+    const botReply = await sendManagerApprovalSystemReply({
+      tenantId,
+      contactId: contact.id,
+      contact,
+      text: replyText,
+      action: 'manager_rejected_waiting_reason',
+      quoteId: pendingQuote.id,
+    });
+
+    return {
+      handled: true,
+      action: 'manager_rejected',
+      quotation: updatedQuote.rows[0],
+      botReply,
+    };
+  }
+
+  return null;
+}
+
 // =========================================================
 // STARTUP
 // =========================================================
@@ -1732,6 +2567,132 @@ app.get('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
 app.put('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   res.json(await saveAppSettings(req.user.tenantId, req.body || {}));
+}));
+
+// =========================================================
+// ROUTES — KNOWLEDGE BASE
+// =========================================================
+
+app.get('/api/knowledge-base', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+
+  const result = await query(
+    `SELECT id, title, category, content, keywords, active, created_at, updated_at
+     FROM knowledge_base
+     WHERE tenant_id = $1
+     ORDER BY active DESC, updated_at DESC
+     LIMIT 200`,
+    [req.user.tenantId],
+  );
+
+  res.json(result.rows);
+}));
+
+app.post('/api/knowledge-base', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+
+  const item = normalizeKnowledgeBaseItem(req.body || {});
+
+  if (!item.title || !item.content) {
+    return res.status(400).json({ error: 'Knowledge title and content required' });
+  }
+
+  const result = await query(
+    `INSERT INTO knowledge_base (tenant_id, title, category, content, keywords, active, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+     RETURNING id, title, category, content, keywords, active, created_at, updated_at`,
+    [req.user.tenantId, item.title, item.category, item.content, item.keywords, item.active, req.user.id],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'knowledge.created',
+    entityType: 'knowledge_base',
+    entityId: result.rows[0].id,
+    metadata: { title: item.title, category: item.category },
+  });
+
+  res.status(201).json(result.rows[0]);
+}));
+
+app.patch('/api/knowledge-base/:id', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+
+  const existingResult = await query(
+    `SELECT id
+     FROM knowledge_base
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  if (!existingResult.rows[0]) {
+    return res.status(404).json({ error: 'Knowledge item not found' });
+  }
+
+  const item = normalizeKnowledgeBaseItem(req.body || {});
+
+  if (!item.title || !item.content) {
+    return res.status(400).json({ error: 'Knowledge title and content required' });
+  }
+
+  const result = await query(
+    `UPDATE knowledge_base
+     SET title = $3,
+         category = $4,
+         content = $5,
+         keywords = $6,
+         active = $7,
+         updated_by = $8,
+         updated_at = now()
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, title, category, content, keywords, active, created_at, updated_at`,
+    [req.params.id, req.user.tenantId, item.title, item.category, item.content, item.keywords, item.active, req.user.id],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'knowledge.updated',
+    entityType: 'knowledge_base',
+    entityId: result.rows[0].id,
+    metadata: { title: item.title, category: item.category, active: item.active },
+  });
+
+  res.json(result.rows[0]);
+}));
+
+app.delete('/api/knowledge-base/:id', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
+
+  const result = await query(
+    `UPDATE knowledge_base
+     SET active = false,
+         updated_by = $3,
+         updated_at = now()
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, title, category, active`,
+    [req.params.id, req.user.tenantId, req.user.id],
+  );
+
+  if (!result.rows[0]) {
+    return res.status(404).json({ error: 'Knowledge item not found' });
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'knowledge.deactivated',
+    entityType: 'knowledge_base',
+    entityId: result.rows[0].id,
+    metadata: { title: result.rows[0].title, category: result.rows[0].category },
+  });
+
+  res.json({ ok: true, item: result.rows[0] });
 }));
 
 app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
@@ -2988,12 +3949,420 @@ app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json(quote);
 }));
 
+app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const settings = await getAppSettings(req.user.tenantId);
+
+  if (!settings.quoteApprovalEnabled) {
+    return res.status(400).json({ error: 'Quotation approval workflow is disabled in Settings.' });
+  }
+
+  const managerPhone = String(settings.quoteApprovalManagerPhone || '').replace(/\D/g, '');
+
+  if (managerPhone.length < 11 || managerPhone.length > 15) {
+    return res.status(400).json({
+      error: 'Manager WhatsApp number is missing/invalid. Add it in Settings > Quotation Approval Workflow.',
+    });
+  }
+
+  const templateName = String(settings.quoteApprovalTemplateName || '').trim().toLowerCase();
+  const templateLanguage = String(settings.quoteApprovalTemplateLanguage || 'en').trim() || 'en';
+
+  if (!templateName) {
+    return res.status(400).json({ error: 'Manager approval template name is missing in Settings.' });
+  }
+
+  const templateResult = await query(
+    `SELECT id, name, language, active
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND active = true
+     LIMIT 1`,
+    [req.user.tenantId, templateName, templateLanguage],
+  );
+
+  const templateRecord = templateResult.rows[0];
+
+  if (!templateRecord) {
+    return res.status(400).json({
+      error: 'Manager approval template is not active/found in Templates. Add the approved Meta template name and language first.',
+    });
+  }
+
+  const quoteResult = await query(
+    `SELECT q.*, c.name AS contact_name, c.phone, c.company
+     FROM quotations q
+     LEFT JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id
+     WHERE q.id = $1
+       AND q.tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const quote = quoteResult.rows[0];
+
+  if (!quote) {
+    return res.status(404).json({ error: 'Quotation not found' });
+  }
+
+  if (!(await canAccessContactId(req.user, quote.contact_id))) {
+    return res.status(403).json({ error: 'Quotation assigned to another user' });
+  }
+
+  if (['converted', 'lost', 'accepted'].includes(String(quote.status || '').toLowerCase())) {
+    return res.status(400).json({ error: 'This quotation is already closed/converted and cannot be sent for manager approval.' });
+  }
+
+  const itemResult = await query(
+    `SELECT *
+     FROM quotation_items
+     WHERE quotation_id = $1
+       AND tenant_id = $2
+     ORDER BY created_at`,
+    [quote.id, req.user.tenantId],
+  );
+
+  const items = itemResult.rows;
+  const customerName = quote.company || quote.contact_name || quote.phone || 'Customer';
+  const amountText = `${settings.currency || 'INR'} ${Number(quote.amount || 0).toLocaleString('en-IN')}`;
+  const revisionText = `Rev ${Number(quote.revision_no || 0)}`;
+  const itemSummary = formatQuotationItemsForApproval(items);
+
+  const managerContact = await upsertContact({
+    tenantId: req.user.tenantId,
+    waId: managerPhone,
+    name: settings.quoteApprovalManagerName || 'Quote Approval Manager',
+    phone: managerPhone,
+    label: 'Review Required',
+    touchInbound: false,
+  });
+
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppTemplateToNumber({
+      tenantId: req.user.tenantId,
+      to: managerPhone,
+      templateName,
+      language: templateLanguage,
+      bodyParams: [
+        quote.quote_no,
+        customerName,
+        amountText,
+        revisionText,
+      ],
+    });
+  } catch (error) {
+    await recordQuotationApprovalEvent({
+      tenantId: req.user.tenantId,
+      quotationId: quote.id,
+      actorType: 'sales',
+      actorUserId: req.user.id,
+      actorPhone: null,
+      action: 'sent_to_manager',
+      reason: 'manager_send_failed',
+      rawPayload: {
+        status: error.response?.status || null,
+        message: error.response?.data?.error?.message || error.message,
+      },
+    });
+
+    return res.status(400).json({
+      error: error.response?.data?.error?.message || error.message || 'Manager approval WhatsApp message failed',
+    });
+  }
+
+  const outboundBody = [
+    `[Manager Approval] ${quote.quote_no}`,
+    `Customer: ${customerName}`,
+    `Amount: ${amountText}`,
+    revisionText,
+    '',
+    itemSummary,
+  ].filter(Boolean).join('\n');
+
+  const message = await addMessage({
+    tenantId: req.user.tenantId,
+    contactId: managerContact.id,
+    waMessageId,
+    direction: 'outbound',
+    type: 'template',
+    body: outboundBody,
+    status: waMessageId ? 'sent' : 'accepted',
+    templateName,
+    rawPayload: {
+      templateName,
+      templateLanguage,
+      quoteId: quote.id,
+      quoteNo: quote.quote_no,
+      bodyParams: [quote.quote_no, customerName, amountText, revisionText],
+    },
+    normalizedText: outboundBody,
+  });
+
+  const updatedQuoteResult = await query(
+    `UPDATE quotations
+     SET status = 'pending_manager_approval',
+         approval_status = 'pending_manager_approval',
+         manager_approval_status = 'pending',
+         manager_approval_requested_at = now(),
+         manager_phone = $3
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING *`,
+    [quote.id, req.user.tenantId, managerPhone],
+  );
+
+  await recordQuotationApprovalEvent({
+    tenantId: req.user.tenantId,
+    quotationId: quote.id,
+    actorType: 'sales',
+    actorUserId: req.user.id,
+    actorPhone: null,
+    action: 'sent_to_manager',
+    reason: null,
+    rawPayload: {
+      managerPhone: maskValue(managerPhone),
+      templateName,
+      templateLanguage,
+      messageId: waMessageId,
+      messageRowId: message?.id || null,
+    },
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'quotation.sent_to_manager',
+    entityType: 'quotation',
+    entityId: quote.id,
+    metadata: {
+      managerPhone: maskValue(managerPhone),
+      templateName,
+      messageId: waMessageId,
+      messageRowId: message?.id || null,
+    },
+  });
+
+  res.json({
+    ok: true,
+    quotation: updatedQuoteResult.rows[0],
+    managerContactId: managerContact.id,
+    messageId: waMessageId,
+  });
+}));
+
+app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const settings = await getAppSettings(req.user.tenantId);
+
+  const quoteResult = await query(
+    `SELECT q.*, c.id AS contact_id, c.name AS contact_name, c.wa_id, c.phone, c.company, c.opted_out, c.last_inbound_at
+     FROM quotations q
+     JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id
+     WHERE q.id = $1
+       AND q.tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const quote = quoteResult.rows[0];
+
+  if (!quote) {
+    return res.status(404).json({ error: 'Quotation not found' });
+  }
+
+  if (!(await canAccessContactId(req.user, quote.contact_id))) {
+    return res.status(403).json({ error: 'Quotation assigned to another user' });
+  }
+
+  if (quote.opted_out) {
+    return res.status(403).json({
+      error: 'Customer has opted out. Do not send WhatsApp quotation to this contact.',
+    });
+  }
+
+  if (settings.quoteApprovalEnabled && quote.manager_approval_status !== 'approved') {
+    return res.status(400).json({
+      error: 'Manager approval is required before sending this quotation to customer.',
+    });
+  }
+
+  if (['converted', 'lost', 'accepted'].includes(String(quote.status || '').toLowerCase())) {
+    return res.status(400).json({
+      error: 'This quotation is already closed/converted and cannot be sent to customer.',
+    });
+  }
+
+  const templateName = String(settings.customerQuoteTemplateName || '').trim().toLowerCase();
+  const templateLanguage = String(settings.customerQuoteTemplateLanguage || 'en').trim() || 'en';
+
+  if (!templateName) {
+    return res.status(400).json({
+      error: 'Customer quote template name is missing in Settings.',
+    });
+  }
+
+  const templateResult = await query(
+    `SELECT id, name, language, active
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND active = true
+     LIMIT 1`,
+    [req.user.tenantId, templateName, templateLanguage],
+  );
+
+  const templateRecord = templateResult.rows[0];
+
+  if (!templateRecord) {
+    return res.status(400).json({
+      error: 'Customer quote template is not active/found in Templates. Add the approved Meta template name and language first.',
+    });
+  }
+
+  const itemResult = await query(
+    `SELECT *
+     FROM quotation_items
+     WHERE quotation_id = $1
+       AND tenant_id = $2
+     ORDER BY created_at`,
+    [quote.id, req.user.tenantId],
+  );
+
+  const items = itemResult.rows;
+  const customerName = quote.company || quote.contact_name || quote.phone || 'Customer';
+  const amountText = `${settings.currency || 'INR'} ${Number(quote.amount || 0).toLocaleString('en-IN')}`;
+  const validUntilText = quote.valid_until
+    ? new Date(quote.valid_until).toLocaleDateString('en-IN')
+    : 'As per quotation';
+  const itemSummary = formatQuotationItemsForApproval(items);
+
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppTemplateToNumber({
+      tenantId: req.user.tenantId,
+      to: quote.wa_id || quote.phone,
+      templateName,
+      language: templateLanguage,
+      bodyParams: [
+        customerName,
+        quote.quote_no,
+        amountText,
+        validUntilText,
+      ],
+    });
+  } catch (error) {
+    return res.status(400).json({
+      error: error.response?.data?.error?.message || error.message || 'Customer quote WhatsApp message failed',
+    });
+  }
+
+  const outboundBody = [
+    `[Customer Quote] ${quote.quote_no}`,
+    `Customer: ${customerName}`,
+    `Amount: ${amountText}`,
+    `Valid Until: ${validUntilText}`,
+    '',
+    itemSummary,
+  ].filter(Boolean).join('\n');
+
+  const message = await addMessage({
+    tenantId: req.user.tenantId,
+    contactId: quote.contact_id,
+    waMessageId,
+    direction: 'outbound',
+    type: 'template',
+    body: outboundBody,
+    status: waMessageId ? 'sent' : 'accepted',
+    templateName,
+    rawPayload: {
+      templateName,
+      templateLanguage,
+      quoteId: quote.id,
+      quoteNo: quote.quote_no,
+      bodyParams: [customerName, quote.quote_no, amountText, validUntilText],
+    },
+    normalizedText: outboundBody,
+  });
+
+  const updatedQuoteResult = await query(
+    `UPDATE quotations
+     SET status = 'customer_sent',
+         approval_status = 'customer_sent',
+         customer_sent_at = now()
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING *`,
+    [quote.id, req.user.tenantId],
+  );
+
+  await recordQuotationApprovalEvent({
+    tenantId: req.user.tenantId,
+    quotationId: quote.id,
+    actorType: 'sales',
+    actorUserId: req.user.id,
+    actorPhone: null,
+    action: 'sent_to_customer',
+    reason: null,
+    rawPayload: {
+      templateName,
+      templateLanguage,
+      messageId: waMessageId,
+      messageRowId: message?.id || null,
+    },
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'quotation.sent_to_customer',
+    entityType: 'quotation',
+    entityId: quote.id,
+    metadata: {
+      templateName,
+      messageId: waMessageId,
+      messageRowId: message?.id || null,
+      contactId: quote.contact_id,
+    },
+  });
+
+  res.json({
+    ok: true,
+    quotation: updatedQuoteResult.rows[0],
+    messageId: waMessageId,
+    messageRowId: message?.id || null,
+  });
+}));
+
 app.patch('/api/quotations/:id', requireAuth, asyncHandler(async (req, res) => {
   const { status, valid_until, notes } = req.body;
 
   if (status !== undefined) {
-    const allowedQuotationStatuses = new Set(['draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'lost']);
-    const cleanStatus = String(status || '').trim().toLowerCase();
+    const allowedQuotationStatuses = new Set([
+      'draft',
+      'pending_manager_approval',
+      'manager_approved',
+      'manager_rejected_waiting_reason',
+      'revision_required',
+      'sent',
+      'customer_sent',
+      'accepted',
+      'rejected',
+      'expired',
+      'converted',
+      'lost',
+    ]);    const cleanStatus = String(status || '').trim().toLowerCase();
 
     if (!allowedQuotationStatuses.has(cleanStatus)) {
       return res.status(400).json({ error: 'Invalid quotation status' });

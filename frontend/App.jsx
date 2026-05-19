@@ -145,6 +145,14 @@ const defaultAppSettings = {
   botGreeting: 'Hello, please share the product, size, and quantity you need.',
   handoffKeywords: ['urgent', 'complaint', 'stuck', 'salesperson'],
   inventoryFields: ['sku', 'name', 'grade', 'size', 'shape', 'stock_qty', 'price'],
+
+  quoteApprovalEnabled: true,
+  quoteApprovalManagerName: '',
+  quoteApprovalManagerPhone: '',
+  quoteApprovalTemplateName: 'quote_manager_approval_request',
+  quoteApprovalTemplateLanguage: 'en',
+  customerQuoteTemplateName: 'quote_customer_approval_request',
+  customerQuoteTemplateLanguage: 'en',
 }
 
 function toCsv(value) {
@@ -759,6 +767,26 @@ async function simulateInbound(event) {
     await loadAll()
   }
 
+    async function sendQuoteForManagerApproval(quote) {
+    try {
+      await api.post(`/api/quotations/${quote.id}/send-manager-approval`)
+      notify('Quotation sent to manager for approval')
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Manager approval send failed'), 'error')
+    }
+  }
+
+  async function sendQuoteToCustomer(quote) {
+    try {
+      await api.post(`/api/quotations/${quote.id}/send-to-customer`)
+      notify('Approved quotation sent to customer')
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Customer quote send failed'), 'error')
+    }
+  }
+
   async function convertQuote(quote) {
     await api.post(`/api/quotations/${quote.id}/convert-order`)
     notify('Quotation converted to order')
@@ -1118,9 +1146,7 @@ async function saveCustomization(event) {
         {activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
         {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
         {activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
-        {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} />}
-        {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
-        {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
+        {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
         {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} onMapPhone={mapCurrentWhatsAppPhone} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
         {activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
@@ -1577,7 +1603,7 @@ function InventoryPage({ products, productForm, setProductForm, editingProductId
   )
 }
 
-function QuotesPage({ quotations, onStatus, onConvert, onDownload }) {
+function QuotesPage({ quotations, onStatus, onConvert, onDownload, onSendManagerApproval, onSendCustomer }) {
   return (
     <section className="table-module">
       <div className="module-title"><FileText size={18} /><h3>Quotations</h3></div>
@@ -1585,10 +1611,28 @@ function QuotesPage({ quotations, onStatus, onConvert, onDownload }) {
       {quotations.map((quote) => (
         <div className="doc-row" key={quote.id}>
           <strong>{quote.quote_no}</strong>
-          <span>{quote.contact_name || 'Customer'} - {quote.status}</span>
+          <span>
+            {quote.contact_name || 'Customer'} - {quote.status}
+            {quote.manager_approval_status && quote.manager_approval_status !== 'not_requested'
+              ? ` / Manager: ${quote.manager_approval_status}`
+              : ''}
+          </span>
+
+          {quote.manager_rejection_reason && (
+            <small className="quote-reason">Manager reason: {quote.manager_rejection_reason}</small>
+          )}
+
           <b>{formatMoney(quote.amount)}</b>
+
           <div className="doc-actions">
-            <button type="button" onClick={() => onStatus(quote, 'sent')}>Sent</button>
+            {quote.manager_approval_status !== 'pending' && quote.status !== 'customer_sent' && quote.status !== 'converted' && (
+              <button type="button" onClick={() => onSendManagerApproval(quote)}>Manager Approval</button>
+            )}
+
+            {quote.manager_approval_status === 'approved' && quote.status !== 'customer_sent' && (
+              <button type="button" onClick={() => onSendCustomer(quote)}>Send Customer</button>
+            )}
+
             <button type="button" onClick={() => onStatus(quote, 'lost')}>Lost</button>
             <button type="button" onClick={() => onConvert(quote)}>Order</button>
             <button type="button" onClick={() => onDownload(quote)}>Download</button>
@@ -1730,6 +1774,142 @@ function AuditPage({ events }) {
   )
 }
 
+function KnowledgeBaseManager() {
+  const emptyKnowledge = { title: '', category: 'general', content: '', keywordsText: '', active: true }
+  const [items, setItems] = useState([])
+  const [form, setForm] = useState(emptyKnowledge)
+  const [editingId, setEditingId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+
+  async function loadKnowledge() {
+    const res = await api.get('/api/knowledge-base')
+    setItems(res.data)
+  }
+
+  useEffect(() => {
+    loadKnowledge().catch(() => setMessage('Unable to load knowledge base'))
+  }, [])
+
+  async function saveKnowledge(event) {
+    event.preventDefault()
+    setSaving(true)
+    setMessage('')
+
+    const payload = {
+      title: form.title,
+      category: form.category,
+      content: form.content,
+      keywords: fromCsv(form.keywordsText),
+      active: Boolean(form.active),
+    }
+
+    try {
+      if (editingId) {
+        await api.patch(`/api/knowledge-base/${editingId}`, payload)
+        setMessage('Knowledge updated')
+      } else {
+        await api.post('/api/knowledge-base', payload)
+        setMessage('Knowledge added')
+      }
+
+      setForm(emptyKnowledge)
+      setEditingId('')
+      await loadKnowledge()
+    } catch (err) {
+      setMessage(err.response?.data?.error || 'Knowledge save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function editKnowledge(item) {
+    setEditingId(item.id)
+    setForm({
+      title: item.title || '',
+      category: item.category || 'general',
+      content: item.content || '',
+      keywordsText: toCsv(item.keywords || []),
+      active: item.active !== false,
+    })
+  }
+
+  async function deactivateKnowledge(item) {
+    await api.delete(`/api/knowledge-base/${item.id}`)
+    setMessage('Knowledge deactivated')
+    if (editingId === item.id) {
+      setEditingId('')
+      setForm(emptyKnowledge)
+    }
+    await loadKnowledge()
+  }
+
+  return (
+    <section className="table-module">
+      <div className="module-title"><FileText size={18} /><h3>Company Knowledge Base</h3></div>
+
+      <form className="knowledge-form" onSubmit={saveKnowledge}>
+        <input
+          placeholder="Title, example: Payment Terms"
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })}
+        />
+
+        <input
+          placeholder="Category, example: payment / delivery / company"
+          value={form.category}
+          onChange={(e) => setForm({ ...form, category: e.target.value })}
+        />
+
+        <textarea
+          placeholder="Write company-approved answer/policy here. Bot will use this only when relevant."
+          value={form.content}
+          onChange={(e) => setForm({ ...form, content: e.target.value })}
+        />
+
+        <input
+          placeholder="Keywords comma separated, example: payment terms, advance, credit"
+          value={form.keywordsText}
+          onChange={(e) => setForm({ ...form, keywordsText: e.target.value })}
+        />
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={Boolean(form.active)}
+            onChange={(e) => setForm({ ...form, active: e.target.checked })}
+          />
+          Active
+        </label>
+
+        <div className="doc-actions">
+          {editingId && <button type="button" onClick={() => { setEditingId(''); setForm(emptyKnowledge) }}>Cancel Edit</button>}
+          <button type="submit" disabled={saving}>{saving ? 'Saving...' : editingId ? 'Update Knowledge' : 'Add Knowledge'}</button>
+        </div>
+
+        {message && <small className="success-text">{message}</small>}
+      </form>
+
+      <div className="knowledge-list">
+        {!items.length && <EmptyState title="No knowledge added" text="Add company FAQ, policies, delivery terms, payment terms, and safe bot answers here." />}
+
+        {items.map((item) => (
+          <div className="knowledge-row" key={item.id}>
+            <strong>{item.title}</strong>
+            <span>{item.category} | {item.active ? 'Active' : 'Inactive'}</span>
+            <p>{item.content}</p>
+            <small>Keywords: {(item.keywords || []).join(', ') || '-'}</small>
+            <div className="doc-actions">
+              <button type="button" onClick={() => editKnowledge(item)}>Edit</button>
+              {item.active && <button type="button" onClick={() => deactivateKnowledge(item)}>Deactivate</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, onMapPhone, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole, isProduction }) {
       const warnings = status?.warnings || []
 
@@ -1750,11 +1930,83 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
           <label>Bot Greeting<textarea value={customForm.botGreeting} onChange={(e) => setCustomForm({ ...customForm, botGreeting: e.target.value })} /></label>
           <label>Handoff Keywords<textarea value={customForm.handoffKeywordsText} onChange={(e) => setCustomForm({ ...customForm, handoffKeywordsText: e.target.value })} /></label>
           <label>Inventory Fields<textarea value={customForm.inventoryFieldsText} onChange={(e) => setCustomForm({ ...customForm, inventoryFieldsText: e.target.value })} /></label>
+
           <label className="toggle-row"><input type="checkbox" checked={Boolean(customForm.botEnabled)} onChange={(e) => setCustomForm({ ...customForm, botEnabled: e.target.checked })} /> Enable Auto Bot</label>
+
+          <div className="approval-settings-box">
+            <strong>Quotation Approval Workflow</strong>
+            <small>Customer quotation will go to manager first. Customer will receive it only after manager approval.</small>
+
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={Boolean(customForm.quoteApprovalEnabled)}
+                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalEnabled: e.target.checked })}
+              />
+              Enable Manager Approval Before Customer Quote
+            </label>
+
+            <label>
+              Manager Name
+              <input
+                value={customForm.quoteApprovalManagerName || ''}
+                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalManagerName: e.target.value })}
+                placeholder="Example: Sales Manager"
+              />
+            </label>
+
+            <label>
+              Manager WhatsApp Number
+              <input
+                value={customForm.quoteApprovalManagerPhone || ''}
+                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalManagerPhone: e.target.value.replace(/\D/g, '') })}
+                placeholder="Example: 919876543210"
+              />
+            </label>
+
+            <label>
+              Manager Approval Template Name
+              <input
+                value={customForm.quoteApprovalTemplateName || ''}
+                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalTemplateName: e.target.value })}
+                placeholder="quote_manager_approval_request"
+              />
+            </label>
+
+            <label>
+              Manager Approval Template Language
+              <input
+                value={customForm.quoteApprovalTemplateLanguage || 'en'}
+                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalTemplateLanguage: e.target.value })}
+                placeholder="en"
+              />
+            </label>
+
+            <label>
+              Customer Quote Template Name
+              <input
+                value={customForm.customerQuoteTemplateName || ''}
+                onChange={(e) => setCustomForm({ ...customForm, customerQuoteTemplateName: e.target.value })}
+                placeholder="quote_customer_approval_request"
+              />
+            </label>
+
+            <label>
+              Customer Quote Template Language
+              <input
+                value={customForm.customerQuoteTemplateLanguage || 'en'}
+                onChange={(e) => setCustomForm({ ...customForm, customerQuoteTemplateLanguage: e.target.value })}
+                placeholder="en"
+              />
+            </label>
+          </div>
+
           <button type="submit">Save Customization</button>
           {settingsSaved && <small className="success-text">{settingsSaved}</small>}
         </form>
       </section>
+
+      <KnowledgeBaseManager />
 
       <section className="table-module">
         <div className="module-title"><Settings size={18} /><h3>WhatsApp Setup</h3></div>

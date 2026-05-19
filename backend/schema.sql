@@ -622,6 +622,30 @@ EXCEPTION
 END $$;
 
 -- =========================================================
+-- 13A. COMPANY KNOWLEDGE BASE
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS knowledge_base (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  content TEXT NOT NULL,
+  keywords TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS knowledge_base_tenant_active_idx
+ON knowledge_base (tenant_id, active, updated_at);
+
+CREATE INDEX IF NOT EXISTS knowledge_base_tenant_category_idx
+ON knowledge_base (tenant_id, category, active);
+
+-- =========================================================
 -- 14. AUDIT EVENTS
 -- =========================================================
 
@@ -725,14 +749,101 @@ BEGIN
   END IF;
 END $$;
 
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'draft';
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_approval_status TEXT NOT NULL DEFAULT 'not_requested';
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_approval_requested_at TIMESTAMPTZ;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_approved_at TIMESTAMPTZ;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_rejected_at TIMESTAMPTZ;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_rejection_reason TEXT;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS manager_phone TEXT;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS customer_sent_at TIMESTAMPTZ;
+
+ALTER TABLE quotations
+ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_status_check_v2;
+EXCEPTION
+  WHEN undefined_object THEN NULL;
+END $$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'quotations_status_check_v2'
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotations_status_check_v3'
   ) THEN
     ALTER TABLE quotations
-    ADD CONSTRAINT quotations_status_check_v2
-    CHECK (status IN ('draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'lost'));
+    ADD CONSTRAINT quotations_status_check_v3
+    CHECK (status IN (
+      'draft',
+      'pending_manager_approval',
+      'manager_approved',
+      'manager_rejected_waiting_reason',
+      'revision_required',
+      'sent',
+      'customer_sent',
+      'accepted',
+      'rejected',
+      'expired',
+      'converted',
+      'lost'
+    ));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotations_approval_status_check_v1'
+  ) THEN
+    ALTER TABLE quotations
+    ADD CONSTRAINT quotations_approval_status_check_v1
+    CHECK (approval_status IN (
+      'draft',
+      'pending_manager_approval',
+      'manager_approved',
+      'manager_rejected_waiting_reason',
+      'revision_required',
+      'customer_sent',
+      'customer_approved',
+      'customer_rejected',
+      'converted_to_order',
+      'lost'
+    ));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotations_manager_approval_status_check_v1'
+  ) THEN
+    ALTER TABLE quotations
+    ADD CONSTRAINT quotations_manager_approval_status_check_v1
+    CHECK (manager_approval_status IN (
+      'not_requested',
+      'pending',
+      'approved',
+      'rejected',
+      'waiting_reason',
+      'revision_required'
+    ));
   END IF;
 END $$;
 
@@ -788,6 +899,58 @@ BEGIN
     ALTER TABLE products
     ADD CONSTRAINT products_stock_non_negative_check
     CHECK (stock_qty >= 0);
+  END IF;
+END $$;
+
+-- =========================================================
+-- 18. QUOTATION APPROVAL EVENTS
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS quotation_approval_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  quotation_id UUID NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+  actor_type TEXT NOT NULL DEFAULT 'system',
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  actor_phone TEXT,
+  action TEXT NOT NULL,
+  reason TEXT,
+  raw_payload JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS quotation_approval_events_tenant_quote_idx
+ON quotation_approval_events (tenant_id, quotation_id, created_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotation_approval_events_actor_type_check_v1'
+  ) THEN
+    ALTER TABLE quotation_approval_events
+    ADD CONSTRAINT quotation_approval_events_actor_type_check_v1
+    CHECK (actor_type IN ('system', 'sales', 'manager', 'customer'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotation_approval_events_action_check_v1'
+  ) THEN
+    ALTER TABLE quotation_approval_events
+    ADD CONSTRAINT quotation_approval_events_action_check_v1
+    CHECK (action IN (
+      'sent_to_manager',
+      'manager_approved',
+      'manager_rejected',
+      'manager_rejection_reason_received',
+      'revision_created',
+      'sent_to_customer',
+      'customer_approved',
+      'customer_rejected',
+      'converted_to_order'
+    ));
   END IF;
 END $$;
 

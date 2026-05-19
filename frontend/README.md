@@ -93,7 +93,10 @@ Frontend environment variable:
 VITE_API_URL=https://your-backend-service.onrender.com
 ```
 
-After backend deploy, run the database init command once from Render Shell or locally against the Render database:
+````md
+After backend deploy, the backend applies `backend/schema.sql` automatically on startup.
+
+For local PostgreSQL only, you may run:
 
 ```bash
 cd backend
@@ -116,6 +119,8 @@ WHATSAPP_VERIFY_TOKEN=your-custom-verify-token
 WHATSAPP_ACCESS_TOKEN=your-meta-access-token
 WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
 WHATSAPP_API_VERSION=v20.0
+WHATSAPP_APP_SECRET=your-meta-app-secret
+WHATSAPP_TEST_NUMBERS=919588462844
 ```
 
 Template env files are in:
@@ -162,8 +167,12 @@ Then login as Admin or Manager and use the `Meta WhatsApp Setup` panel to send a
 
 ## Database
 
-The backend runs without PostgreSQL by using demo in-memory data because `DATABASE_URL` is blank. For real usage, create a PostgreSQL database, run `backend/schema.sql`, and set:
+PostgreSQL is required. The backend will not start if `DATABASE_URL` is missing.
+
+For local usage, create a PostgreSQL database and set:
 
 ```env
 DATABASE_URL=postgres://user:password@localhost:5432/bos_whatsapp_inbox
 ```
+
+For Render usage, set `DATABASE_URL` to the Render Postgres internal database URL. The backend applies `backend/schema.sql` automatically on startup.

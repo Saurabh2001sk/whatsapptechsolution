@@ -651,6 +651,15 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.quote-reason {
+  display: block;
+  color: var(--danger);
+  background: #fff1ef;
+  border: 1px solid #f4b4ae;
+  border-radius: 7px;
+  padding: 7px 8px;
+  white-space: pre-wrap;
+}
 
 .badge {
   min-width: 22px;
@@ -974,7 +983,9 @@ textarea:focus {
 .dual-form,
 .custom-form,
 .product-form,
-.settings-stack {
+.settings-stack,
+.knowledge-form,
+.knowledge-list {
   display: grid;
   gap: 8px;
 }
@@ -1076,6 +1087,9 @@ textarea:focus {
 .custom-form textarea,
 .custom-form .toggle-row,
 .custom-form button,
+.knowledge-form textarea,
+.knowledge-form .toggle-row,
+.knowledge-form .doc-actions,
 .success-text {
   grid-column: 1 / -1;
 }
@@ -1093,6 +1107,66 @@ textarea:focus {
 
 .success-text {
   color: var(--green);
+  font-weight: 800;
+}
+
+.knowledge-form {
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 12px;
+}
+
+.knowledge-form textarea {
+  min-height: 110px;
+}
+
+.knowledge-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.knowledge-row p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+
+.knowledge-row span,
+.knowledge-row small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.approval-settings-box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf7;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.approval-settings-box strong {
+  font-size: 14px;
+}
+
+.approval-settings-box small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.approval-settings-box label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
   font-weight: 800;
 }
 
