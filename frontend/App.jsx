@@ -1039,11 +1039,10 @@ async function saveCustomization(event) {
   const activeOrders = orders.filter((item) => item.status !== 'closed')
   const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
   const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
-  const stageOptions = useMemo(() => ['all', ...stages], [stages])
-  const visibleConversations = useMemo(() => {
-    if (stageFilter === 'all') return conversations
-    return conversations.filter((item) => String(item.stage || '').toLowerCase() === String(stageFilter).toLowerCase())
-  }, [conversations, stageFilter])
+  const stageOptions = ['all', ...stages]
+  const visibleConversations = stageFilter === 'all'
+    ? conversations
+    : conversations.filter((item) => String(item.stage || '').toLowerCase() === String(stageFilter).toLowerCase())
   const chatMode = {
     inbox: {
       title: 'Inbox',
