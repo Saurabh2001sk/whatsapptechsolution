@@ -66,6 +66,7 @@ Backend environment variables:
 
 ```env
 PORT=10000
+NODE_ENV=production
 FRONTEND_URL=https://your-frontend-service.onrender.com
 PUBLIC_BASE_URL=https://your-backend-service.onrender.com
 DATABASE_URL=your-render-postgres-internal-url
@@ -74,6 +75,8 @@ WHATSAPP_VERIFY_TOKEN=bos_verify_token_123
 WHATSAPP_ACCESS_TOKEN=your-meta-access-token
 WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
 WHATSAPP_API_VERSION=v20.0
+WHATSAPP_APP_SECRET=your-meta-app-secret
+WHATSAPP_TEST_NUMBERS=919588462844
 ```
 
 Frontend Static Site:

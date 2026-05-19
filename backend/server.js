@@ -226,14 +226,31 @@ function toFiniteNumber(value, fallback = 0) {
 
 function validateRuntimeConfig() {
   const warnings = [];
-  if (!hasRealValue(process.env.JWT_SECRET) && isProduction) warnings.push('JWT_SECRET is required in production');
-  if (!hasRealValue(process.env.FRONTEND_URL) && isProduction) warnings.push('FRONTEND_URL should be set in production');
+
+  if (!hasRealValue(process.env.JWT_SECRET) && isProduction) {
+    warnings.push('JWT_SECRET is required in production.');
+  }
+
+  if (!hasRealValue(process.env.FRONTEND_URL) && isProduction) {
+    warnings.push('FRONTEND_URL should be set in production so browser API calls are allowed by CORS.');
+  }
+
+  if (!hasRealValue(process.env.PUBLIC_BASE_URL) && isProduction) {
+    warnings.push('PUBLIC_BASE_URL should be set in production so Meta webhook callback URL is clear.');
+  }
+
   if (hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) !== hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)) {
-    warnings.push('WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID should be configured together');
+    warnings.push('WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID should be configured together.');
   }
-  if (hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) && !hasRealValue(process.env.WHATSAPP_APP_SECRET)) {
-    warnings.push('WHATSAPP_APP_SECRET is recommended so Meta webhook signatures can be verified');
+
+  if (isProduction && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) && !hasRealValue(process.env.WHATSAPP_APP_SECRET)) {
+    warnings.push('WHATSAPP_APP_SECRET is required in production. Incoming Meta webhooks will be rejected without a valid signature secret.');
   }
+
+  if (hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) && !hasRealValue(process.env.WHATSAPP_TEST_NUMBERS)) {
+    warnings.push('WHATSAPP_TEST_NUMBERS is missing. Admin test-message sending will be blocked until allowed numbers are added.');
+  }
+
   return warnings;
 }
 
@@ -730,6 +747,10 @@ function buildBotReplyText({ settings, text, products = [] }) {
   const productBlock = productLines ? `\n\nAvailable product details:\n${productLines}` : '';
   const detailRequest = 'Please share product name/grade, size, quantity, delivery city and GST/company name.';
   const intent = getBotIntent(cleanText);
+    const menuSelectionReply = buildMenuSelectionReply(cleanText, settings);
+  if (menuSelectionReply) {
+    return menuSelectionReply;
+  }
 
   if (needsHandoff || intent === 'complaint') {
     return `Thanks for sharing this with ${company}. Your message is marked for team review. A team member will check and respond shortly.`;
@@ -763,6 +784,102 @@ async function buildBotReply({ tenantId, settings, text }) {
   const products = await findBotProductMatches(tenantId, text, enquiry);
   const reply = buildBotReplyText({ settings, text, products });
   return reply ? reply.slice(0, 1000) : null;
+}
+
+function shouldSendMainMenu(text = '') {
+  const body = normalizeUserText(text);
+  return /^(hi|hii|hello|hey|namaste|menu|start|help|options|open menu)\b/.test(body);
+}
+
+function buildMainMenuInteractive(settings = {}) {
+  const companyName = settings.companyName || settings.appName || 'our team';
+
+  return {
+    messaging_product: 'whatsapp',
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: {
+        type: 'text',
+        text: companyName.slice(0, 60),
+      },
+      body: {
+        text: `Welcome to ${companyName}. Please choose what you want to do.`,
+      },
+      footer: {
+        text: 'Powered by WhatsApp Business',
+      },
+      action: {
+        button: 'Open Menu',
+        sections: [
+          {
+            title: 'Sales & Support',
+            rows: [
+              {
+                id: 'request_quote',
+                title: 'Request Quote',
+                description: 'Share product, size and quantity',
+              },
+              {
+                id: 'browse_products',
+                title: 'Browse Products',
+                description: 'See product categories',
+              },
+              {
+                id: 'order_status',
+                title: 'Check Order Status',
+                description: 'Track booking, payment or dispatch',
+              },
+              {
+                id: 'ledger',
+                title: 'Ledger / Outstanding',
+                description: 'Ask for account balance or invoices',
+              },
+              {
+                id: 'talk_to_sales',
+                title: 'Talk to Sales',
+                description: 'Connect with a team member',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+function menuPayloadToText(menuPayload) {
+  const rows = menuPayload?.interactive?.action?.sections?.flatMap((section) => section.rows || []) || [];
+  const body = menuPayload?.interactive?.body?.text || 'Please choose an option.';
+  const options = rows.map((row, index) => `${index + 1}. ${row.title}`).join('\n');
+  return `${body}\n\n${options}`;
+}
+
+function buildMenuSelectionReply(text = '', settings = {}) {
+  const selected = normalizeUserText(text);
+  const company = settings.companyName || settings.appName || 'our team';
+
+  if (selected === 'request quote') {
+    return `Quotation ke liye please product name/grade, size, quantity, delivery city and GST/company name share kijiye. ${company} team details verify karke quote draft karegi.`;
+  }
+
+  if (selected === 'browse products') {
+    return `Please share product category or material grade. Example: SS 316, EN8, EN24, plates, round bars, coils.`;
+  }
+
+  if (selected === 'check order status') {
+    return 'Please share your order number, quotation number, invoice number, or registered company/mobile number.';
+  }
+
+  if (selected === 'ledger / outstanding' || selected === 'ledger') {
+    return 'Ledger/outstanding details ke liye please registered company name or customer code share kijiye. Sensitive account details verified contact ko hi share honge.';
+  }
+
+  if (selected === 'talk to sales') {
+    return `Your message is marked for sales team review. ${company} team member will respond shortly.`;
+  }
+
+  return null;
 }
 
 function parseQuantity(value) {
@@ -1124,13 +1241,21 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
     return null;
   }
 
-  const replyText = await buildBotReply({ tenantId, settings, text });
+  const useMainMenu = shouldSendMainMenu(text);
+  const menuPayload = useMainMenu ? buildMainMenuInteractive(settings) : null;
+  const replyText = useMainMenu
+    ? menuPayloadToText(menuPayload)
+    : await buildBotReply({ tenantId, settings, text });
+
   if (!replyText) return null;
 
   let waMessageId = null;
+  let messageType = useMainMenu ? 'interactive' : 'text';
 
   try {
-    waMessageId = await sendWhatsAppText(contact, replyText, tenantId);
+    waMessageId = useMainMenu
+      ? await sendWhatsAppInteractiveList(contact, menuPayload, tenantId)
+      : await sendWhatsAppText(contact, replyText, tenantId);
   } catch (error) {
     console.error('Bot auto-reply failed:', {
       tenantId,
@@ -1138,6 +1263,7 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       status: error.response?.status || null,
       message: error.response?.data?.error?.message || error.message,
     });
+
     await recordAudit({
       tenantId,
       action: 'bot.auto_reply_failed',
@@ -1146,12 +1272,14 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       metadata: {
         inboundMessageId: inboundMessage.id,
         status: error.response?.status || null,
+        type: messageType,
       },
     });
+
     return null;
   }
 
-  const status = waMessageId ? 'sent' : 'queued-local';
+  const status = waMessageId ? 'sent' : 'accepted';
 
   if (!waMessageId && !shouldAllowLocalMessageQueue()) {
     return null;
@@ -1162,21 +1290,24 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
     contactId: contact.id,
     waMessageId,
     direction: 'outbound',
-    type: 'text',
+    type: messageType,
     body: replyText,
     status,
+    rawPayload: menuPayload || null,
+    interactivePayload: menuPayload?.interactive || null,
     normalizedText: replyText,
   });
 
   await recordAudit({
     tenantId,
-    action: 'bot.auto_reply_sent',
+    action: useMainMenu ? 'bot.menu_sent' : 'bot.auto_reply_sent',
     entityType: 'message',
     entityId: botMessage?.id,
     metadata: {
       contactId: contact.id,
       inboundMessageId: inboundMessage.id,
       status,
+      type: messageType,
     },
   });
 
@@ -1419,6 +1550,26 @@ async function sendWhatsAppText(contact, text, tenantId) {
   return response.data?.messages?.[0]?.id || null;
 }
 
+async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
+  const config = await getWhatsAppSendConfig(tenantId);
+
+  if (!config) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Interactive menu was not sent.');
+  }
+
+  const response = await axios.post(
+    whatsappMessagesUrl(config),
+    {
+      ...menuPayload,
+      to: contact.wa_id,
+    },
+    { headers: whatsappHeaders(config) },
+  );
+
+  return response.data?.messages?.[0]?.id || null;
+}
+
 async function sendWhatsAppTemplate(contact, templateName, language = 'en', tenantId) {
   const config = await getWhatsAppSendConfig(tenantId);
 
@@ -1599,6 +1750,7 @@ app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
     webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
     whatsappTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
     phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
+    whatsappTestNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
     phoneNumberMapped: accountStatus.phoneNumberMapped,
     phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
     phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
@@ -1608,25 +1760,64 @@ app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
+app.post('/api/whatsapp/map-current-phone', requireAuth, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+
+  if (!hasRealValue(phoneNumberId)) {
+    return res.status(400).json({
+      error: 'WHATSAPP_PHONE_NUMBER_ID is missing. Add it in backend environment variables first.',
+    });
+  }
+
+  const displayPhoneNumber = String(req.body?.displayPhoneNumber || '').trim() || null;
+
+  const existing = await query(
+    `SELECT whatsapp_accounts.tenant_id, tenants.slug
+     FROM whatsapp_accounts
+     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
+     WHERE whatsapp_accounts.phone_number_id = $1
+     LIMIT 1`,
+    [phoneNumberId],
+  );
+
+  const existingAccount = existing.rows[0];
+
+  if (existingAccount && existingAccount.tenant_id !== req.user.tenantId) {
+    return res.status(409).json({
+      error: `This WhatsApp phone number is already mapped to tenant: ${existingAccount.slug}`,
+    });
+  }
+
+  const result = await query(
+    `INSERT INTO whatsapp_accounts (tenant_id, phone_number_id, display_phone_number, active)
+     VALUES ($1, $2, $3, true)
+     ON CONFLICT (phone_number_id)
+     DO UPDATE SET tenant_id = EXCLUDED.tenant_id,
+                   display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
+                   active = true
+     RETURNING tenant_id, phone_number_id, display_phone_number, active`,
+    [req.user.tenantId, phoneNumberId, displayPhoneNumber],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'whatsapp.phone_mapped',
+    entityType: 'whatsapp_account',
+    entityId: null,
+    metadata: {
+      phoneNumberId: maskValue(phoneNumberId),
+      displayPhoneNumber,
+    },
+  });
 
   res.json({
-    configured: isWhatsAppConfigured(),
-    apiVersion: process.env.WHATSAPP_API_VERSION || 'v20.0',
-    phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
-    phoneNumberIdMasked: maskValue(process.env.WHATSAPP_PHONE_NUMBER_ID || ''),
-    phoneNumberMapped: accountStatus.phoneNumberMapped,
-    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
-    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
-    accessTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
-    accessTokenMasked: maskValue(process.env.WHATSAPP_ACCESS_TOKEN || ''),
-    verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    webhookSignatureRequired: isProduction,
-    webhookPath: '/webhook',
-    callbackUrl: process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook` : 'Set PUBLIC_BASE_URL to show full webhook URL',
+    ok: true,
+    account: result.rows[0],
   });
 }));
 
@@ -1651,23 +1842,13 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-app.post('/webhook', asyncHandler(async (req, res) => {
-  console.log('WA webhook received:', {
-    object: req.body?.object || null,
-    entries: req.body?.entry?.length || 0,
-    hasSignature: Boolean(req.headers['x-hub-signature-256']),
-  });
-
-  if (!verifyMetaWebhookSignature(req)) {
-    console.warn('WA webhook rejected: invalid signature');
-    return res.status(403).json({ error: 'Invalid webhook signature' });
-  }
-
-  const entries = req.body?.entry || [];
+async function processWhatsAppWebhookPayload(payload) {
+  const entries = payload?.entry || [];
 
   for (const entry of entries) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
+
       console.log('WA webhook change value:', {
         phoneNumberId: value?.metadata?.phone_number_id || null,
         displayPhoneNumber: value?.metadata?.display_phone_number || null,
@@ -1675,6 +1856,7 @@ app.post('/webhook', asyncHandler(async (req, res) => {
         messagesCount: value?.messages?.length || 0,
         statusesCount: value?.statuses?.length || 0,
       });
+
       const tenantId = await getTenantIdForWebhookValue(value);
 
       console.log('WA webhook tenant mapping:', {
@@ -1717,9 +1899,33 @@ app.post('/webhook', asyncHandler(async (req, res) => {
       }
     }
   }
+}
+
+app.post('/webhook', (req, res) => {
+  console.log('WA webhook received:', {
+    object: req.body?.object || null,
+    entries: req.body?.entry?.length || 0,
+    hasSignature: Boolean(req.headers['x-hub-signature-256']),
+  });
+
+  if (!verifyMetaWebhookSignature(req)) {
+    console.warn('WA webhook rejected: invalid signature');
+    return res.status(403).json({ error: 'Invalid webhook signature' });
+  }
+
+  const payload = req.body;
 
   res.sendStatus(200);
-}));
+
+  setImmediate(() => {
+    processWhatsAppWebhookPayload(payload).catch((error) => {
+      console.error('WA webhook async processing failed:', {
+        message: error.message,
+        stack: error.stack,
+      });
+    });
+  });
+});
 
 app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
   if (isProduction) {
@@ -2205,7 +2411,8 @@ app.get('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req,
   if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
   const result = await query(
     `SELECT id, tenant_id, contact_id, wa_message_id, direction, type, body, status, template_name,
-            caption, media_id, media_url, mime_type, file_name, file_size, status_updated_at, created_at
+            caption, media_id, media_url, mime_type, file_name, file_size,
+            interactive_payload, button_payload, status_updated_at, created_at
      FROM messages WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at ASC`,
     [req.params.id, req.user.tenantId],
   );

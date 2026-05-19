@@ -585,6 +585,21 @@ useEffect(() => {
   return () => window.removeEventListener('bos-auth-expired', logout)
 }, [])
 
+useEffect(() => {
+  if (!user?.id) return undefined
+
+  const interval = window.setInterval(() => {
+    loadAll({ filter, windowFilter, search })
+
+    if (selectedId) {
+      loadMessages(selectedId)
+    }
+  }, 10000)
+
+  return () => window.clearInterval(interval)
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [user?.id, selectedId, filter, windowFilter, search])
+
 if (authChecking) {
   return (
     <main className="login-page">
@@ -994,6 +1009,21 @@ async function saveCustomization(event) {
     }
   }
 
+  async function mapCurrentWhatsAppPhone() {
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    return
+  }
+
+  try {
+    await api.post('/api/whatsapp/map-current-phone', {})
+    notify('WhatsApp phone mapped to this company')
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Phone mapping failed'), 'error')
+  }
+}
+
   async function downloadQuote(quote) {
     const res = await api.get(`/api/quotations/${quote.id}/print-text`, { responseType: 'blob' })
     const blob = new Blob([res.data], { type: 'text/plain;charset=utf-8' })
@@ -1091,7 +1121,7 @@ async function saveCustomization(event) {
         {activePage === 'orders' && <OrdersPage orders={orders} onUpdate={updateOrder} />}
         {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
-        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
+        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} onMapPhone={mapCurrentWhatsAppPhone} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
         {activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
         {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
@@ -1132,6 +1162,16 @@ async function saveCustomization(event) {
 <ProtectedMediaLink className="doc-message" url={message.media_url}>
   {message.file_name || message.body || `Open ${message.type}`}
 </ProtectedMediaLink>
+    ) : message.type === 'interactive' && message.interactive_payload ? (
+      <div className="interactive-message">
+        <strong>{message.interactive_payload?.header?.text || 'Menu'}</strong>
+        <span>{message.interactive_payload?.body?.text || message.body}</span>
+        <div>
+          {(message.interactive_payload?.action?.sections || []).flatMap((section) => section.rows || []).map((row) => (
+            <small key={row.id || row.title}>› {row.title}</small>
+          ))}
+        </div>
+      </div>
     ) : (
       <span>{message.body}</span>
     )}
@@ -1689,8 +1729,8 @@ function AuditPage({ events }) {
   )
 }
 
-function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole, isProduction }) {
-    const warnings = status?.warnings || []
+function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, onMapPhone, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole, isProduction }) {
+      const warnings = status?.warnings || []
 
   return (
         <div className="settings-stack">
@@ -1717,16 +1757,24 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
 
       <section className="table-module">
         <div className="module-title"><Settings size={18} /><h3>WhatsApp Setup</h3></div>
-        <div className="setup-grid">
-          <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
-          <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
-          <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
-          <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
-          <span className={whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn'}>App secret</span>
-        </div>
+<div className="setup-grid">
+  <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
+  <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
+  <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
+  <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
+  <span className={whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn'}>App secret</span>
+  <span className={whatsappConfig?.testNumbersSet || status?.whatsappTestNumbersSet ? 'ok' : 'warn'}>Test numbers</span>
+</div>
         {whatsappConfig?.phoneNumberMappedTenantSlug && (
           <p className="setup-copy">Incoming messages map to tenant: {whatsappConfig.phoneNumberMappedTenantSlug}</p>
         )}
+{userRole === 'admin' && whatsappConfig?.phoneNumberIdSet && !whatsappConfig?.phoneNumberMappedToCurrentTenant && (
+  <div className="inline-actions">
+    <span className="setup-copy">Phone number ID is not mapped to this company.</span>
+    <button type="button" onClick={onMapPhone}>Map Phone To This Company</button>
+  </div>
+)}
+
         {warnings.length > 0 && (
           <div className="warning-list">
             {warnings.map((warning) => <span key={warning}>{warning}</span>)}

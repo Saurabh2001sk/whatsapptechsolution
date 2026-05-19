@@ -1798,3 +1798,32 @@ textarea:focus {
   word-break: break-word;
   border-radius: 7px;
 }
+
+.interactive-message {
+  display: grid;
+  gap: 8px;
+  min-width: min(320px, 72vw);
+}
+
+.interactive-message > strong {
+  color: var(--green);
+  font-size: 14px;
+}
+
+.interactive-message > span {
+  line-height: 1.4;
+}
+
+.interactive-message > div {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(10, 122, 99, 0.14);
+  padding-top: 8px;
+}
+
+.interactive-message small {
+  justify-self: stretch;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 900;
+}
