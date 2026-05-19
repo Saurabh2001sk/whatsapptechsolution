@@ -53,9 +53,11 @@ api.interceptors.response.use(
     const status = error.response?.status
     const requestUrl = error.config?.url || ''
 
-    window.dispatchEvent(new CustomEvent('bos-api-error', {
-      detail: { message: formatApiIssue(error) },
-    }))
+    if (!error.config?.silentError) {
+      window.dispatchEvent(new CustomEvent('bos-api-error', {
+        detail: { message: formatApiIssue(error) },
+      }))
+    }
 
     if (status === 401 && !requestUrl.includes('/api/auth/login')) {
       window.dispatchEvent(new Event('bos-auth-expired'))
@@ -468,7 +470,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
       ]
       if (canMonitor) {
         calls.push(api.get('/api/users').catch(() => ({ data: [] })))
-        calls.push(api.get('/api/whatsapp/config').catch(() => ({ data: null })))
+        calls.push(api.get('/api/whatsapp/config', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
         calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
       }

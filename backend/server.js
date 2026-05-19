@@ -1760,6 +1760,34 @@ app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
+app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
+  const accessTokenSet = hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN);
+  const phoneNumberIdSet = hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
+  const callbackUrl = process.env.PUBLIC_BASE_URL
+    ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook`
+    : 'Set PUBLIC_BASE_URL to show full webhook URL';
+
+  res.json({
+    configured: accessTokenSet && phoneNumberIdSet,
+    accessTokenSet,
+    phoneNumberIdSet,
+    phoneNumberMapped: accountStatus.phoneNumberMapped,
+    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
+    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
+    verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
+    webhookSignatureRequired: isProduction,
+    testNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
+    callbackUrl,
+    webhookPath: '/webhook',
+  });
+}));
+
 app.post('/api/whatsapp/map-current-phone', requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
