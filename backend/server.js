@@ -504,8 +504,10 @@ function normalizeAppSettings(input = {}) {
     quoteApprovalManagerPhone: String(input.quoteApprovalManagerPhone || '').replace(/\D/g, '').slice(0, 15),
     quoteApprovalTemplateName: String(input.quoteApprovalTemplateName || DEFAULT_APP_SETTINGS.quoteApprovalTemplateName).trim().toLowerCase().slice(0, 80),
     quoteApprovalTemplateLanguage: String(input.quoteApprovalTemplateLanguage || DEFAULT_APP_SETTINGS.quoteApprovalTemplateLanguage).trim().slice(0, 12),
-    customerQuoteTemplateName: String(input.customerQuoteTemplateName || DEFAULT_APP_SETTINGS.customerQuoteTemplateName).trim().toLowerCase().slice(0, 80),
+        customerQuoteTemplateName: String(input.customerQuoteTemplateName || DEFAULT_APP_SETTINGS.customerQuoteTemplateName).trim().toLowerCase().slice(0, 80),
     customerQuoteTemplateLanguage: String(input.customerQuoteTemplateLanguage || DEFAULT_APP_SETTINGS.customerQuoteTemplateLanguage).trim().slice(0, 12),
+    orderAcknowledgementTemplateName: String(input.orderAcknowledgementTemplateName || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateName).trim().toLowerCase().slice(0, 80),
+    orderAcknowledgementTemplateLanguage: String(input.orderAcknowledgementTemplateLanguage || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateLanguage).trim().slice(0, 12),
   };
 }
 
@@ -1861,6 +1863,24 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
     };
   }
 
+  const customerQuoteAction = await handleCustomerQuoteInbound({
+    tenantId,
+    contact,
+    inboundMessage: saved,
+    text: textForIntent,
+    rawPayload,
+  });
+
+  if (customerQuoteAction?.handled) {
+    return {
+      contact,
+      message: saved,
+      enquiryDraft: null,
+      botReply: customerQuoteAction.botReply || null,
+      customerQuoteAction,
+    };
+  }
+
   const botReply = await maybeSendBotAutoReply({ tenantId, contact, inboundMessage: saved, text: textForIntent });
   const enquiryDraft = await createEnquiryDraft({ tenantId, contactId: contact.id, messageId: saved?.id, text: textForIntent });
 
@@ -2149,6 +2169,120 @@ async function recordQuotationApprovalEvent({
   return result.rows[0];
 }
 
+async function sendOrderAcknowledgementToCustomer({ tenantId, userId, order, quote }) {
+  const settings = await getAppSettings(tenantId);
+
+  const templateName = String(settings.orderAcknowledgementTemplateName || '').trim().toLowerCase();
+  const templateLanguage = String(settings.orderAcknowledgementTemplateLanguage || 'en').trim() || 'en';
+
+  if (!templateName) {
+    return { sent: false, reason: 'order_ack_template_missing' };
+  }
+
+  const contactResult = await query(
+    `SELECT id, name, company, wa_id, phone, opted_out
+     FROM contacts
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [order.contact_id, tenantId],
+  );
+
+  const contact = contactResult.rows[0];
+
+  if (!contact) {
+    return { sent: false, reason: 'contact_not_found' };
+  }
+
+  if (contact.opted_out) {
+    return { sent: false, reason: 'customer_opted_out' };
+  }
+
+  const templateResult = await query(
+    `SELECT id, name, language, active
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND active = true
+     LIMIT 1`,
+    [tenantId, templateName, templateLanguage],
+  );
+
+  if (!templateResult.rows[0]) {
+    return { sent: false, reason: 'template_not_active' };
+  }
+
+  const customerName = contact.company || contact.name || contact.phone || 'Customer';
+  const orderNo = order.order_no || 'Order';
+  const quoteNo = quote?.quote_no || '-';
+  const amountText = `${settings.currency || 'INR'} ${Number(order.amount || 0).toLocaleString('en-IN')}`;
+
+  const waMessageId = await sendWhatsAppTemplateToNumber({
+    tenantId,
+    to: contact.wa_id || contact.phone,
+    templateName,
+    language: templateLanguage,
+    bodyParams: [
+      customerName,
+      orderNo,
+      quoteNo,
+      amountText,
+    ],
+  });
+
+  const outboundBody = [
+    `[Order Acknowledgement] ${orderNo}`,
+    `Customer: ${customerName}`,
+    `Quotation: ${quoteNo}`,
+    `Amount: ${amountText}`,
+    '',
+    'Order received. Payment, stock and dispatch will be processed as per company verification.',
+  ].join('\n');
+
+  const message = await addMessage({
+    tenantId,
+    contactId: contact.id,
+    waMessageId,
+    direction: 'outbound',
+    type: 'template',
+    body: outboundBody,
+    status: waMessageId ? 'sent' : 'accepted',
+    templateName,
+    rawPayload: {
+      templateName,
+      templateLanguage,
+      orderId: order.id,
+      orderNo,
+      quoteId: quote?.id || null,
+      quoteNo,
+      bodyParams: [customerName, orderNo, quoteNo, amountText],
+    },
+    normalizedText: outboundBody,
+  });
+
+  await recordAudit({
+    tenantId,
+    actorUserId: userId,
+    action: 'order.acknowledgement_sent',
+    entityType: 'sales_order',
+    entityId: order.id,
+    metadata: {
+      contactId: contact.id,
+      quoteId: quote?.id || null,
+      templateName,
+      messageId: waMessageId,
+      messageRowId: message?.id || null,
+    },
+  });
+
+  return {
+    sent: true,
+    messageId: waMessageId,
+    messageRowId: message?.id || null,
+  };
+}
+
 function isManagerApproveText(text = '') {
   const body = normalizeUserText(text);
   return body === 'approve quote'
@@ -2422,6 +2556,206 @@ Reduce rate by ₹3/kg and add freight separately.`;
     return {
       handled: true,
       action: 'manager_rejected',
+      quotation: updatedQuote.rows[0],
+      botReply,
+    };
+  }
+
+  return null;
+}
+
+function isCustomerQuoteApproveText(text = '') {
+  const body = normalizeUserText(text);
+  return body === 'approve quote'
+    || body === 'approve'
+    || body === 'approved'
+    || body === 'yes approve'
+    || body === 'accept quote'
+    || body === 'accepted'
+    || body === 'confirm quote';
+}
+
+function isCustomerQuoteRejectText(text = '') {
+  const body = normalizeUserText(text);
+  return body === 'reject quote'
+    || body === 'reject'
+    || body === 'rejected'
+    || body === 'no reject'
+    || body === 'decline quote'
+    || body === 'not accepted';
+}
+
+async function findLatestCustomerSentQuote({ tenantId, contactId }) {
+  if (!tenantId || !contactId) return null;
+
+  const result = await query(
+    `SELECT *
+     FROM quotations
+     WHERE tenant_id = $1
+       AND contact_id = $2
+       AND status = 'customer_sent'
+       AND approval_status = 'customer_sent'
+     ORDER BY customer_sent_at DESC NULLS LAST, created_at DESC
+     LIMIT 1`,
+    [tenantId, contactId],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function sendCustomerQuoteSystemReply({ tenantId, contactId, contact, text, action, quoteId }) {
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppText(contact, text, tenantId);
+  } catch (error) {
+    console.error('Customer quote system reply failed:', {
+      tenantId,
+      contactId,
+      quoteId,
+      action,
+      status: error.response?.status || null,
+      message: error.response?.data?.error?.message || error.message,
+    });
+    return null;
+  }
+
+  return addMessage({
+    tenantId,
+    contactId,
+    waMessageId,
+    direction: 'outbound',
+    type: 'text',
+    body: text,
+    status: waMessageId ? 'sent' : 'accepted',
+    rawPayload: { action, quoteId },
+    normalizedText: text,
+  });
+}
+
+async function handleCustomerQuoteInbound({ tenantId, contact, inboundMessage, text, rawPayload }) {
+  const cleanText = String(text || '').trim();
+
+  if (!tenantId || !contact || !inboundMessage || !cleanText) {
+    return null;
+  }
+
+  if (!isCustomerQuoteApproveText(cleanText) && !isCustomerQuoteRejectText(cleanText)) {
+    return null;
+  }
+
+  const quote = await findLatestCustomerSentQuote({
+    tenantId,
+    contactId: contact.id,
+  });
+
+  if (!quote) {
+    return null;
+  }
+
+  const customerPhone = String(contact.wa_id || contact.phone || '').replace(/\D/g, '');
+
+  if (isCustomerQuoteApproveText(cleanText)) {
+    const updatedQuote = await query(
+      `UPDATE quotations
+       SET status = 'accepted',
+           approval_status = 'customer_approved'
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [quote.id, tenantId],
+    );
+
+    await recordQuotationApprovalEvent({
+      tenantId,
+      quotationId: quote.id,
+      actorType: 'customer',
+      actorPhone: customerPhone,
+      action: 'customer_approved',
+      reason: null,
+      rawPayload,
+    });
+
+    await recordAudit({
+      tenantId,
+      action: 'quotation.customer_approved',
+      entityType: 'quotation',
+      entityId: quote.id,
+      metadata: {
+        customerPhone: maskValue(customerPhone),
+        inboundMessageId: inboundMessage.id,
+      },
+    });
+
+    const replyText = `Thank you. Quotation ${quote.quote_no} is accepted.
+
+Our team will verify payment, stock, dispatch terms and proceed with the next order step.`;
+
+    const botReply = await sendCustomerQuoteSystemReply({
+      tenantId,
+      contactId: contact.id,
+      contact,
+      text: replyText,
+      action: 'customer_approved',
+      quoteId: quote.id,
+    });
+
+    return {
+      handled: true,
+      action: 'customer_approved',
+      quotation: updatedQuote.rows[0],
+      botReply,
+    };
+  }
+
+  if (isCustomerQuoteRejectText(cleanText)) {
+    const updatedQuote = await query(
+      `UPDATE quotations
+       SET status = 'rejected',
+           approval_status = 'customer_rejected'
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [quote.id, tenantId],
+    );
+
+    await recordQuotationApprovalEvent({
+      tenantId,
+      quotationId: quote.id,
+      actorType: 'customer',
+      actorPhone: customerPhone,
+      action: 'customer_rejected',
+      reason: null,
+      rawPayload,
+    });
+
+    await recordAudit({
+      tenantId,
+      action: 'quotation.customer_rejected',
+      entityType: 'quotation',
+      entityId: quote.id,
+      metadata: {
+        customerPhone: maskValue(customerPhone),
+        inboundMessageId: inboundMessage.id,
+      },
+    });
+
+    const replyText = `Quotation ${quote.quote_no} is marked as rejected.
+
+Please share the reason or required changes if you want our team to revise the offer.`;
+
+    const botReply = await sendCustomerQuoteSystemReply({
+      tenantId,
+      contactId: contact.id,
+      contact,
+      text: replyText,
+      action: 'customer_rejected',
+      quoteId: quote.id,
+    });
+
+    return {
+      handled: true,
+      action: 'customer_rejected',
       quotation: updatedQuote.rows[0],
       botReply,
     };
@@ -4408,15 +4742,143 @@ app.get('/api/quotations/:id/print-text', requireAuth, asyncHandler(async (req, 
 }));
 
 app.post('/api/quotations/:id/convert-order', requireAuth, asyncHandler(async (req, res) => {
-  const quoteResult = await query('SELECT * FROM quotations WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
+  const quoteResult = await query(
+    `SELECT *
+     FROM quotations
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
   const quote = quoteResult.rows[0];
-  if (!quote) return res.status(404).json({ error: 'Quotation not found' });
-  const itemResult = await query('SELECT * FROM quotation_items WHERE quotation_id = $1 AND tenant_id = $2 ORDER BY created_at', [quote.id, req.user.tenantId]);
-  if (!(await canAccessContactId(req.user, quote.contact_id))) return res.status(403).json({ error: 'Quotation assigned to another user' });
-  const order = await createSalesOrder({ tenantId: req.user.tenantId, contactId: quote.contact_id, notes: req.body.notes || `Converted from quotation ${quote.quote_no}`, items: itemResult.rows, source: 'WhatsApp Quote', paymentStatus: req.body.payment_status || 'pending', dispatchStatus: req.body.dispatch_status || 'pending' });
-  await query("UPDATE quotations SET status = 'converted' WHERE id = $1 AND tenant_id = $2", [quote.id, req.user.tenantId]);
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'quotation.converted_to_order', entityType: 'sales_order', entityId: order.id, metadata: { quoteId: quote.id, contactId: quote.contact_id } });
-  res.status(201).json(order);
+
+  if (!quote) {
+    return res.status(404).json({ error: 'Quotation not found' });
+  }
+
+  if (!(await canAccessContactId(req.user, quote.contact_id))) {
+    return res.status(403).json({ error: 'Quotation assigned to another user' });
+  }
+
+  if (quote.status !== 'accepted' || quote.approval_status !== 'customer_approved') {
+    return res.status(400).json({
+      error: 'Order can be created only after customer approves the quotation.',
+    });
+  }
+
+  const existingOrderCheck = await query(
+    `SELECT id, order_no
+     FROM sales_orders
+     WHERE tenant_id = $1
+       AND notes ILIKE $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [req.user.tenantId, `%Converted from quotation ${quote.quote_no}%`],
+  );
+
+  if (existingOrderCheck.rows[0]) {
+    return res.status(409).json({
+      error: `Order already exists for this quotation: ${existingOrderCheck.rows[0].order_no}`,
+    });
+  }
+
+  const itemResult = await query(
+    `SELECT *
+     FROM quotation_items
+     WHERE quotation_id = $1
+       AND tenant_id = $2
+     ORDER BY created_at`,
+    [quote.id, req.user.tenantId],
+  );
+
+  if (!itemResult.rows.length) {
+    return res.status(400).json({ error: 'Quotation has no items. Cannot create order.' });
+  }
+
+  const order = await createSalesOrder({
+    tenantId: req.user.tenantId,
+    contactId: quote.contact_id,
+    notes: req.body.notes || `Converted from quotation ${quote.quote_no}`,
+    items: itemResult.rows,
+    source: 'WhatsApp Quote',
+    paymentStatus: req.body.payment_status || 'pending',
+    dispatchStatus: req.body.dispatch_status || 'pending',
+  });
+
+  const updatedQuote = await query(
+    `UPDATE quotations
+     SET status = 'converted',
+         approval_status = 'converted_to_order'
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING *`,
+    [quote.id, req.user.tenantId],
+  );
+
+  await recordQuotationApprovalEvent({
+    tenantId: req.user.tenantId,
+    quotationId: quote.id,
+    actorType: 'sales',
+    actorUserId: req.user.id,
+    action: 'converted_to_order',
+    reason: null,
+    rawPayload: {
+      orderId: order.id,
+      orderNo: order.order_no,
+    },
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'quotation.converted_to_order',
+    entityType: 'sales_order',
+    entityId: order.id,
+    metadata: {
+      quoteId: quote.id,
+      quoteNo: quote.quote_no,
+      contactId: quote.contact_id,
+      orderNo: order.order_no,
+      quotationStatus: updatedQuote.rows[0]?.status,
+      approvalStatus: updatedQuote.rows[0]?.approval_status,
+    },
+  });
+
+  let acknowledgement = { sent: false, reason: 'not_attempted' };
+
+  try {
+    acknowledgement = await sendOrderAcknowledgementToCustomer({
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      order,
+      quote,
+    });
+  } catch (error) {
+    acknowledgement = {
+      sent: false,
+      reason: error.response?.data?.error?.message || error.message || 'acknowledgement_failed',
+    };
+
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'order.acknowledgement_failed',
+      entityType: 'sales_order',
+      entityId: order.id,
+      metadata: {
+        quoteId: quote.id,
+        quoteNo: quote.quote_no,
+        orderNo: order.order_no,
+        reason: acknowledgement.reason,
+      },
+    });
+  }
+
+  res.status(201).json({
+    ...order,
+    acknowledgement,
+  });
 }));
 
 // =========================================================

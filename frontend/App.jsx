@@ -153,6 +153,10 @@ const defaultAppSettings = {
   quoteApprovalTemplateLanguage: 'en',
   customerQuoteTemplateName: 'quote_customer_approval_request',
   customerQuoteTemplateLanguage: 'en',
+  orderAcknowledgementTemplateName: 'order_acknowledgement',
+  orderAcknowledgementTemplateLanguage: 'en',
+  orderAcknowledgementTemplateName: 'order_acknowledgement',
+  orderAcknowledgementTemplateLanguage: 'en',
 }
 
 function toCsv(value) {
@@ -788,10 +792,19 @@ async function simulateInbound(event) {
   }
 
   async function convertQuote(quote) {
-    await api.post(`/api/quotations/${quote.id}/convert-order`)
-    notify('Quotation converted to order')
-    setActivePage('orders')
-    await loadAll()
+    if (quote.status !== 'accepted' || quote.approval_status !== 'customer_approved') {
+      notify('Order can be created only after customer approves the quotation', 'error')
+      return
+    }
+
+    try {
+      await api.post(`/api/quotations/${quote.id}/convert-order`)
+      notify('Customer-approved quotation converted to order')
+      setActivePage('orders')
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Order creation failed'), 'error')
+    }
   }
 
   async function updateOrder(order, patch) {
@@ -1634,7 +1647,9 @@ function QuotesPage({ quotations, onStatus, onConvert, onDownload, onSendManager
             )}
 
             <button type="button" onClick={() => onStatus(quote, 'lost')}>Lost</button>
-            <button type="button" onClick={() => onConvert(quote)}>Order</button>
+            {quote.status === 'accepted' && quote.approval_status === 'customer_approved' && (
+  <button type="button" onClick={() => onConvert(quote)}>Create Order</button>
+)}
             <button type="button" onClick={() => onDownload(quote)}>Download</button>
           </div>
         </div>
@@ -1996,6 +2011,23 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
               <input
                 value={customForm.customerQuoteTemplateLanguage || 'en'}
                 onChange={(e) => setCustomForm({ ...customForm, customerQuoteTemplateLanguage: e.target.value })}
+                placeholder="en"
+              />
+            </label>
+                        <label>
+              Order Acknowledgement Template Name
+              <input
+                value={customForm.orderAcknowledgementTemplateName || ''}
+                onChange={(e) => setCustomForm({ ...customForm, orderAcknowledgementTemplateName: e.target.value })}
+                placeholder="order_acknowledgement"
+              />
+            </label>
+
+            <label>
+              Order Acknowledgement Template Language
+              <input
+                value={customForm.orderAcknowledgementTemplateLanguage || 'en'}
+                onChange={(e) => setCustomForm({ ...customForm, orderAcknowledgementTemplateLanguage: e.target.value })}
                 placeholder="en"
               />
             </label>
