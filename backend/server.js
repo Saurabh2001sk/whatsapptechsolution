@@ -8,7 +8,7 @@ const express = require('express');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
-const { query } = require('./db');
+const { query, healthCheck, closePool } = require('./db');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
@@ -32,6 +32,50 @@ const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 
+const apiRateBuckets = new Map();
+
+function getClientKey(req, bucketName) {
+  const forwardedFor = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return `${bucketName}:${forwardedFor || req.ip || 'unknown'}`;
+}
+
+function rateLimit({ bucketName, maxRequests, windowMs }) {
+  return (req, res, next) => {
+    const key = getClientKey(req, bucketName);
+    const now = Date.now();
+    const bucket = apiRateBuckets.get(key) || {
+      count: 0,
+      resetAt: now + windowMs,
+    };
+
+    if (bucket.resetAt <= now) {
+      bucket.count = 0;
+      bucket.resetAt = now + windowMs;
+    }
+
+    bucket.count += 1;
+    apiRateBuckets.set(key, bucket);
+
+    if (bucket.count > maxRequests) {
+      return res.status(429).json({
+        error: 'Too many requests. Please try again later.',
+      });
+    }
+
+    return next();
+  };
+}
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [key, bucket] of apiRateBuckets.entries()) {
+    if (bucket.resetAt <= now) {
+      apiRateBuckets.delete(key);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
   'http://localhost:5173',
@@ -44,6 +88,21 @@ app.use(cors({
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
 }));
+
+app.set('trust proxy', 1);
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+
+  next();
+});
 
 app.use(express.json({
   limit: '5mb',
@@ -141,6 +200,8 @@ const DEFAULT_APP_SETTINGS = {
   quoteApprovalTemplateLanguage: 'en',
   customerQuoteTemplateName: 'quote_customer_approval_request',
   customerQuoteTemplateLanguage: 'en',
+  orderAcknowledgementTemplateName: 'order_acknowledgement',
+  orderAcknowledgementTemplateLanguage: 'en',
 };
 
 // =========================================================
@@ -1445,64 +1506,92 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '') {
   }
 
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  const maxAttempts = Number(process.env.WHATSAPP_MEDIA_MAX_ATTEMPTS || 3);
+  const timeoutMs = Number(process.env.WHATSAPP_MEDIA_TIMEOUT_MS || 15000);
 
-  try {
-    const metaRes = await axios.get(
-      `https://graph.facebook.com/${apiVersion}/${mediaId}`,
-      { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } },
-    );
+  let lastError = null;
 
-    const downloadUrl = metaRes.data?.url;
-    const mimeType = metaRes.data?.mime_type || fallbackMimeType || '';
-    const fileSize = metaRes.data?.file_size || null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const metaRes = await axios.get(
+        `https://graph.facebook.com/${apiVersion}/${mediaId}`,
+        {
+          headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+          timeout: timeoutMs,
+        },
+      );
 
-    if (!downloadUrl) {
-      console.warn('WA media download URL missing:', {
+      const downloadUrl = metaRes.data?.url;
+      const mimeType = metaRes.data?.mime_type || fallbackMimeType || '';
+      const fileSize = metaRes.data?.file_size || null;
+
+      if (!downloadUrl) {
+        console.warn('WA media download URL missing:', {
+          mediaId,
+          mimeType,
+          fileSize,
+        });
+
+        return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
+      }
+
+      const extension = extensionFromMime(mimeType);
+      const safeMediaId = String(mediaId).replace(/[^a-zA-Z0-9_-]/g, '_') || crypto.randomUUID();
+      const fileName = `${safeMediaId}-${Date.now()}.${extension}`;
+      const localPath = path.join(mediaRoot, fileName);
+
+      const fileRes = await axios.get(downloadUrl, {
+        responseType: 'arraybuffer',
+        headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+        timeout: timeoutMs,
+        maxContentLength: Number(process.env.WHATSAPP_MEDIA_MAX_BYTES || 25 * 1024 * 1024),
+        maxBodyLength: Number(process.env.WHATSAPP_MEDIA_MAX_BYTES || 25 * 1024 * 1024),
+      });
+
+      fs.writeFileSync(localPath, Buffer.from(fileRes.data));
+
+      const mediaUrl = `/media/whatsapp/${fileName}`;
+
+      console.log('WA media downloaded:', {
         mediaId,
+        mediaUrl,
         mimeType,
         fileSize,
       });
 
-      return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
+      return {
+        mediaUrl,
+        mediaLocalPath: localPath,
+        mimeType: mimeType || null,
+        fileSize,
+      };
+    } catch (error) {
+      lastError = error;
+
+      console.error('WA media download attempt failed:', {
+        attempt,
+        maxAttempts,
+        mediaId,
+        status: error.response?.status || null,
+        code: error.code || null,
+        metaError: error.response?.data?.error?.message || error.response?.data || null,
+        message: error.message,
+      });
+
+      if (!isRetryableWhatsAppError(error) || attempt >= maxAttempts) {
+        break;
+      }
+
+      await sleep(500 * attempt);
     }
-
-    const extension = extensionFromMime(mimeType);
-    const safeMediaId = String(mediaId).replace(/[^a-zA-Z0-9_-]/g, '_') || crypto.randomUUID();
-    const fileName = `${safeMediaId}-${Date.now()}.${extension}`;
-    const localPath = path.join(mediaRoot, fileName);
-
-    const fileRes = await axios.get(downloadUrl, {
-      responseType: 'arraybuffer',
-      headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
-    });
-
-    fs.writeFileSync(localPath, Buffer.from(fileRes.data));
-
-    const mediaUrl = `/media/whatsapp/${fileName}`;
-
-    console.log('WA media downloaded:', {
-      mediaId,
-      mediaUrl,
-      mimeType,
-      fileSize,
-    });
-
-    return {
-      mediaUrl,
-      mediaLocalPath: localPath,
-      mimeType: mimeType || null,
-      fileSize,
-    };
-  } catch (error) {
-    console.error('WA media download failed:', {
-      mediaId,
-      status: error.response?.status || null,
-      metaError: error.response?.data?.error?.message || error.response?.data || null,
-      message: error.message,
-    });
-
-    return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
+
+  console.error('WA media download failed:', {
+    mediaId,
+    message: lastError?.message || 'Unknown media download error',
+  });
+
+  return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
 }
 
 // =========================================================
@@ -2009,6 +2098,158 @@ function whatsappHeaders(config) {
   };
 }
 
+async function createOutboundMessageRecord({
+  tenantId,
+  contactId = null,
+  toPhone,
+  messageType = 'text',
+  templateName = null,
+  language = null,
+  body = '',
+  payload = {},
+  createdBy = null,
+}) {
+  if (!tenantId || !toPhone) return null;
+
+  const result = await query(
+    `INSERT INTO outbound_messages
+       (tenant_id, contact_id, to_phone, message_type, template_name, language, body, payload, status, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)
+     RETURNING *`,
+    [
+      tenantId,
+      contactId,
+      String(toPhone || '').replace(/\D/g, ''),
+      messageType,
+      templateName,
+      language,
+      body || '',
+      payload || {},
+      createdBy,
+    ],
+  );
+
+  return result.rows[0];
+}
+
+async function markOutboundSending(outboundId) {
+  if (!outboundId) return null;
+
+  const result = await query(
+    `UPDATE outbound_messages
+     SET status = 'sending',
+         attempts = attempts + 1,
+         updated_at = now(),
+         last_error = NULL
+     WHERE id = $1
+     RETURNING *`,
+    [outboundId],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function markOutboundSent(outboundId, waMessageId) {
+  if (!outboundId) return null;
+
+  const result = await query(
+    `UPDATE outbound_messages
+     SET status = 'sent',
+         wa_message_id = COALESCE($2, wa_message_id),
+         sent_at = now(),
+         updated_at = now(),
+         last_error = NULL
+     WHERE id = $1
+     RETURNING *`,
+    [outboundId, waMessageId || null],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function markOutboundFailed(outboundId, error) {
+  if (!outboundId) return null;
+
+  const result = await query(
+    `UPDATE outbound_messages
+     SET status = 'failed',
+         last_error = $2,
+         updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      outboundId,
+      String(error?.response?.data?.error?.message || error?.message || error || 'WhatsApp send failed').slice(0, 2000),
+    ],
+  );
+
+  return result.rows[0] || null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableWhatsAppError(error) {
+  const status = error.response?.status;
+
+  // Retry only temporary failures.
+  // Do not retry 400/401/403 because those are usually policy/config/token/template errors.
+  return (
+    status === 408 ||
+    status === 429 ||
+    (status >= 500 && status <= 599) ||
+    error.code === 'ECONNRESET' ||
+    error.code === 'ETIMEDOUT' ||
+    error.code === 'ECONNABORTED'
+  );
+}
+
+async function postWhatsAppMessage(config, payload, meta = {}) {
+  const maxAttempts = Number(process.env.WHATSAPP_SEND_MAX_ATTEMPTS || 3);
+  const timeoutMs = Number(process.env.WHATSAPP_SEND_TIMEOUT_MS || 10000);
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await axios.post(
+        whatsappMessagesUrl(config),
+        payload,
+        {
+          headers: whatsappHeaders(config),
+          timeout: timeoutMs,
+        },
+      );
+
+      return response;
+    } catch (error) {
+      lastError = error;
+
+      const status = error.response?.status || null;
+      const metaError = error.response?.data?.error?.message || error.response?.data || null;
+
+      console.error('WhatsApp send attempt failed:', {
+        attempt,
+        maxAttempts,
+        status,
+        code: error.code || null,
+        message: metaError || error.message,
+        tenantId: meta.tenantId || null,
+        type: meta.type || null,
+      });
+
+      if (!isRetryableWhatsAppError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+
+      await sleep(500 * attempt);
+    }
+  }
+
+  throw lastError || new Error('WhatsApp message send failed');
+}
+
 async function sendWhatsAppText(contact, text, tenantId) {
   const config = await getWhatsAppSendConfig(tenantId);
 
@@ -2017,15 +2258,15 @@ async function sendWhatsAppText(contact, text, tenantId) {
     throw new Error('WhatsApp is not configured. Message was not sent.');
   }
 
-  const response = await axios.post(
-    whatsappMessagesUrl(config),
+  const response = await postWhatsAppMessage(
+    config,
     {
       messaging_product: 'whatsapp',
       to: contact.wa_id,
       type: 'text',
       text: { body: text },
     },
-    { headers: whatsappHeaders(config) },
+    { tenantId, type: 'text' },
   );
 
   return response.data?.messages?.[0]?.id || null;
@@ -2039,13 +2280,13 @@ async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
     throw new Error('WhatsApp is not configured. Interactive menu was not sent.');
   }
 
-  const response = await axios.post(
-    whatsappMessagesUrl(config),
+  const response = await postWhatsAppMessage(
+    config,
     {
       ...menuPayload,
       to: contact.wa_id,
     },
-    { headers: whatsappHeaders(config) },
+    { tenantId, type: 'interactive' },
   );
 
   return response.data?.messages?.[0]?.id || null;
@@ -2059,8 +2300,8 @@ async function sendWhatsAppTemplate(contact, templateName, language = 'en', tena
     throw new Error('WhatsApp is not configured. Template message was not sent.');
   }
 
-  const response = await axios.post(
-    whatsappMessagesUrl(config),
+  const response = await postWhatsAppMessage(
+    config,
     {
       messaging_product: 'whatsapp',
       to: contact.wa_id,
@@ -2070,7 +2311,7 @@ async function sendWhatsAppTemplate(contact, templateName, language = 'en', tena
         language: { code: language },
       },
     },
-    { headers: whatsappHeaders(config) },
+    { tenantId, type: 'template' },
   );
 
   return response.data?.messages?.[0]?.id || null;
@@ -2102,8 +2343,8 @@ async function sendWhatsAppTemplateToNumber({ tenantId, to, templateName, langua
       ]
     : [];
 
-  const response = await axios.post(
-    whatsappMessagesUrl(config),
+  const response = await postWhatsAppMessage(
+    config,
     {
       messaging_product: 'whatsapp',
       to: cleanTo,
@@ -2114,7 +2355,7 @@ async function sendWhatsAppTemplateToNumber({ tenantId, to, templateName, langua
         ...(components.length ? { components } : {}),
       },
     },
-    { headers: whatsappHeaders(config) },
+    { tenantId, type: 'template_to_number' },
   );
 
   return response.data?.messages?.[0]?.id || null;
@@ -2799,9 +3040,41 @@ async function ensureDefaultUsers() {
 // ROUTES — SYSTEM
 // =========================================================
 
+const serverStartedAt = new Date();
+
 app.get('/health', (req, res) => {
-  res.json({ ok: true, database: 'postgres', whatsappConfigured: isWhatsAppConfigured(), warnings: validateRuntimeConfig() });
+  res.json({
+    ok: true,
+    service: 'bos-whatsapp-backend',
+    uptimeSeconds: Math.round(process.uptime()),
+    startedAt: serverStartedAt.toISOString(),
+    timestamp: new Date().toISOString(),
+  });
 });
+
+app.get('/ready', asyncHandler(async (req, res) => {
+  const db = await healthCheck();
+  const warnings = validateRuntimeConfig();
+
+  const ready = Boolean(
+    db.ok
+    && hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
+    && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN)
+    && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)
+    && (!isProduction || hasRealValue(process.env.WHATSAPP_APP_SECRET))
+  );
+
+  return res.status(ready ? 200 : 503).json({
+    ok: ready,
+    database: db,
+    whatsappConfigured: isWhatsAppConfigured(),
+    webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+    webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
+    phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
+    warnings,
+    timestamp: new Date().toISOString(),
+  });
+}));
 
 app.get('/api/test-db', asyncHandler(async (req, res) => {
   if (isProduction) {
@@ -2836,7 +3109,11 @@ app.get('/api/public/app-settings', asyncHandler(async (req, res) => {
 // ROUTES — AUTH
 // =========================================================
 
-app.post('/api/auth/login', asyncHandler(async (req, res) => {
+app.post('/api/auth/login', rateLimit({
+  bucketName: 'login',
+  maxRequests: 20,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
   const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
 
@@ -3165,6 +3442,136 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+function stableJsonStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJsonStringify(item)).join(',')}]`;
+  }
+
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`
+  )).join(',')}}`;
+}
+
+function createPayloadHash(payload = {}) {
+  return crypto
+    .createHash('sha256')
+    .update(stableJsonStringify(payload))
+    .digest('hex');
+}
+
+function getWebhookPayloadSummary(payload = {}) {
+  let phoneNumberId = null;
+  let displayPhoneNumber = null;
+  let messagesCount = 0;
+  let statusesCount = 0;
+  let contactsCount = 0;
+
+  for (const entry of payload?.entry || []) {
+    for (const change of entry.changes || []) {
+      const value = change.value || {};
+
+      phoneNumberId = phoneNumberId || value?.metadata?.phone_number_id || null;
+      displayPhoneNumber = displayPhoneNumber || value?.metadata?.display_phone_number || null;
+      messagesCount += value?.messages?.length || 0;
+      statusesCount += value?.statuses?.length || 0;
+      contactsCount += value?.contacts?.length || 0;
+    }
+  }
+
+  return {
+    phoneNumberId,
+    displayPhoneNumber,
+    messagesCount,
+    statusesCount,
+    contactsCount,
+  };
+}
+
+async function createWebhookEvent(payload = {}) {
+  const summary = getWebhookPayloadSummary(payload);
+  let tenantId = null;
+
+  for (const entry of payload?.entry || []) {
+    for (const change of entry.changes || []) {
+      const value = change.value || {};
+      const mappedTenantId = await getTenantIdForWebhookValue(value);
+
+      if (mappedTenantId) {
+        tenantId = mappedTenantId;
+        break;
+      }
+    }
+
+    if (tenantId) break;
+  }
+
+  const eventHash = createPayloadHash(payload);
+
+  const result = await query(
+    `INSERT INTO webhook_events
+       (tenant_id, provider, phone_number_id, event_type, status, payload, event_hash)
+     VALUES ($1, 'meta_whatsapp', $2, $3, 'received', $4, $5)
+     ON CONFLICT (provider, event_hash) WHERE event_hash IS NOT NULL
+     DO UPDATE SET received_at = webhook_events.received_at
+     RETURNING id, tenant_id, status, received_at`,
+    [
+      tenantId,
+      summary.phoneNumberId,
+      summary.messagesCount > 0 ? 'message' : summary.statusesCount > 0 ? 'status' : 'webhook',
+      payload,
+      eventHash,
+    ],
+  );
+
+  return result.rows[0];
+}
+
+async function markWebhookEventProcessing(eventId) {
+  if (!eventId) return;
+
+  await query(
+    `UPDATE webhook_events
+     SET status = 'processing',
+         attempts = attempts + 1,
+         processing_started_at = now(),
+         last_error = NULL
+     WHERE id = $1`,
+    [eventId],
+  );
+}
+
+async function markWebhookEventProcessed(eventId) {
+  if (!eventId) return;
+
+  await query(
+    `UPDATE webhook_events
+     SET status = 'processed',
+         processed_at = now(),
+         last_error = NULL
+     WHERE id = $1`,
+    [eventId],
+  );
+}
+
+async function markWebhookEventFailed(eventId, error) {
+  if (!eventId) return;
+
+  await query(
+    `UPDATE webhook_events
+     SET status = 'failed',
+         last_error = $2
+     WHERE id = $1`,
+    [
+      eventId,
+      String(error?.message || error || 'Webhook processing failed').slice(0, 2000),
+    ],
+  );
+}
+
 async function processWhatsAppWebhookPayload(payload) {
   const entries = payload?.entry || [];
 
@@ -3240,13 +3647,27 @@ app.post('/webhook', (req, res) => {
 
   res.sendStatus(200);
 
-  setImmediate(() => {
-    processWhatsAppWebhookPayload(payload).catch((error) => {
+  setImmediate(async () => {
+    let webhookEvent = null;
+
+    try {
+      webhookEvent = await createWebhookEvent(payload);
+      await markWebhookEventProcessing(webhookEvent.id);
+
+      await processWhatsAppWebhookPayload(payload);
+
+      await markWebhookEventProcessed(webhookEvent.id);
+    } catch (error) {
       console.error('WA webhook async processing failed:', {
+        webhookEventId: webhookEvent?.id || null,
         message: error.message,
         stack: error.stack,
       });
-    });
+
+      if (webhookEvent?.id) {
+        await markWebhookEventFailed(webhookEvent.id, error);
+      }
+    }
   });
 });
 
@@ -3273,7 +3694,11 @@ app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res
   res.status(201).json(result);
 }));
 
-app.post('/api/whatsapp/test-message', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/whatsapp/test-message', rateLimit({
+  bucketName: 'whatsapp-test-message',
+  maxRequests: 20,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3342,15 +3767,15 @@ app.post('/api/whatsapp/test-message', requireAuth, asyncHandler(async (req, res
     });
   }
 
-  const response = await axios.post(
-    whatsappMessagesUrl(config),
+  const response = await postWhatsAppMessage(
+    config,
     {
       messaging_product: 'whatsapp',
       to: cleanTo,
       type: 'text',
       text: { body: cleanText },
     },
-    { headers: whatsappHeaders(config) },
+    { tenantId: req.user.tenantId, type: 'test_text' },
   );
 
   const messageId = response.data?.messages?.[0]?.id || null;
@@ -3614,6 +4039,722 @@ app.get('/api/audit-events', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
+app.get('/api/webhook-events/failed', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const result = await query(
+    `SELECT
+       id,
+       tenant_id,
+       provider,
+       phone_number_id,
+       event_type,
+       status,
+       attempts,
+       last_error,
+       received_at,
+       processing_started_at,
+       processed_at
+     FROM webhook_events
+     WHERE tenant_id = $1
+       AND status = 'failed'
+     ORDER BY received_at DESC
+     LIMIT 100`,
+    [req.user.tenantId],
+  );
+
+  res.json(result.rows);
+}));
+
+app.post('/api/webhook-events/cleanup', requireAuth, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const retentionDays = Math.min(
+    Math.max(Number(req.body?.retentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 30), 7),
+    180,
+  );
+
+  const result = await query(
+    `DELETE FROM webhook_events
+     WHERE tenant_id = $1
+       AND status = 'processed'
+       AND received_at < now() - ($2::int * interval '1 day')
+     RETURNING id`,
+    [req.user.tenantId, retentionDays],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'webhook_events.cleanup',
+    entityType: 'webhook_event',
+    entityId: null,
+    metadata: {
+      retentionDays,
+      deletedCount: result.rowCount,
+    },
+  });
+
+  res.json({
+    ok: true,
+    retentionDays,
+    deletedCount: result.rowCount,
+  });
+}));
+
+app.post('/api/webhook-events/recover-stuck', requireAuth, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const stuckMinutes = Math.min(
+    Math.max(Number(req.body?.stuckMinutes || process.env.WEBHOOK_STUCK_MINUTES || 10), 5),
+    120,
+  );
+
+  const result = await query(
+    `UPDATE webhook_events
+     SET status = 'failed',
+         last_error = COALESCE(last_error, 'Recovered from stuck processing state')
+     WHERE tenant_id = $1
+       AND status = 'processing'
+       AND processing_started_at < now() - ($2::int * interval '1 minute')
+     RETURNING id`,
+    [req.user.tenantId, stuckMinutes],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'webhook_events.recover_stuck',
+    entityType: 'webhook_event',
+    entityId: null,
+    metadata: {
+      stuckMinutes,
+      recoveredCount: result.rowCount,
+    },
+  });
+
+  res.json({
+    ok: true,
+    stuckMinutes,
+    recoveredCount: result.rowCount,
+  });
+}));
+
+app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const webhookRetentionDays = Math.min(
+    Math.max(Number(req.body?.webhookRetentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 30), 7),
+    180,
+  );
+
+  const outboundRetentionDays = Math.min(
+    Math.max(Number(req.body?.outboundRetentionDays || process.env.OUTBOUND_MESSAGE_RETENTION_DAYS || 60), 14),
+    365,
+  );
+
+  const stuckMinutes = Math.min(
+    Math.max(Number(req.body?.stuckMinutes || process.env.WEBHOOK_STUCK_MINUTES || 10), 5),
+    120,
+  );
+
+  const [deletedWebhookEvents, deletedOutboundMessages, recoveredStuckWebhooks] = await Promise.all([
+    query(
+      `DELETE FROM webhook_events
+       WHERE tenant_id = $1
+         AND status = 'processed'
+         AND received_at < now() - ($2::int * interval '1 day')
+       RETURNING id`,
+      [req.user.tenantId, webhookRetentionDays],
+    ),
+    query(
+      `DELETE FROM outbound_messages
+       WHERE tenant_id = $1
+         AND status = 'sent'
+         AND created_at < now() - ($2::int * interval '1 day')
+       RETURNING id`,
+      [req.user.tenantId, outboundRetentionDays],
+    ),
+    query(
+      `UPDATE webhook_events
+       SET status = 'failed',
+           last_error = COALESCE(last_error, 'Recovered from stuck processing state by maintenance')
+       WHERE tenant_id = $1
+         AND status = 'processing'
+         AND processing_started_at < now() - ($2::int * interval '1 minute')
+       RETURNING id`,
+      [req.user.tenantId, stuckMinutes],
+    ),
+  ]);
+
+  const result = {
+    webhookRetentionDays,
+    outboundRetentionDays,
+    stuckMinutes,
+    deletedWebhookEvents: deletedWebhookEvents.rowCount,
+    deletedOutboundMessages: deletedOutboundMessages.rowCount,
+    recoveredStuckWebhooks: recoveredStuckWebhooks.rowCount,
+  };
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'system.maintenance_run',
+    entityType: 'system',
+    entityId: null,
+    metadata: result,
+  });
+
+  res.json({
+    ok: true,
+    ...result,
+  });
+}));
+
+app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const eventResult = await query(
+    `SELECT id, tenant_id, status, payload, attempts
+     FROM webhook_events
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const event = eventResult.rows[0];
+
+  if (!event) {
+    return res.status(404).json({ error: 'Webhook event not found' });
+  }
+
+  if (event.status !== 'failed') {
+    return res.status(400).json({
+      error: `Only failed webhook events can be retried. Current status: ${event.status}`,
+    });
+  }
+
+  const maxRetryAttempts = Number(process.env.WEBHOOK_EVENT_MAX_RETRY_ATTEMPTS || 5);
+
+  if (Number(event.attempts || 0) >= maxRetryAttempts) {
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'webhook_event.retry_blocked',
+      entityType: 'webhook_event',
+      entityId: event.id,
+      metadata: {
+        attempts: event.attempts,
+        maxRetryAttempts,
+      },
+    });
+
+    return res.status(429).json({
+      error: `Retry limit reached for this webhook event. Attempts: ${event.attempts}/${maxRetryAttempts}`,
+    });
+  }
+
+  await markWebhookEventProcessing(event.id);
+
+  try {
+    await processWhatsAppWebhookPayload(event.payload);
+    await markWebhookEventProcessed(event.id);
+
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'webhook_event.retried',
+      entityType: 'webhook_event',
+      entityId: event.id,
+      metadata: {
+        previousAttempts: event.attempts,
+        result: 'processed',
+      },
+    });
+
+    return res.json({
+      ok: true,
+      id: event.id,
+      status: 'processed',
+      message: 'Webhook event retried successfully.',
+    });
+  } catch (error) {
+    await markWebhookEventFailed(event.id, error);
+
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'webhook_event.retry_failed',
+      entityType: 'webhook_event',
+      entityId: event.id,
+      metadata: {
+        previousAttempts: event.attempts,
+        result: 'failed',
+        error: String(error.message || error).slice(0, 500),
+      },
+    });
+
+    return res.status(500).json({
+      ok: false,
+      id: event.id,
+      status: 'failed',
+      error: 'Webhook retry failed. Check failed webhook events for last_error.',
+    });
+  }
+}));
+
+app.get('/api/outbound-messages/failed', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const result = await query(
+    `SELECT
+       id,
+       tenant_id,
+       contact_id,
+       wa_message_id,
+       to_phone,
+       message_type,
+       template_name,
+       language,
+       body,
+       status,
+       attempts,
+       last_error,
+       sent_at,
+       created_at,
+       updated_at
+     FROM outbound_messages
+     WHERE tenant_id = $1
+       AND status = 'failed'
+     ORDER BY updated_at DESC
+     LIMIT 100`,
+    [req.user.tenantId],
+  );
+
+  res.json(result.rows);
+}));
+
+app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const result = await query(
+    `SELECT *
+     FROM outbound_messages
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const outbound = result.rows[0];
+
+  if (!outbound) {
+    return res.status(404).json({ error: 'Outbound message not found' });
+  }
+
+  if (outbound.status !== 'failed') {
+    return res.status(400).json({
+      error: `Only failed outbound messages can be retried. Current status: ${outbound.status}`,
+    });
+  }
+
+  const maxAttempts = Number(process.env.OUTBOUND_MESSAGE_MAX_RETRY_ATTEMPTS || 5);
+
+  if (Number(outbound.attempts || 0) >= maxAttempts) {
+    return res.status(429).json({
+      error: `Retry limit reached. Attempts: ${outbound.attempts}/${maxAttempts}`,
+    });
+  }
+
+  let contact = null;
+
+  if (outbound.contact_id) {
+    contact = await findContact(outbound.contact_id, req.user.tenantId);
+  }
+
+  if (!contact) {
+    const contactResult = await query(
+      `SELECT *
+       FROM contacts
+       WHERE tenant_id = $1
+         AND wa_id = $2
+       LIMIT 1`,
+      [req.user.tenantId, outbound.to_phone],
+    );
+
+    contact = contactResult.rows[0] || null;
+  }
+
+  if (!contact) {
+    return res.status(404).json({ error: 'Contact not found for outbound retry' });
+  }
+
+  if (contact.opted_out) {
+    return res.status(403).json({
+      error: 'Customer has opted out. Do not retry WhatsApp message to this contact.',
+    });
+  }
+
+  if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
+    return res.status(400).json({
+      error: '24-hour reply window expired. Text retry is not allowed. Use approved template.',
+    });
+  }
+
+  await markOutboundSending(outbound.id);
+
+  try {
+    let waMessageId = null;
+
+    if (outbound.message_type === 'template') {
+      waMessageId = await sendWhatsAppTemplate(
+        contact,
+        outbound.template_name,
+        outbound.language || 'en',
+        req.user.tenantId,
+      );
+    } else {
+      waMessageId = await sendWhatsAppText(
+        contact,
+        outbound.body,
+        req.user.tenantId,
+      );
+    }
+
+    await markOutboundSent(outbound.id, waMessageId);
+
+    const message = await addMessage({
+      tenantId: req.user.tenantId,
+      contactId: contact.id,
+      waMessageId,
+      direction: 'outbound',
+      type: outbound.message_type === 'template' ? 'template' : 'text',
+      body: outbound.body,
+      status: waMessageId ? 'sent' : 'accepted',
+      templateName: outbound.template_name || null,
+      rawPayload: {
+        retriedOutboundMessageId: outbound.id,
+      },
+      normalizedText: outbound.body,
+    });
+
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'outbound_message.retried',
+      entityType: 'outbound_message',
+      entityId: outbound.id,
+      metadata: {
+        contactId: contact.id,
+        messageRowId: message?.id || null,
+        waMessageId,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      id: outbound.id,
+      status: 'sent',
+      waMessageId,
+      message,
+    });
+  } catch (error) {
+    await markOutboundFailed(outbound.id, error);
+
+    await recordAudit({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'outbound_message.retry_failed',
+      entityType: 'outbound_message',
+      entityId: outbound.id,
+      metadata: {
+        error: String(error.response?.data?.error?.message || error.message || error).slice(0, 500),
+      },
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error.response?.data?.error?.message || error.message || 'Outbound retry failed',
+    });
+  }
+}));
+
+app.get('/api/system/message-health', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const [
+    webhookStatus,
+    outboundStatus,
+    messageStatus,
+  ] = await Promise.all([
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM webhook_events
+       WHERE tenant_id = $1
+         AND received_at >= now() - interval '7 days'
+       GROUP BY status
+       ORDER BY status`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND created_at >= now() - interval '7 days'
+       GROUP BY status
+       ORDER BY status`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT direction, status, COUNT(*)::int AS count
+       FROM messages
+       WHERE tenant_id = $1
+         AND created_at >= now() - interval '7 days'
+       GROUP BY direction, status
+       ORDER BY direction, status`,
+      [req.user.tenantId],
+    ),
+  ]);
+
+  res.json({
+    webhookEvents: webhookStatus.rows,
+    outboundMessages: outboundStatus.rows,
+    messages: messageStatus.rows,
+    window: '7 days',
+    timestamp: new Date().toISOString(),
+  });
+}));
+
+app.get('/api/system/status', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const db = await healthCheck();
+  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
+  const warnings = validateRuntimeConfig();
+
+  const [webhookCounts, outboundCounts, recentFailures] = await Promise.all([
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM webhook_events
+       WHERE tenant_id = $1
+         AND received_at >= now() - interval '24 hours'
+       GROUP BY status`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND created_at >= now() - interval '24 hours'
+       GROUP BY status`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT
+         'webhook' AS source,
+         id::text AS id,
+         last_error,
+         received_at AS at
+       FROM webhook_events
+       WHERE tenant_id = $1
+         AND status = 'failed'
+       UNION ALL
+       SELECT
+         'outbound' AS source,
+         id::text AS id,
+         last_error,
+         updated_at AS at
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND status = 'failed'
+       ORDER BY at DESC
+       LIMIT 10`,
+      [req.user.tenantId],
+    ),
+  ]);
+
+  res.json({
+    ok: db.ok,
+    database: db,
+    whatsapp: {
+      configured: isWhatsAppConfigured(),
+      phoneNumberMapped: accountStatus.phoneNumberMapped,
+      phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
+      phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
+      webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+      webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
+    },
+    counts24h: {
+      webhookEvents: webhookCounts.rows,
+      outboundMessages: outboundCounts.rows,
+    },
+    recentFailures: recentFailures.rows,
+    warnings,
+    uptimeSeconds: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+}));
+
+app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const limit = Math.min(Math.max(Number(req.body?.limit || 10), 1), 50);
+  const maxAttempts = Number(process.env.OUTBOUND_MESSAGE_MAX_RETRY_ATTEMPTS || 5);
+
+  const failedResult = await query(
+    `SELECT *
+     FROM outbound_messages
+     WHERE tenant_id = $1
+       AND status = 'failed'
+       AND attempts < $2
+     ORDER BY updated_at ASC
+     LIMIT $3`,
+    [req.user.tenantId, maxAttempts, limit],
+  );
+
+  const summary = {
+    picked: failedResult.rows.length,
+    retried: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const outbound of failedResult.rows) {
+    try {
+      let contact = null;
+
+      if (outbound.contact_id) {
+        contact = await findContact(outbound.contact_id, req.user.tenantId);
+      }
+
+      if (!contact) {
+        const contactResult = await query(
+          `SELECT *
+           FROM contacts
+           WHERE tenant_id = $1
+             AND wa_id = $2
+           LIMIT 1`,
+          [req.user.tenantId, outbound.to_phone],
+        );
+
+        contact = contactResult.rows[0] || null;
+      }
+
+      if (!contact) {
+        summary.skipped += 1;
+        summary.errors.push({
+          id: outbound.id,
+          reason: 'contact_not_found',
+        });
+        continue;
+      }
+
+      if (contact.opted_out) {
+        summary.skipped += 1;
+        summary.errors.push({
+          id: outbound.id,
+          reason: 'contact_opted_out',
+        });
+        continue;
+      }
+
+      if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
+        summary.skipped += 1;
+        summary.errors.push({
+          id: outbound.id,
+          reason: 'reply_window_expired',
+        });
+        continue;
+      }
+
+      await markOutboundSending(outbound.id);
+      summary.retried += 1;
+
+      let waMessageId = null;
+
+      if (outbound.message_type === 'template') {
+        waMessageId = await sendWhatsAppTemplate(
+          contact,
+          outbound.template_name,
+          outbound.language || 'en',
+          req.user.tenantId,
+        );
+      } else {
+        waMessageId = await sendWhatsAppText(
+          contact,
+          outbound.body,
+          req.user.tenantId,
+        );
+      }
+
+      await markOutboundSent(outbound.id, waMessageId);
+
+      await addMessage({
+        tenantId: req.user.tenantId,
+        contactId: contact.id,
+        waMessageId,
+        direction: 'outbound',
+        type: outbound.message_type === 'template' ? 'template' : 'text',
+        body: outbound.body,
+        status: waMessageId ? 'sent' : 'accepted',
+        templateName: outbound.template_name || null,
+        rawPayload: {
+          batchRetriedOutboundMessageId: outbound.id,
+        },
+        normalizedText: outbound.body,
+      });
+
+      summary.sent += 1;
+    } catch (error) {
+      summary.failed += 1;
+
+      await markOutboundFailed(outbound.id, error);
+
+      summary.errors.push({
+        id: outbound.id,
+        reason: String(error.response?.data?.error?.message || error.message || error).slice(0, 300),
+      });
+    }
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'outbound_messages.retry_failed_batch',
+    entityType: 'outbound_message',
+    entityId: null,
+    metadata: summary,
+  });
+
+  res.json({
+    ok: true,
+    ...summary,
+  });
+}));
+
 // =========================================================
 // ROUTES — DASHBOARD
 // =========================================================
@@ -3853,6 +4994,37 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
   let body = cleanText;
   let type = 'text';
 
+  const outboundPayload = cleanTemplateName
+    ? {
+        messaging_product: 'whatsapp',
+        to: contact.wa_id,
+        type: 'template',
+        template: {
+          name: cleanTemplateName,
+          language: { code: cleanLanguage },
+        },
+      }
+    : {
+        messaging_product: 'whatsapp',
+        to: contact.wa_id,
+        type: 'text',
+        text: { body: cleanText },
+      };
+
+  const outboundRecord = await createOutboundMessageRecord({
+    tenantId: req.user.tenantId,
+    contactId: contact.id,
+    toPhone: contact.wa_id || contact.phone,
+    messageType: cleanTemplateName ? 'template' : 'text',
+    templateName: cleanTemplateName || null,
+    language: cleanTemplateName ? cleanLanguage : null,
+    body: cleanTemplateName ? `[Template] ${cleanTemplateName}` : cleanText,
+    payload: outboundPayload,
+    createdBy: req.user.id,
+  });
+
+  await markOutboundSending(outboundRecord?.id);
+
   try {
     if (cleanTemplateName) {
       waMessageId = await sendWhatsAppTemplate(contact, cleanTemplateName, cleanLanguage, req.user.tenantId);
@@ -3861,9 +5033,14 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
     } else {
       waMessageId = await sendWhatsAppText(contact, cleanText, req.user.tenantId);
     }
+
+    await markOutboundSent(outboundRecord?.id, waMessageId);
   } catch (error) {
+    await markOutboundFailed(outboundRecord?.id, error);
+
     return res.status(400).json({
       error: error.response?.data?.error?.message || error.message || 'WhatsApp message failed',
+      outboundMessageId: outboundRecord?.id || null,
     });
   }
 
@@ -4974,20 +6151,61 @@ app.use((err, req, res, next) => {
 // SERVER START
 // =========================================================
 
+let httpServer = null;
+
 async function startServer() {
   await ensureSchema();
   await ensureDefaultUsers();
   await ensureDefaultWhatsAppAccountMapping();
+
   const warnings = validateRuntimeConfig();
   warnings.forEach((warning) => console.warn(`Config warning: ${warning}`));
-  return app.listen(port, () => {
+
+  httpServer = app.listen(port, () => {
     console.log(`BOS WhatsApp backend running on http://localhost:${port}`);
   });
+
+  return httpServer;
 }
+
+async function gracefulShutdown(signal) {
+  console.log(`${signal} received. Closing HTTP server and database pool...`);
+
+  try {
+    if (httpServer) {
+      await new Promise((resolve) => httpServer.close(resolve));
+    }
+
+    await closePool();
+    console.log('Shutdown completed cleanly.');
+    process.exit(0);
+  } catch (error) {
+    console.error('Shutdown failed:', {
+      message: error.message,
+      code: error.code || null,
+    });
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => {
+  gracefulShutdown('SIGTERM');
+});
+
+process.on('SIGINT', () => {
+  gracefulShutdown('SIGINT');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
 
 if (require.main === module) {
   startServer().catch((error) => {
-    console.error(error);
+    console.error('Server startup failed:', {
+      message: error.message,
+      code: error.code || null,
+    });
     process.exit(1);
   });
 }

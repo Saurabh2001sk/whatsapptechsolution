@@ -674,6 +674,177 @@ CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx
 ON audit_events (tenant_id, created_at);
 
 -- =========================================================
+-- 14A. WEBHOOK EVENTS / SAFE INBOUND QUEUE
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'meta_whatsapp',
+  phone_number_id TEXT,
+  event_type TEXT NOT NULL DEFAULT 'webhook',
+  status TEXT NOT NULL DEFAULT 'received',
+  payload JSONB NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processing_started_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ
+);
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'meta_whatsapp';
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT 'webhook';
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'received';
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
+
+ALTER TABLE webhook_events
+ADD COLUMN IF NOT EXISTS event_hash TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'webhook_events_status_check'
+  ) THEN
+    ALTER TABLE webhook_events
+    ADD CONSTRAINT webhook_events_status_check
+    CHECK (status IN ('received', 'processing', 'processed', 'failed'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS webhook_events_tenant_status_idx
+ON webhook_events (tenant_id, status, received_at);
+
+CREATE INDEX IF NOT EXISTS webhook_events_phone_status_idx
+ON webhook_events (phone_number_id, status, received_at);
+
+CREATE INDEX IF NOT EXISTS webhook_events_received_idx
+ON webhook_events (received_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS webhook_events_provider_hash_idx
+ON webhook_events (provider, event_hash)
+WHERE event_hash IS NOT NULL;
+
+-- =========================================================
+-- 14B. OUTBOUND WHATSAPP MESSAGE QUEUE / SEND TRACKING
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS outbound_messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  wa_message_id TEXT,
+  to_phone TEXT NOT NULL,
+  message_type TEXT NOT NULL DEFAULT 'text',
+  template_name TEXT,
+  language TEXT,
+  body TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  sent_at TIMESTAMPTZ,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS wa_message_id TEXT;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS to_phone TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text';
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS template_name TEXT;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS language TEXT;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS body TEXT;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+ALTER TABLE outbound_messages
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'outbound_messages_status_check'
+  ) THEN
+    ALTER TABLE outbound_messages
+    ADD CONSTRAINT outbound_messages_status_check
+    CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'cancelled'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS outbound_messages_tenant_status_idx
+ON outbound_messages (tenant_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS outbound_messages_contact_idx
+ON outbound_messages (tenant_id, contact_id, created_at);
+
+CREATE INDEX IF NOT EXISTS outbound_messages_wa_message_idx
+ON outbound_messages (tenant_id, wa_message_id);
+
+-- =========================================================
 -- 15. DEFAULT TENANT TEMPLATES
 -- =========================================================
 
