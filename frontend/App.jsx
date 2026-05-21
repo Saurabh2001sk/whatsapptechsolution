@@ -4,6 +4,7 @@ import {
   BarChart3,
   Activity,
   Boxes,
+  Building2,
   ClipboardList,
   LayoutDashboard,
   ShoppingCart,
@@ -351,13 +352,40 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   const [productSearch, setProductSearch] = useState('')
   const [inventoryColumnsText, setInventoryColumnsText] = useState(toCsv(defaultAppSettings.inventoryFields))
   const [importResult, setImportResult] = useState('')
+  const emptyTenantForm = {
+    name: '',
+    slug: '',
+    industry: 'General',
+    plan: 'starter',
+    status: 'active',
+    businessPhone: '',
+    businessEmail: '',
+    logoUrl: '',
+    metaBusinessId: '',
+  }
+  const emptyClientAdminForm = { tenantId: '', name: '', email: '', password: '' }
+  const [platformTenants, setPlatformTenants] = useState([])
+  const [platformStatus, setPlatformStatus] = useState(null)
+  const [selectedPlatformTenantId, setSelectedPlatformTenantId] = useState('')
+  const [tenantForm, setTenantForm] = useState(emptyTenantForm)
+  const [clientAdminForm, setClientAdminForm] = useState(emptyClientAdminForm)
+  const [platformLoading, setPlatformLoading] = useState(false)
+  const [platformError, setPlatformError] = useState('')
 
-  const canMonitor = user?.role === 'admin' || user?.role === 'manager'
+  const isSuperAdminUser = user?.role === 'super_admin'
+  const canMonitor = !isSuperAdminUser && (user?.role === 'admin' || user?.role === 'manager')
   const selected = useMemo(() => conversations.find((item) => item.id === selectedId) || conversations[0], [conversations, selectedId])
   const labels = useMemo(() => ['all', ...(appSettings.labels || defaultAppSettings.labels)], [appSettings.labels])
   const stages = useMemo(() => appSettings.stages || defaultAppSettings.stages, [appSettings.stages])
 
   const pageItems = useMemo(() => {
+    if (isSuperAdminUser) {
+      return [
+        { id: 'platformTenants', label: 'Clients', icon: Building2 },
+        { id: 'platformStatus', label: 'Status', icon: Activity },
+      ]
+    }
+
     const common = [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'inbox', label: 'Inbox', icon: Inbox },
@@ -373,7 +401,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
     if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
     if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
     return common
-  }, [canMonitor, user?.role])
+  }, [canMonitor, isSuperAdminUser, user?.role])
 
  useEffect(() => {
   const storedToken = localStorage.getItem('bosToken')
@@ -420,6 +448,95 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
     window.setTimeout(() => setNotice(null), 3200)
   }
 
+  async function loadPlatformTenants(options = {}) {
+    if (!localStorage.getItem('bosToken')) return
+    if (!options.silent) setPlatformLoading(true)
+    setPlatformError('')
+
+    try {
+      const res = await api.get('/api/platform/tenants')
+      setPlatformTenants(res.data)
+
+      const firstClientTenant = res.data.find((tenant) => tenant.slug !== 'platform')
+
+      if (!selectedPlatformTenantId && firstClientTenant) {
+        setSelectedPlatformTenantId(firstClientTenant.id)
+      }
+    } catch (err) {
+      setPlatformError(apiErrorMessage(err, 'Unable to load client companies'))
+    } finally {
+      if (!options.silent) setPlatformLoading(false)
+    }
+  }
+
+  async function loadPlatformTenantStatus(tenantId = selectedPlatformTenantId) {
+    if (!tenantId) {
+      setPlatformStatus(null)
+      return
+    }
+
+    setPlatformLoading(true)
+    setPlatformError('')
+
+    try {
+      const res = await api.get(`/api/platform/tenants/${tenantId}/status`)
+      setPlatformStatus(res.data)
+    } catch (err) {
+      setPlatformError(apiErrorMessage(err, 'Unable to load client status'))
+    } finally {
+      setPlatformLoading(false)
+    }
+  }
+
+  async function createPlatformTenant(event) {
+    event.preventDefault()
+
+    try {
+      const res = await api.post('/api/platform/tenants', tenantForm)
+      notify('Client company created')
+      setTenantForm(emptyTenantForm)
+      setSelectedPlatformTenantId(res.data.id)
+      setClientAdminForm({ ...emptyClientAdminForm, tenantId: res.data.id })
+      await loadPlatformTenants()
+      await loadPlatformTenantStatus(res.data.id)
+      setActivePage('platformStatus')
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Client company create failed'), 'error')
+    }
+  }
+
+  async function createPlatformClientAdmin(event) {
+    event.preventDefault()
+
+    const tenantId = clientAdminForm.tenantId || selectedPlatformTenantId
+
+    if (!tenantId) {
+      notify('Select a client company first', 'error')
+      return
+    }
+
+    try {
+      await api.post(`/api/platform/tenants/${tenantId}/admin`, {
+        name: clientAdminForm.name,
+        email: clientAdminForm.email,
+        password: clientAdminForm.password,
+      })
+      notify('Client admin created')
+      setClientAdminForm({ ...emptyClientAdminForm, tenantId })
+      await loadPlatformTenants()
+      await loadPlatformTenantStatus(tenantId)
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Client admin create failed'), 'error')
+    }
+  }
+
+  function openPlatformStatus(tenantId) {
+    setSelectedPlatformTenantId(tenantId)
+    setClientAdminForm((current) => ({ ...current, tenantId }))
+    setActivePage('platformStatus')
+    loadPlatformTenantStatus(tenantId)
+  }
+
   useEffect(() => {
     function showIssueToast(text) {
       setNotice({ text, type: 'error' })
@@ -462,6 +579,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
 
   async function loadAll(overrides = {}) {
     if (!localStorage.getItem('bosToken')) return
+    if (isSuperAdminUser) return
     const requestFilter = overrides.filter ?? filter
     const requestWindowFilter = overrides.windowFilter ?? windowFilter
     const requestSearch = overrides.search ?? search
@@ -560,6 +678,18 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   }, [user?.id, filter, windowFilter])
 
   useEffect(() => {
+    if (!user?.id || !isSuperAdminUser) return
+
+    if (!['platformTenants', 'platformStatus'].includes(activePage)) {
+      setActivePage('platformTenants')
+    }
+
+    loadPlatformTenants()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, isSuperAdminUser])
+
+  useEffect(() => {
+    if (isSuperAdminUser) return
     if (!selected?.id) return
     // Selection drives the editable profile form and read receipt state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -592,6 +722,10 @@ function logout() {
   setTemplateName('')
   setSendError('')
   setLoadError('')
+  setPlatformTenants([])
+  setPlatformStatus(null)
+  setSelectedPlatformTenantId('')
+  setPlatformError('')
 }
 
 useEffect(() => {
@@ -601,6 +735,7 @@ useEffect(() => {
 
 useEffect(() => {
   if (!user?.id) return undefined
+  if (isSuperAdminUser) return undefined
 
   const interval = window.setInterval(() => {
     loadAll({ filter, windowFilter, search })
@@ -633,8 +768,28 @@ if (authChecking) {
 if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
 
 function showPage(page, pageFilter = {}) {
+  const platformPages = ['platformTenants', 'platformStatus']
   const monitorOnlyPages = ['settings', 'audit']
   const adminOnlyPages = ['users']
+
+  if (isSuperAdminUser) {
+    if (!platformPages.includes(page)) {
+      notify('Super Admin uses platform routes only', 'error')
+      setActivePage('platformTenants')
+      return
+    }
+
+    setActivePage(page)
+    if (page === 'platformTenants') loadPlatformTenants()
+    if (page === 'platformStatus') loadPlatformTenantStatus()
+    return
+  }
+
+  if (platformPages.includes(page)) {
+    notify('Super Admin access required', 'error')
+    setActivePage('inbox')
+    return
+  }
 
   if (monitorOnlyPages.includes(page) && !canMonitor) {
     notify('Manager/Admin access required', 'error')
@@ -1078,9 +1233,22 @@ async function saveCustomization(event) {
     notify('Quotation file downloaded')
   }
 
+  async function refreshCurrentPage() {
+    if (!isSuperAdminUser) {
+      await loadAll()
+      return
+    }
+
+    await loadPlatformTenants()
+
+    if (activePage === 'platformStatus') {
+      await loadPlatformTenantStatus()
+    }
+  }
+
   const newEnquiries = drafts.filter((item) => item.status === 'draft')
   const activeOrders = orders.filter((item) => item.status !== 'closed')
-  const chatPages = activePage === 'inbox' || activePage === 'new' || activePage === 'sales'
+  const chatPages = !isSuperAdminUser && (activePage === 'inbox' || activePage === 'new' || activePage === 'sales')
   const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
   const stageOptions = ['all', ...stages]
   const visibleConversations = stageFilter === 'all'
@@ -1128,14 +1296,34 @@ async function saveCustomization(event) {
       <section className="module-panel">
         <div className="app-title inbox-title">
           <div>
-            <h1>{appSettings.appName}</h1>
-            <span>{appSettings.companyName} - {user.name} / {user.role}</span>
+            <h1>{isSuperAdminUser ? 'Platform Console' : appSettings.appName}</h1>
+            <span>{isSuperAdminUser ? `Platform Owner - ${user.name} / ${user.role}` : `${appSettings.companyName} - ${user.name} / ${user.role}`}</span>
           </div>
-          <button type="button" onClick={loadAll} disabled={loading}><RefreshCw size={17} /> Refresh</button>
+          <button type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={17} /> Refresh</button>
         </div>
         {loadError && <div className="load-error">{loadError}</div>}
+        {platformError && <div className="load-error">{platformError}</div>}
 
-        {chatPages && (
+        {isSuperAdminUser && (
+          <PlatformPage
+            activePage={activePage}
+            tenants={platformTenants}
+            tenantForm={tenantForm}
+            setTenantForm={setTenantForm}
+            clientAdminForm={clientAdminForm}
+            setClientAdminForm={setClientAdminForm}
+            selectedTenantId={selectedPlatformTenantId}
+            setSelectedTenantId={setSelectedPlatformTenantId}
+            platformStatus={platformStatus}
+            platformLoading={platformLoading}
+            onCreateTenant={createPlatformTenant}
+            onCreateClientAdmin={createPlatformClientAdmin}
+            onOpenStatus={openPlatformStatus}
+            onLoadStatus={loadPlatformTenantStatus}
+          />
+        )}
+
+        {!isSuperAdminUser && chatPages && (
           <>
             <div className={`chat-mode-head chat-mode-${activePage}`}>
               <div>
@@ -1156,14 +1344,14 @@ async function saveCustomization(event) {
           </>
         )}
 
-        {activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
-        {activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
-        {activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
-        {activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
-        {activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
-        {activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} onMapPhone={mapCurrentWhatsAppPhone} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
-        {activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
-        {!chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
+        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
+        {!isSuperAdminUser && activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
+        {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
+        {!isSuperAdminUser && activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {!isSuperAdminUser && activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
+        {!isSuperAdminUser && activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
+        {!isSuperAdminUser && activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} onMapPhone={mapCurrentWhatsAppPhone} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
+        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
+        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
@@ -1270,6 +1458,160 @@ async function saveCustomization(event) {
         </>
       )}
     </main>
+  )
+}
+
+function PlatformPage({
+  activePage,
+  tenants,
+  tenantForm,
+  setTenantForm,
+  clientAdminForm,
+  setClientAdminForm,
+  selectedTenantId,
+  setSelectedTenantId,
+  platformStatus,
+  platformLoading,
+  onCreateTenant,
+  onCreateClientAdmin,
+  onOpenStatus,
+  onLoadStatus,
+}) {
+  const clientTenants = tenants.filter((tenant) => tenant.slug !== 'platform')
+  const selectedTenant = clientTenants.find((tenant) => tenant.id === selectedTenantId) || clientTenants[0]
+  const connectedClients = clientTenants.filter((tenant) => tenant.onboardingStatus === 'whatsapp_mapped').length
+  const activeClients = clientTenants.filter((tenant) => tenant.status === 'active').length
+
+  function selectTenant(tenantId) {
+    setSelectedTenantId(tenantId)
+    setClientAdminForm({ ...clientAdminForm, tenantId })
+  }
+
+  return (
+    <section className="workspace-page platform-page">
+      <div className="workspace-head">
+        <div>
+          <h2>Client Company Control</h2>
+          <span>Create client companies, create the first admin, and verify WhatsApp/account status.</span>
+        </div>
+      </div>
+
+      <div className="kpi-grid platform-kpis">
+        <button type="button"><strong>{clientTenants.length}</strong><span>Client Companies</span></button>
+        <button type="button"><strong>{activeClients}</strong><span>Active Clients</span></button>
+        <button type="button"><strong>{connectedClients}</strong><span>WhatsApp Mapped</span></button>
+        <button type="button"><strong>{tenants.length}</strong><span>Total Tenants</span></button>
+      </div>
+
+      {activePage === 'platformTenants' && (
+        <div className="platform-grid">
+          <section className="table-module">
+            <div className="module-title"><Building2 size={18} /><h3>Create Client Company</h3></div>
+            <form className="platform-form" onSubmit={onCreateTenant}>
+              <label>Company Name<input value={tenantForm.name} onChange={(e) => setTenantForm({ ...tenantForm, name: e.target.value })} placeholder="ABC Steels Pvt Ltd" /></label>
+              <label>Slug<input value={tenantForm.slug} onChange={(e) => setTenantForm({ ...tenantForm, slug: e.target.value })} placeholder="abc-steels" /></label>
+              <label>Industry<input value={tenantForm.industry} onChange={(e) => setTenantForm({ ...tenantForm, industry: e.target.value })} placeholder="Steel / Retail / Service" /></label>
+              <label>Plan<input value={tenantForm.plan} onChange={(e) => setTenantForm({ ...tenantForm, plan: e.target.value })} placeholder="starter" /></label>
+              <label>Status<select value={tenantForm.status} onChange={(e) => setTenantForm({ ...tenantForm, status: e.target.value })}><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></label>
+              <label>Business Phone<input value={tenantForm.businessPhone} onChange={(e) => setTenantForm({ ...tenantForm, businessPhone: e.target.value })} placeholder="919876543210" /></label>
+              <label>Business Email<input value={tenantForm.businessEmail} onChange={(e) => setTenantForm({ ...tenantForm, businessEmail: e.target.value })} placeholder="admin@abcsteels.com" /></label>
+              <label>Meta Business ID<input value={tenantForm.metaBusinessId} onChange={(e) => setTenantForm({ ...tenantForm, metaBusinessId: e.target.value })} placeholder="Optional" /></label>
+              <div className="user-form-actions">
+                <button className="user-action-primary" type="submit"><CheckCircle2 size={16} /> Create Client</button>
+              </div>
+            </form>
+          </section>
+
+          <section className="table-module">
+            <div className="module-title"><UserPlus size={18} /><h3>Create First Client Admin</h3></div>
+            <form className="platform-form" onSubmit={onCreateClientAdmin}>
+              <label>Client Company<select value={clientAdminForm.tenantId || selectedTenant?.id || ''} onChange={(e) => selectTenant(e.target.value)}><option value="">Select client</option>{clientTenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></label>
+              <label>Admin Name<input value={clientAdminForm.name} onChange={(e) => setClientAdminForm({ ...clientAdminForm, name: e.target.value })} placeholder="Company Admin" /></label>
+              <label>Admin Email<input value={clientAdminForm.email} onChange={(e) => setClientAdminForm({ ...clientAdminForm, email: e.target.value })} placeholder="admin@client.com" /></label>
+              <label>Temporary Password<input type="password" value={clientAdminForm.password} onChange={(e) => setClientAdminForm({ ...clientAdminForm, password: e.target.value })} placeholder="Minimum 8 characters" /></label>
+              <div className="user-form-actions">
+                <button className="user-action-primary" type="submit"><UserPlus size={16} /> Create Admin</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {activePage === 'platformTenants' && (
+        <section className="table-module">
+          <div className="module-title"><Users size={18} /><h3>Client Companies</h3></div>
+          <div className="platform-tenant-list">
+            {!clientTenants.length && <EmptyState title="No client companies" text="Create the first client company to start onboarding." />}
+            {clientTenants.map((tenant) => (
+              <div className="platform-tenant-row" key={tenant.id}>
+                <div>
+                  <strong>{tenant.name}</strong>
+                  <span>{tenant.slug} - {tenant.industry || 'General'} - {tenant.plan || 'starter'}</span>
+                  <small>{tenant.businessEmail || 'No email'} - {tenant.businessPhone || 'No phone'}</small>
+                </div>
+                <b className={`status-${tenant.status === 'active' ? 'active' : 'inactive'}`}>{tenant.status}</b>
+                <i>{tenant.onboardingStatus || 'pending'}</i>
+                <span>{tenant.activeUserCount || 0}/{tenant.userCount || 0} users</span>
+                <button type="button" onClick={() => onOpenStatus(tenant.id)}>Status</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {activePage === 'platformStatus' && (
+        <section className="table-module">
+          <div className="module-title"><Activity size={18} /><h3>Client Status</h3></div>
+          <div className="platform-status-toolbar">
+            <select value={selectedTenant?.id || ''} onChange={(e) => selectTenant(e.target.value)}>
+              <option value="">Select client</option>
+              {clientTenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+            </select>
+            <button type="button" onClick={() => onLoadStatus(selectedTenant?.id)} disabled={!selectedTenant || platformLoading}>Load Status</button>
+          </div>
+
+          {!platformStatus && <EmptyState title="No client selected" text="Select a client company and load status." />}
+
+          {platformStatus && (
+            <div className="platform-status-grid">
+              <div className="mini-row">
+                <strong>{platformStatus.tenant?.name}</strong>
+                <span>{platformStatus.tenant?.slug} - {platformStatus.tenant?.status} - {platformStatus.tenant?.onboardingStatus}</span>
+              </div>
+              <div className="mini-row">
+                <strong>{platformStatus.totals?.contacts || 0}</strong>
+                <span>Contacts</span>
+              </div>
+              <div className="mini-row">
+                <strong>{platformStatus.totals?.messages || 0}</strong>
+                <span>Messages</span>
+              </div>
+              <section className="table-module">
+                <div className="module-title"><Users size={18} /><h3>User Summary</h3></div>
+                {platformStatus.users?.map((item) => (
+                  <div className="mini-row" key={`${item.role}-${item.active}`}>
+                    <strong>{item.role} - {item.active ? 'active' : 'inactive'}</strong>
+                    <span>{item.count} users</span>
+                  </div>
+                ))}
+                {!platformStatus.users?.length && <EmptyState title="No users" text="Create the first admin for this client." />}
+              </section>
+              <section className="table-module">
+                <div className="module-title"><MessageCircle size={18} /><h3>WhatsApp Accounts</h3></div>
+                {platformStatus.whatsappAccounts?.map((account) => (
+                  <div className="mini-row" key={account.id}>
+                    <strong>{account.displayPhoneNumber || 'No display number'}</strong>
+                    <span>Phone ID: {account.phoneNumberId || '-'}</span>
+                    <small>{account.active ? 'Active mapping' : 'Inactive mapping'}</small>
+                  </div>
+                ))}
+                {!platformStatus.whatsappAccounts?.length && <EmptyState title="WhatsApp not mapped" text="Client Admin must map/connect their WhatsApp phone number before inbound routing is live." />}
+              </section>
+            </div>
+          )}
+        </section>
+      )}
+    </section>
   )
 }
 

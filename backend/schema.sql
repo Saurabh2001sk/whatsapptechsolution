@@ -28,10 +28,53 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'sales')),
+  role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin', 'manager', 'sales')),
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =========================================================
+-- PLATFORM / SUPER ADMIN SUPPORT
+-- =========================================================
+
+INSERT INTO tenants (name, slug, industry, status, plan)
+VALUES ('Platform Admin', 'platform', 'SaaS Platform', 'active', 'internal')
+ON CONFLICT (slug) DO NOTHING;
+
+DO $$
+BEGIN
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+  ALTER TABLE users
+  ADD CONSTRAINT users_role_check
+  CHECK (role IN ('super_admin', 'admin', 'manager', 'sales'));
+END $$;
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS logo_url TEXT;
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS business_phone TEXT;
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS business_email TEXT;
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS meta_business_id TEXT;
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS onboarding_status TEXT NOT NULL DEFAULT 'pending';
+
+ALTER TABLE tenants
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS tenants_status_idx
+ON tenants (status);
+
+CREATE INDEX IF NOT EXISTS users_role_idx
+ON users (role);
+
+CREATE INDEX IF NOT EXISTS users_tenant_role_idx
+ON users (tenant_id, role, active);
 
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;

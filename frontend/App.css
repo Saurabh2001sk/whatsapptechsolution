@@ -1589,6 +1589,107 @@ textarea:focus {
   font-weight: 800;
 }
 
+.platform-page {
+  grid-template-columns: 1fr;
+}
+
+.platform-kpis button {
+  min-height: 82px;
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.platform-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.platform-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.platform-form input,
+.platform-form select,
+.platform-status-toolbar select {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-height: 38px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.platform-tenant-list {
+  display: grid;
+  gap: 8px;
+}
+
+.platform-tenant-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(240px, 1.6fr) auto auto auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.platform-tenant-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.platform-tenant-row span,
+.platform-tenant-row small,
+.platform-tenant-row i {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.platform-tenant-row button,
+.platform-status-toolbar button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.platform-status-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.platform-status-toolbar select {
+  min-width: min(420px, 100%);
+}
+
+.platform-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.platform-status-grid .table-module {
+  grid-column: span 3;
+}
+
 @media (max-width: 1280px) {
   .app-shell {
     grid-template-columns: 92px minmax(340px, 380px) minmax(0, 1fr);

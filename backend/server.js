@@ -379,8 +379,47 @@ async function requireAuth(req, res, next) {
   }
 }
 
+function isSuperAdmin(user) {
+  return user?.role === 'super_admin';
+}
+
 function canMonitor(user) {
-  return user.role === 'admin' || user.role === 'manager';
+  return isSuperAdmin(user) || user.role === 'admin' || user.role === 'manager';
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (!isSuperAdmin(req.user)) {
+    return res.status(403).json({ error: 'Super admin only' });
+  }
+
+  return next();
+}
+
+function normalizeTenantSlug(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+function publicTenant(tenant) {
+  return {
+    id: tenant.id,
+    name: tenant.name,
+    slug: tenant.slug,
+    industry: tenant.industry,
+    status: tenant.status,
+    plan: tenant.plan,
+    logoUrl: tenant.logo_url || '',
+    businessPhone: tenant.business_phone || '',
+    businessEmail: tenant.business_email || '',
+    metaBusinessId: tenant.meta_business_id || '',
+    onboardingStatus: tenant.onboarding_status || 'pending',
+    createdAt: tenant.created_at,
+    updatedAt: tenant.updated_at,
+  };
 }
 
 async function countActiveTenantAdmins(tenantId, excludeUserId = null) {
@@ -3036,6 +3075,71 @@ async function ensureDefaultUsers() {
   )));
 }
 
+async function ensurePlatformSuperAdmin() {
+  const email = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = String(process.env.SUPER_ADMIN_PASSWORD || '');
+  const name = String(process.env.SUPER_ADMIN_NAME || 'Platform Super Admin').trim();
+
+  if (!email || !password) {
+    if (!isProduction) {
+      console.log('SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD not set. Platform super admin bootstrap skipped.');
+    }
+    return;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('SUPER_ADMIN_EMAIL must be a valid email');
+  }
+
+  if (password.length < 12) {
+    throw new Error('SUPER_ADMIN_PASSWORD must be at least 12 characters');
+  }
+
+  const tenantResult = await query(
+    `INSERT INTO tenants (name, slug, industry, status, plan, onboarding_status, updated_at)
+     VALUES ('Platform Admin', 'platform', 'SaaS Platform', 'active', 'internal', 'active', now())
+     ON CONFLICT (slug)
+     DO UPDATE SET status = 'active',
+                   onboarding_status = 'active',
+                   updated_at = now()
+     RETURNING id`,
+  );
+
+  const platformTenantId = tenantResult.rows[0].id;
+
+  const existingResult = await query(
+    `SELECT id, role, active
+     FROM users
+     WHERE lower(email) = $1
+     LIMIT 1`,
+    [email],
+  );
+
+  if (existingResult.rows[0]) {
+    await query(
+      `UPDATE users
+       SET tenant_id = $2,
+           role = 'super_admin',
+           active = true
+       WHERE lower(email) = $1`,
+      [email, platformTenantId],
+    );
+
+    console.log('Platform super admin already exists and was verified active');
+    return;
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+
+  await query(
+    `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
+     VALUES ($1, $2, $3, $4, 'super_admin', true)`,
+    [platformTenantId, name || 'Platform Super Admin', email, hash],
+  );
+
+  console.log('Platform super admin created from environment variables');
+}
+
 // =========================================================
 // ROUTES — SYSTEM
 // =========================================================
@@ -3166,6 +3270,341 @@ app.post('/api/auth/login', rateLimit({
 }));
 
 app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
+
+// =========================================================
+// ROUTES — PLATFORM / SUPER ADMIN
+// =========================================================
+
+app.get('/api/platform/tenants', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const result = await query(
+    `SELECT
+       tenants.id,
+       tenants.name,
+       tenants.slug,
+       tenants.industry,
+       tenants.status,
+       tenants.plan,
+       tenants.logo_url,
+       tenants.business_phone,
+       tenants.business_email,
+       tenants.meta_business_id,
+       tenants.onboarding_status,
+       tenants.created_at,
+       tenants.updated_at,
+       COUNT(users.id)::int AS user_count,
+       COUNT(users.id) FILTER (WHERE users.active = true)::int AS active_user_count
+     FROM tenants
+     LEFT JOIN users ON users.tenant_id = tenants.id
+     GROUP BY tenants.id
+     ORDER BY tenants.created_at DESC`,
+  );
+
+  res.json(result.rows.map((tenant) => ({
+    ...publicTenant(tenant),
+    userCount: tenant.user_count,
+    activeUserCount: tenant.active_user_count,
+  })));
+}));
+
+app.post('/api/platform/tenants', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const cleanName = String(req.body?.name || '').trim();
+  const cleanIndustry = String(req.body?.industry || 'General').trim() || 'General';
+  const cleanPlan = String(req.body?.plan || 'starter').trim().toLowerCase() || 'starter';
+  const cleanStatus = String(req.body?.status || 'active').trim().toLowerCase() || 'active';
+  const cleanSlug = normalizeTenantSlug(req.body?.slug || cleanName);
+
+  const businessPhone = String(req.body?.businessPhone || '').trim();
+  const businessEmail = String(req.body?.businessEmail || '').trim().toLowerCase();
+  const logoUrl = String(req.body?.logoUrl || '').trim();
+  const metaBusinessId = String(req.body?.metaBusinessId || '').trim();
+
+  if (!cleanName || !cleanSlug) {
+    return res.status(400).json({ error: 'Client company name and slug are required' });
+  }
+
+  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
+    return res.status(400).json({ error: 'Invalid tenant status' });
+  }
+
+  if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
+    return res.status(400).json({ error: 'Valid business email required' });
+  }
+
+  const result = await query(
+    `INSERT INTO tenants
+       (name, slug, industry, status, plan, logo_url, business_phone, business_email, meta_business_id, onboarding_status, updated_at)
+     VALUES
+       ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'tenant_created', now())
+     RETURNING *`,
+    [
+      cleanName,
+      cleanSlug,
+      cleanIndustry,
+      cleanStatus,
+      cleanPlan,
+      logoUrl || null,
+      businessPhone || null,
+      businessEmail || null,
+      metaBusinessId || null,
+    ],
+  );
+
+  const tenant = result.rows[0];
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'platform.tenant_created',
+    entityType: 'tenant',
+    entityId: tenant.id,
+    metadata: {
+      tenantId: tenant.id,
+      slug: tenant.slug,
+      name: tenant.name,
+      plan: tenant.plan,
+      status: tenant.status,
+    },
+  });
+
+  res.status(201).json(publicTenant(tenant));
+}));
+
+app.patch('/api/platform/tenants/:tenantId', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+
+  const existingResult = await query(
+    `SELECT *
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const existingTenant = existingResult.rows[0];
+
+  if (!existingTenant) {
+    return res.status(404).json({ error: 'Client company not found' });
+  }
+
+  if (existingTenant.slug === 'platform') {
+    return res.status(400).json({ error: 'Platform tenant cannot be edited from this route' });
+  }
+
+  const cleanName = req.body?.name !== undefined ? String(req.body.name || '').trim() : existingTenant.name;
+  const cleanIndustry = req.body?.industry !== undefined ? String(req.body.industry || '').trim() : existingTenant.industry;
+  const cleanStatus = req.body?.status !== undefined ? String(req.body.status || '').trim().toLowerCase() : existingTenant.status;
+  const cleanPlan = req.body?.plan !== undefined ? String(req.body.plan || '').trim().toLowerCase() : existingTenant.plan;
+
+  const businessPhone = req.body?.businessPhone !== undefined ? String(req.body.businessPhone || '').trim() : existingTenant.business_phone;
+  const businessEmail = req.body?.businessEmail !== undefined ? String(req.body.businessEmail || '').trim().toLowerCase() : existingTenant.business_email;
+  const logoUrl = req.body?.logoUrl !== undefined ? String(req.body.logoUrl || '').trim() : existingTenant.logo_url;
+  const metaBusinessId = req.body?.metaBusinessId !== undefined ? String(req.body.metaBusinessId || '').trim() : existingTenant.meta_business_id;
+  const onboardingStatus = req.body?.onboardingStatus !== undefined ? String(req.body.onboardingStatus || '').trim() : existingTenant.onboarding_status;
+
+  if (!cleanName) {
+    return res.status(400).json({ error: 'Client company name is required' });
+  }
+
+  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
+    return res.status(400).json({ error: 'Invalid tenant status' });
+  }
+
+  if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
+    return res.status(400).json({ error: 'Valid business email required' });
+  }
+
+  const result = await query(
+    `UPDATE tenants
+     SET name = $2,
+         industry = $3,
+         status = $4,
+         plan = $5,
+         business_phone = $6,
+         business_email = $7,
+         logo_url = $8,
+         meta_business_id = $9,
+         onboarding_status = $10,
+         updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      tenantId,
+      cleanName,
+      cleanIndustry || 'General',
+      cleanStatus,
+      cleanPlan || 'starter',
+      businessPhone || null,
+      businessEmail || null,
+      logoUrl || null,
+      metaBusinessId || null,
+      onboardingStatus || 'pending',
+    ],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'platform.tenant_updated',
+    entityType: 'tenant',
+    entityId: tenantId,
+    metadata: {
+      tenantId,
+      status: cleanStatus,
+      plan: cleanPlan,
+      onboardingStatus,
+    },
+  });
+
+  res.json(publicTenant(result.rows[0]));
+}));
+
+app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+
+  const cleanName = String(req.body?.name || '').trim();
+  const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+  const cleanPassword = String(req.body?.password || '');
+
+  if (!cleanName || !cleanEmail || !cleanPassword) {
+    return res.status(400).json({ error: 'Admin name, email and password are required' });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return res.status(400).json({ error: 'Valid admin email required' });
+  }
+
+  if (cleanPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  const tenantResult = await query(
+    `SELECT id, slug, status
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const tenant = tenantResult.rows[0];
+
+  if (!tenant) {
+    return res.status(404).json({ error: 'Client company not found' });
+  }
+
+  if (tenant.slug === 'platform') {
+    return res.status(400).json({ error: 'Use platform super admin setup for platform users' });
+  }
+
+  const existingUser = await query(
+    `SELECT id
+     FROM users
+     WHERE lower(email) = $1
+     LIMIT 1`,
+    [cleanEmail],
+  );
+
+  if (existingUser.rows[0]) {
+    return res.status(409).json({ error: 'User with this email already exists' });
+  }
+
+  const hash = await bcrypt.hash(cleanPassword, 10);
+
+  const result = await query(
+    `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
+     VALUES ($1, $2, $3, $4, 'admin', true)
+     RETURNING id, tenant_id, name, email, role, active`,
+    [tenantId, cleanName, cleanEmail, hash],
+  );
+
+  await query(
+    `UPDATE tenants
+     SET onboarding_status = 'admin_created',
+         updated_at = now()
+     WHERE id = $1`,
+    [tenantId],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'platform.client_admin_created',
+    entityType: 'user',
+    entityId: result.rows[0].id,
+    metadata: {
+      tenantId,
+      email: cleanEmail,
+      role: 'admin',
+    },
+  });
+
+  res.status(201).json(publicUser(result.rows[0]));
+}));
+
+app.get('/api/platform/tenants/:tenantId/status', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+
+  const tenantResult = await query(
+    `SELECT *
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const tenant = tenantResult.rows[0];
+
+  if (!tenant) {
+    return res.status(404).json({ error: 'Client company not found' });
+  }
+
+  const usersResult = await query(
+    `SELECT role, active, COUNT(*)::int AS count
+     FROM users
+     WHERE tenant_id = $1
+     GROUP BY role, active
+     ORDER BY role, active DESC`,
+    [tenantId],
+  );
+
+  const whatsappResult = await query(
+    `SELECT id, phone_number_id, display_phone_number, waba_id, active, created_at
+     FROM whatsapp_accounts
+     WHERE tenant_id = $1
+     ORDER BY created_at DESC`,
+    [tenantId],
+  );
+
+  const contactResult = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM contacts
+     WHERE tenant_id = $1`,
+    [tenantId],
+  );
+
+  const messageResult = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM messages
+     WHERE tenant_id = $1`,
+    [tenantId],
+  );
+
+  res.json({
+    tenant: publicTenant(tenant),
+    users: usersResult.rows,
+    whatsappAccounts: whatsappResult.rows.map((account) => ({
+      id: account.id,
+      phoneNumberId: maskValue(account.phone_number_id || ''),
+      displayPhoneNumber: account.display_phone_number || '',
+      wabaId: maskValue(account.waba_id || ''),
+      active: account.active,
+      createdAt: account.created_at,
+    })),
+    totals: {
+      contacts: contactResult.rows[0]?.count || 0,
+      messages: messageResult.rows[0]?.count || 0,
+    },
+  });
+}));
 
 // =========================================================
 // ROUTES — SETTINGS
@@ -6156,6 +6595,7 @@ let httpServer = null;
 async function startServer() {
   await ensureSchema();
   await ensureDefaultUsers();
+  await ensurePlatformSuperAdmin();
   await ensureDefaultWhatsAppAccountMapping();
 
   const warnings = validateRuntimeConfig();
