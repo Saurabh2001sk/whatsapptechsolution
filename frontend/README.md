@@ -69,7 +69,7 @@ PORT=10000
 NODE_ENV=production
 FRONTEND_URL=https://your-frontend-service.onrender.com
 PUBLIC_BASE_URL=https://your-backend-service.onrender.com
-DATABASE_URL=your-render-postgres-internal-url
+DATABASE_URL=your-supabase-postgres-connection-string
 JWT_SECRET=use-a-long-random-secret
 WHATSAPP_VERIFY_TOKEN=bos_verify_token_123
 WHATSAPP_ACCESS_TOKEN=your-meta-access-token
@@ -93,15 +93,19 @@ Frontend environment variable:
 VITE_API_URL=https://your-backend-service.onrender.com
 ```
 
+Auth sessions use a backend HttpOnly cookie. Do not store token or user session data in browser storage.
+
 ````md
 After backend deploy, the backend applies `backend/schema.sql` automatically on startup.
 
-For local PostgreSQL only, you may run:
+For Supabase or any remote PostgreSQL database, the backend applies `backend/schema.sql` automatically on startup. You may also run this manually from the backend service shell:
 
 ```bash
 cd backend
 npm run init-db
 ```
+
+`npm run init-db` detects remote PostgreSQL/Supabase and applies schema only. It does not try to create a database on Supabase.
 
 Meta webhook callback URL after deploy:
 
@@ -136,18 +140,18 @@ In Meta Developer Console, configure the webhook callback URL to:
 https://your-public-domain/webhook
 ```
 
-For local testing, expose `http://localhost:5000` with a tunnel such as ngrok and use:
+For deployed testing, use the Render backend webhook URL:
 
 ```text
-https://your-ngrok-url/webhook
+https://your-backend-service.onrender.com/webhook
 ```
 
 Use the same verify token that you put in `WHATSAPP_VERIFY_TOKEN`.
 
-After filling `.env`, restart backend and check:
+After filling Render environment variables, redeploy backend and check:
 
 ```text
-http://localhost:5000/health
+https://your-backend-service.onrender.com/health
 ```
 
 Then login as Admin or Manager and use the `Meta WhatsApp Setup` panel to send a test message. The recipient must be allowed by your Meta test setup or be a valid customer within your production WhatsApp Business account rules.
@@ -169,10 +173,10 @@ Then login as Admin or Manager and use the `Meta WhatsApp Setup` panel to send a
 
 PostgreSQL is required. The backend will not start if `DATABASE_URL` is missing.
 
-For local usage, create a PostgreSQL database and set:
+For Supabase usage, copy the PostgreSQL connection string from Supabase and set it on the Render backend service:
 
 ```env
-DATABASE_URL=postgres://user:password@localhost:5432/bos_whatsapp_inbox
+DATABASE_URL=postgresql://postgres.your-project-ref:your-password@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
 ```
 
-For Render usage, set `DATABASE_URL` to the Render Postgres internal database URL. The backend applies `backend/schema.sql` automatically on startup.
+For Render usage, set `DATABASE_URL` to the Supabase PostgreSQL connection string. The backend applies `backend/schema.sql` automatically on startup.

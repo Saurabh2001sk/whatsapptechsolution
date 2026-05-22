@@ -2002,3 +2002,99 @@ textarea:focus {
   font-size: 13px;
   font-weight: 900;
 }
+
+.connect-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background:
+    linear-gradient(135deg, rgba(238, 244, 241, 0.96), rgba(247, 250, 248, 0.98)),
+    repeating-linear-gradient(90deg, rgba(10, 122, 99, 0.04) 0 1px, transparent 1px 36px);
+}
+
+.connect-card {
+  width: min(620px, 100%);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 26px;
+  display: grid;
+  gap: 18px;
+  box-shadow: var(--shadow-md);
+}
+
+.connect-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.flow-list {
+  display: grid;
+  gap: 10px;
+}
+
+.flow-list p {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.flow-list b {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--green);
+  color: #fff;
+  font-size: 13px;
+}
+
+.flow-list span {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.connect-setup-warning {
+  border: 1px solid #f4b4ae;
+  border-radius: 8px;
+  background: #fff1ef;
+  color: var(--danger);
+  padding: 11px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.connect-card button {
+  border: 0;
+  border-radius: 8px;
+  min-height: 46px;
+  padding: 0 16px;
+  background: linear-gradient(135deg, var(--green), var(--green-strong));
+  color: #fff;
+  font-weight: 900;
+}
+
+.connect-card button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.connect-card .connect-logout {
+  background: #eef4f1;
+  color: var(--ink);
+}
+
+.connect-card small {
+  color: var(--muted);
+  line-height: 1.45;
+}

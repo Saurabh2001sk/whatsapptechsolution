@@ -588,6 +588,59 @@ CREATE TABLE IF NOT EXISTS whatsapp_accounts (
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_iv TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_tag TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS token_type TEXT DEFAULT 'business_integration_system_user';
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS connected_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS whatsapp_accounts_tenant_phone_idx
+ON whatsapp_accounts (tenant_id, phone_number_id);
+
+CREATE INDEX IF NOT EXISTS whatsapp_accounts_waba_idx
+ON whatsapp_accounts (waba_id);
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_iv TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS access_token_tag TEXT;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS token_type TEXT DEFAULT 'business_integration_system_user';
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS connected_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
+
+ALTER TABLE whatsapp_accounts
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS whatsapp_accounts_tenant_phone_idx
+ON whatsapp_accounts (tenant_id, phone_number_id);
+
+CREATE INDEX IF NOT EXISTS whatsapp_accounts_waba_idx
+ON whatsapp_accounts (waba_id);
 
 CREATE INDEX IF NOT EXISTS whatsapp_accounts_tenant_active_idx
 ON whatsapp_accounts (tenant_id, active);

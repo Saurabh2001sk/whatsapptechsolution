@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import {
   BarChart3,
@@ -32,9 +32,10 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '')
 const isProduction = import.meta.env.PROD
-const api = axios.create({ baseURL: apiBaseUrl })
+const configuredApiUrl = import.meta.env.VITE_API_URL || ''
+const apiBaseUrl = configuredApiUrl.replace(/\/$/, '')
+const api = axios.create({ baseURL: apiBaseUrl, withCredentials: true })
 
 function formatApiIssue(error) {
   const status = error.response?.status
@@ -218,11 +219,6 @@ function downloadCsv(filename, headers, sample) {
   URL.revokeObjectURL(link.href)
 }
 
-function setAuth(token) {
-  if (token) api.defaults.headers.common.Authorization = `Bearer ${token}`
-  else delete api.defaults.headers.common.Authorization
-}
-
 function formatMoney(value) {
   return `Rs ${Number(value || 0).toLocaleString('en-IN')}`
 }
@@ -237,9 +233,7 @@ function initials(name = '') {
 }
 
 function clearStoredSession() {
-  localStorage.removeItem('bosToken')
-  localStorage.removeItem('bosUser')
-  setAuth(null)
+  delete api.defaults.headers.common.Authorization
 }
 
 function Login({ onLogin, appSettings }) {
@@ -260,9 +254,6 @@ async function submit(event) {
       password: form.password,
     })
 
-    localStorage.setItem('bosToken', res.data.token)
-    localStorage.setItem('bosUser', JSON.stringify(res.data.user))
-    setAuth(res.data.token)
     onLogin(res.data.user)
   } catch (err) {
     setError(err.response?.data?.error || 'Login failed')
@@ -293,9 +284,168 @@ async function submit(event) {
   )
 }
 
+function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
+  const signupInfoRef = useRef({})
+  const metaAppId = onboarding?.metaAppId || import.meta.env.VITE_META_APP_ID || ''
+  const configId = onboarding?.embeddedSignupConfigId || import.meta.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID || ''
+  const hasRealMetaAppId = Boolean(metaAppId && !metaAppId.startsWith('your_') && !metaAppId.startsWith('your-'))
+  const hasRealConfigId = Boolean(configId && !configId.startsWith('your_') && !configId.startsWith('your-'))
+  const setupMessage = !hasRealMetaAppId
+    ? 'Platform Meta setup pending hai. Platform owner ko Meta App ID configure karna hoga; client ko backend access ki zarurat nahi hai.'
+    : !hasRealConfigId
+      ? 'Platform Meta setup pending hai. Platform owner ko Embedded Signup Configuration ID configure karna hoga; client ko backend access ki zarurat nahi hai.'
+      : ''
+
+  useEffect(() => {
+    function handleEmbeddedSignupMessage(event) {
+      let host = ''
+
+      try {
+        host = new URL(event.origin).hostname
+      } catch {
+        return
+      }
+
+      if (!host.endsWith('facebook.com')) return
+
+      let payload = event.data
+
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload)
+        } catch {
+          return
+        }
+      }
+
+      if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return
+
+      if (payload.event === 'FINISH' || payload.event === 'FINISH_ONLY_WABA') {
+        signupInfoRef.current = {
+          phoneNumberId: payload.data?.phone_number_id || payload.data?.phoneNumberId || '',
+          wabaId: payload.data?.waba_id || payload.data?.wabaId || '',
+          businessId: payload.data?.business_id || payload.data?.businessId || '',
+        }
+      }
+    }
+
+    window.addEventListener('message', handleEmbeddedSignupMessage)
+
+    return () => window.removeEventListener('message', handleEmbeddedSignupMessage)
+  }, [])
+
+  useEffect(() => {
+    if (!hasRealMetaAppId) return undefined
+    if (document.getElementById('facebook-jssdk')) return undefined
+
+    window.fbAsyncInit = function fbAsyncInit() {
+      window.FB.init({
+        appId: metaAppId,
+        autoLogAppEvents: true,
+        xfbml: true,
+        version: 'v24.0',
+      })
+    }
+
+    const script = document.createElement('script')
+    script.id = 'facebook-jssdk'
+    script.async = true
+    script.defer = true
+    script.crossOrigin = 'anonymous'
+    script.src = 'https://connect.facebook.net/en_US/sdk.js'
+    document.body.appendChild(script)
+
+    return undefined
+  }, [hasRealMetaAppId, metaAppId])
+
+  function startSignup() {
+    if (setupMessage) {
+      alert(setupMessage)
+      return
+    }
+
+    if (!window.FB) {
+      alert('Meta SDK is still loading. Please try again.')
+      return
+    }
+
+    signupInfoRef.current = {}
+
+    window.FB.login((response) => {
+      const code = response?.authResponse?.code
+      const phoneNumberId = signupInfoRef.current.phoneNumberId || ''
+      const wabaId = signupInfoRef.current.wabaId || ''
+
+      if (!code) {
+        alert('Meta signup was cancelled or authorization failed.')
+        return
+      }
+
+      if (!phoneNumberId || !wabaId) {
+        alert('Meta signup completed but phone number ID / WABA ID was not received. Please check Embedded Signup configuration.')
+        return
+      }
+
+      onComplete({
+        code,
+        phoneNumberId,
+        wabaId,
+      })
+    }, {
+      config_id: configId,
+      response_type: 'code',
+      override_default_response_type: true,
+      extras: {
+        setup: {},
+      },
+    })
+  }
+
+  return (
+    <main className="connect-gate">
+      <section className="connect-card">
+        <div className="login-brand">
+          <MessageCircle size={38} />
+          <div>
+            <h1>Connect Meta WhatsApp</h1>
+            <span>{onboarding?.tenant?.name || 'Your company'}</span>
+          </div>
+        </div>
+
+        <p>
+          Dashboard unlock karne ke liye apna official Meta WhatsApp Business account connect kijiye.
+          Meta login popup me credentials Meta ke paas hi rahenge. Backend sirf secure token exchange karke encrypted storage karega.
+        </p>
+
+        <div className="flow-list">
+          <p><b>1</b><span>Meta Business login / permission</span></p>
+          <p><b>2</b><span>Business portfolio, WABA aur phone number select/create</span></p>
+          <p><b>3</b><span>Backend token encrypt karke tenant ke saath save karega</span></p>
+          <p><b>4</b><span>Connection complete hone ke baad CRM dashboard unlock hoga</span></p>
+        </div>
+
+        {setupMessage && <div className="connect-setup-warning">{setupMessage}</div>}
+
+        <button type="button" onClick={startSignup} disabled={connecting}>
+          {connecting ? 'Connecting...' : 'Connect Meta WhatsApp'}
+        </button>
+
+        <button className="connect-logout" type="button" onClick={onLogout}>
+          Logout
+        </button>
+
+        <small>
+          Policy safety: marketing sirf opted-in customers ko approved templates se send hoga.
+          Free-form replies sirf 24-hour customer service window ke andar allowed hain.
+        </small>
+      </section>
+    </main>
+  )
+}
+
 function App() {
   const [user, setUser] = useState(null)
-const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getItem('bosToken')))
+const [authChecking, setAuthChecking] = useState(true)
   const [activePage, setActivePage] = useState('inbox')
   const [status, setStatus] = useState(null)
   const [dashboard, setDashboard] = useState(null)
@@ -313,6 +463,8 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
   const [whatsappConfig, setWhatsappConfig] = useState(null)
+  const [whatsappOnboarding, setWhatsappOnboarding] = useState(null)
+  const [connectingWhatsApp, setConnectingWhatsApp] = useState(false)
   const [assignmentHistory, setAssignmentHistory] = useState([])
   const [timeline, setTimeline] = useState([])
   const [auditEvents, setAuditEvents] = useState([])
@@ -404,18 +556,8 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   }, [canMonitor, isSuperAdminUser, user?.role])
 
  useEffect(() => {
-  const storedToken = localStorage.getItem('bosToken')
-
-  if (!storedToken) {
-    clearStoredSession()
-    return
-  }
-
-  setAuth(storedToken)
-
-  api.get('/api/me')
+  api.get('/api/me', { silentError: true })
     .then((res) => {
-      localStorage.setItem('bosUser', JSON.stringify(res.data))
       setUser(res.data)
     })
     .catch(() => {
@@ -449,7 +591,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   }
 
   async function loadPlatformTenants(options = {}) {
-    if (!localStorage.getItem('bosToken')) return
+    if (!user?.id) return
     if (!options.silent) setPlatformLoading(true)
     setPlatformError('')
 
@@ -578,7 +720,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   }
 
   async function loadAll(overrides = {}) {
-    if (!localStorage.getItem('bosToken')) return
+    if (!user?.id) return
     if (isSuperAdminUser) return
     const requestFilter = overrides.filter ?? filter
     const requestWindowFilter = overrides.windowFilter ?? windowFilter
@@ -587,7 +729,16 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
     setLoading(true)
     setLoadError('')
     try {
-      const calls = [
+  const calls = [
+        api.get('/api/whatsapp/onboarding').catch(() => ({
+  data: {
+    connected: false,
+    connectionMode: 'api_failed',
+    tenant: {
+      onboardingStatus: 'pending',
+    },
+  },
+})),
         api.get('/api/settings/status'),
         api.get('/api/dashboard'),
         api.get('/api/conversations', { params: { label: requestFilter, q: requestSearch, window: requestWindowFilter } }),
@@ -605,7 +756,8 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
         calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
       }
 
-      const [
+const [
+        onboardingRes,
         statusRes,
         dashRes,
         convoRes,
@@ -621,6 +773,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
         manageTemplateRes,
       ] = await Promise.all(calls)
 
+      if (onboardingRes?.data) setWhatsappOnboarding(onboardingRes.data)
       setStatus(statusRes.data)
       setDashboard(dashRes.data)
       setConversations(convoRes.data)
@@ -653,9 +806,7 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
       const message = err.response?.data?.error || err.message || 'Unable to load CRM data'
       setLoadError(message)
       if (err.response?.status === 401) {
-        localStorage.removeItem('bosToken')
-        localStorage.removeItem('bosUser')
-        setAuth(null)
+        clearStoredSession()
         setUser(null)
       }
     } finally {
@@ -710,9 +861,8 @@ const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getI
   }, [selected?.id])
 
 function logout() {
-  localStorage.removeItem('bosToken')
-  localStorage.removeItem('bosUser')
-  setAuth(null)
+  api.post('/api/auth/logout', {}, { silentError: true }).catch(() => {})
+  clearStoredSession()
   setUser(null)
   setSelectedId(null)
   setMessages([])
@@ -765,7 +915,41 @@ if (authChecking) {
   )
 }
 
+async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
+  setConnectingWhatsApp(true)
+
+  try {
+    await api.post('/api/whatsapp/embedded-signup/complete', {
+      code,
+      phoneNumberId,
+      wabaId,
+    })
+
+    notify('Meta WhatsApp connected successfully')
+    await loadAll()
+  } catch (err) {
+    notify(err.response?.data?.error || err.message || 'Meta WhatsApp connection failed', 'error')
+  } finally {
+    setConnectingWhatsApp(false)
+  }
+}
+
 if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
+
+if (
+  user &&
+  !isSuperAdminUser &&
+  (!whatsappOnboarding || !whatsappOnboarding.connected)
+) {
+  return (
+    <WhatsAppConnectGate
+      onboarding={whatsappOnboarding}
+      connecting={connectingWhatsApp}
+      onComplete={completeEmbeddedSignup}
+      onLogout={logout}
+    />
+  )
+}
 
 function showPage(page, pageFilter = {}) {
   const platformPages = ['platformTenants', 'platformStatus']

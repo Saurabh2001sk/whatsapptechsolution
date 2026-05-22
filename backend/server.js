@@ -87,6 +87,7 @@ app.use(cors({
     if (!origin || allowedOrigins.has(origin)) return callback(null, true);
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
+  credentials: true,
 }));
 
 app.set('trust proxy', 1);
@@ -147,7 +148,7 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
     return res.status(404).json({ error: 'Media file missing' });
   }
 
-  const restoredMedia = await downloadWhatsAppMedia(mediaMessage.media_id, mediaMessage.mime_type || '');
+  const restoredMedia = await downloadWhatsAppMedia(mediaMessage.media_id, mediaMessage.mime_type || '', req.user.tenantId);
 
   if (!restoredMedia.mediaUrl || !restoredMedia.mediaLocalPath || !fs.existsSync(restoredMedia.mediaLocalPath)) {
     return res.status(404).json({ error: 'Media file missing' });
@@ -242,6 +243,63 @@ function maskValue(value) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function getTokenEncryptionKey() {
+  const key = String(process.env.META_TOKEN_ENCRYPTION_KEY || '').trim();
+
+  if (!/^[a-f0-9]{64}$/i.test(key)) {
+    throw new Error('META_TOKEN_ENCRYPTION_KEY must be a 64-character hex string');
+  }
+
+  return Buffer.from(key, 'hex');
+}
+
+function encryptSecret(value) {
+  const plainText = String(value || '');
+
+  if (!plainText) {
+    return {
+      encrypted: null,
+      iv: null,
+      tag: null,
+    };
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getTokenEncryptionKey(), iv);
+
+  const encrypted = Buffer.concat([
+    cipher.update(plainText, 'utf8'),
+    cipher.final(),
+  ]);
+
+  const tag = cipher.getAuthTag();
+
+  return {
+    encrypted: encrypted.toString('base64'),
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+  };
+}
+
+function decryptSecret({ encrypted, iv, tag }) {
+  if (!encrypted || !iv || !tag) return '';
+
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    getTokenEncryptionKey(),
+    Buffer.from(iv, 'base64'),
+  );
+
+  decipher.setAuthTag(Buffer.from(tag, 'base64'));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(encrypted, 'base64')),
+    decipher.final(),
+  ]);
+
+  return decrypted.toString('utf8');
+}
+
 function getLoginAttemptKey(req, email) {
   return `${req.ip || req.headers['x-forwarded-for'] || 'unknown'}:${email}`;
 }
@@ -278,6 +336,48 @@ function recordFailedLogin(req, email) {
 
 function clearLoginAttempts(req, email) {
   loginAttempts.delete(getLoginAttemptKey(req, email));
+}
+
+function getCookie(req, name) {
+  const cookies = String(req.headers.cookie || '')
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const cookie of cookies) {
+    const separatorIndex = cookie.indexOf('=');
+    if (separatorIndex === -1) continue;
+
+    const key = cookie.slice(0, separatorIndex);
+    const value = cookie.slice(separatorIndex + 1);
+
+    if (key === name) return decodeURIComponent(value);
+  }
+
+  return '';
+}
+
+function authCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: 12 * 60 * 60 * 1000,
+    path: '/',
+  };
+}
+
+function setAuthCookie(res, user) {
+  res.cookie('bosAuthToken', signUser(user), authCookieOptions());
+}
+
+function clearAuthCookie(res) {
+  res.clearCookie('bosAuthToken', {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    path: '/',
+  });
 }
 
 function cleanList(value, fallback) {
@@ -329,7 +429,9 @@ function validateRuntimeConfig() {
 
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = header.startsWith('Bearer ')
+    ? header.slice(7)
+    : getCookie(req, 'bosAuthToken');
 
   if (!token) {
     return res.status(401).json({ error: 'Login required' });
@@ -1533,18 +1635,21 @@ function extensionFromMime(mimeType = '') {
   return 'bin';
 }
 
-async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '') {
+async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = null) {
   if (!mediaId) {
     console.warn('WA media skipped: mediaId missing');
     return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
 
-  if (!isWhatsAppConfigured()) {
-    console.warn('WA media skipped: WhatsApp token/phone number not configured');
+  const config = tenantId ? await getWhatsAppSendConfig(tenantId) : null;
+  const accessToken = config?.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+
+  if (!hasRealValue(accessToken)) {
+    console.warn('WA media skipped: WhatsApp token not configured for tenant');
     return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
 
-  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  const apiVersion = config?.apiVersion || process.env.WHATSAPP_API_VERSION || 'v24.0';
   const maxAttempts = Number(process.env.WHATSAPP_MEDIA_MAX_ATTEMPTS || 3);
   const timeoutMs = Number(process.env.WHATSAPP_MEDIA_TIMEOUT_MS || 15000);
 
@@ -1555,7 +1660,7 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '') {
       const metaRes = await axios.get(
         `https://graph.facebook.com/${apiVersion}/${mediaId}`,
         {
-          headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+         headers: { Authorization: `Bearer ${accessToken}` },
           timeout: timeoutMs,
         },
       );
@@ -1581,7 +1686,7 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '') {
 
       const fileRes = await axios.get(downloadUrl, {
         responseType: 'arraybuffer',
-        headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
         timeout: timeoutMs,
         maxContentLength: Number(process.env.WHATSAPP_MEDIA_MAX_BYTES || 25 * 1024 * 1024),
         maxBodyLength: Number(process.env.WHATSAPP_MEDIA_MAX_BYTES || 25 * 1024 * 1024),
@@ -1916,7 +2021,7 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
   let downloadedMedia = { mediaUrl: null, mediaLocalPath: null, mimeType: normalized.mimeType, fileSize: null };
   if (normalized.mediaId) {
     try {
-      downloadedMedia = await downloadWhatsAppMedia(normalized.mediaId, normalized.mimeType);
+      downloadedMedia = await downloadWhatsAppMedia(normalized.mediaId, normalized.mimeType, tenantId);
     } catch (error) {
       console.error('WhatsApp media download failed:', error.response?.data || error.message);
     }
@@ -2101,18 +2206,40 @@ async function createSalesOrder({ tenantId, contactId, notes, items, source = 'W
 
 async function getWhatsAppSendConfig(tenantId) {
   const accountResult = await query(
-    `SELECT phone_number_id
+    `SELECT
+       phone_number_id,
+       access_token_encrypted,
+       access_token_iv,
+       access_token_tag
      FROM whatsapp_accounts
      WHERE tenant_id = $1
        AND active = true
-     ORDER BY created_at DESC
+     ORDER BY connected_at DESC NULLS LAST, created_at DESC
      LIMIT 1`,
     [tenantId],
   );
 
   const account = accountResult.rows[0];
 
-  const phoneNumberId = account?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (account?.phone_number_id && account?.access_token_encrypted) {
+    const accessToken = decryptSecret({
+      encrypted: account.access_token_encrypted,
+      iv: account.access_token_iv,
+      tag: account.access_token_tag,
+    });
+
+    if (!hasRealValue(accessToken)) {
+      return null;
+    }
+
+    return {
+      apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
+      phoneNumberId: account.phone_number_id,
+      accessToken,
+    };
+  }
+
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
 
   if (!hasRealValue(phoneNumberId) || !hasRealValue(accessToken)) {
@@ -2120,7 +2247,7 @@ async function getWhatsAppSendConfig(tenantId) {
   }
 
   return {
-    apiVersion: process.env.WHATSAPP_API_VERSION || 'v20.0',
+    apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
     phoneNumberId,
     accessToken,
   };
@@ -3116,16 +3243,19 @@ async function ensurePlatformSuperAdmin() {
   );
 
   if (existingResult.rows[0]) {
+    const hash = await bcrypt.hash(password, 10);
+
     await query(
       `UPDATE users
        SET tenant_id = $2,
            role = 'super_admin',
-           active = true
+           active = true,
+           password_hash = $3
        WHERE lower(email) = $1`,
-      [email, platformTenantId],
+      [email, platformTenantId, hash],
     );
 
-    console.log('Platform super admin already exists and was verified active');
+    console.log('Platform super admin already exists and was verified active with current environment password');
     return;
   }
 
@@ -3263,13 +3393,19 @@ app.post('/api/auth/login', rateLimit({
     return res.status(403).json({ error: 'Company account is inactive' });
   }
 
+  setAuthCookie(res, user);
+
   return res.json({
-    token: signUser(user),
     user: publicUser(user),
   });
 }));
 
 app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
+
+app.post('/api/auth/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
 
 // =========================================================
 // ROUTES — PLATFORM / SUPER ADMIN
@@ -3796,6 +3932,265 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
     testNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
     callbackUrl,
     webhookPath: '/webhook',
+  });
+}));
+
+app.get('/api/whatsapp/onboarding', requireAuth, asyncHandler(async (req, res) => {
+  const tenantResult = await query(
+    `SELECT id, name, slug, onboarding_status
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [req.user.tenantId],
+  );
+
+  const tenant = tenantResult.rows[0];
+
+  if (!tenant) {
+    return res.status(404).json({ error: 'Company not found' });
+  }
+
+  const accountResult = await query(
+    `SELECT
+       id,
+       phone_number_id,
+       display_phone_number,
+       waba_id,
+       active,
+       access_token_encrypted,
+       access_token_iv,
+       access_token_tag,
+       connected_at
+     FROM whatsapp_accounts
+     WHERE tenant_id = $1
+       AND active = true
+     ORDER BY connected_at DESC NULLS LAST, created_at DESC
+     LIMIT 1`,
+    [req.user.tenantId],
+  );
+
+  const account = accountResult.rows[0] || null;
+
+  const securelyConnected = Boolean(
+    account?.phone_number_id &&
+    account?.waba_id &&
+    account?.access_token_encrypted &&
+    account?.access_token_iv &&
+    account?.access_token_tag &&
+    account?.connected_at
+  );
+
+  res.json({
+    connected: securelyConnected,
+    connectionMode: securelyConnected ? 'embedded_signup' : 'not_connected',
+    metaAppId: process.env.META_APP_ID || '',
+    embeddedSignupConfigId: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || '',
+    tenant: {
+      id: tenant.id,
+      name: tenant.name,
+      slug: tenant.slug,
+      onboardingStatus: securelyConnected ? 'whatsapp_mapped' : tenant.onboarding_status || 'pending',
+    },
+    whatsappAccount: account
+      ? {
+          id: account.id,
+          phoneNumberId: maskValue(account.phone_number_id || ''),
+          displayPhoneNumber: account.display_phone_number || '',
+          wabaId: maskValue(account.waba_id || ''),
+          active: account.active,
+          connected: securelyConnected,
+          connectedAt: account.connected_at,
+        }
+      : null,
+  });
+}));
+
+app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
+  bucketName: 'embedded-signup-complete',
+  maxRequests: 10,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const code = String(req.body?.code || '').trim();
+  const phoneNumberId = String(req.body?.phoneNumberId || '').trim();
+  const wabaId = String(req.body?.wabaId || '').trim();
+
+  if (!code || !phoneNumberId || !wabaId) {
+    return res.status(400).json({
+      error: 'Meta signup code, phone number ID and WABA ID are required',
+    });
+  }
+
+  if (!hasRealValue(process.env.META_APP_ID) || !hasRealValue(process.env.META_APP_SECRET)) {
+    return res.status(500).json({
+      error: 'Meta App ID/App Secret missing on backend',
+    });
+  }
+
+  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v24.0';
+
+  const tokenRes = await axios.get(
+    `https://graph.facebook.com/${apiVersion}/oauth/access_token`,
+    {
+      params: {
+        client_id: process.env.META_APP_ID,
+        client_secret: process.env.META_APP_SECRET,
+        code,
+      },
+      timeout: 15000,
+    },
+  );
+
+  const accessToken = tokenRes.data?.access_token;
+
+  if (!accessToken) {
+    return res.status(502).json({
+      error: 'Meta did not return access token',
+    });
+  }
+
+  let displayPhoneNumber = '';
+
+  try {
+    const phoneRes = await axios.get(
+      `https://graph.facebook.com/${apiVersion}/${phoneNumberId}`,
+      {
+        params: {
+          fields: 'display_phone_number,verified_name',
+        },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        timeout: 15000,
+      },
+    );
+
+    displayPhoneNumber = phoneRes.data?.display_phone_number || phoneRes.data?.verified_name || '';
+  } catch (error) {
+    console.error('Meta phone lookup failed:', {
+      tenantId: req.user.tenantId,
+      phoneNumberId: maskValue(phoneNumberId),
+      status: error.response?.status || null,
+      message: error.response?.data?.error?.message || error.message,
+    });
+  }
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/${apiVersion}/${wabaId}/subscribed_apps`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        timeout: 15000,
+      },
+    );
+  } catch (error) {
+    console.error('Meta subscribed_apps failed:', {
+      tenantId: req.user.tenantId,
+      wabaId: maskValue(wabaId),
+      status: error.response?.status || null,
+      message: error.response?.data?.error?.message || error.message,
+    });
+  }
+
+  const existing = await query(
+    `SELECT whatsapp_accounts.tenant_id, tenants.slug
+     FROM whatsapp_accounts
+     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
+     WHERE whatsapp_accounts.phone_number_id = $1
+     LIMIT 1`,
+    [phoneNumberId],
+  );
+
+  const existingAccount = existing.rows[0];
+
+  if (existingAccount && existingAccount.tenant_id !== req.user.tenantId) {
+    return res.status(409).json({
+      error: `This WhatsApp phone number is already connected to tenant: ${existingAccount.slug}`,
+    });
+  }
+
+  const encryptedToken = encryptSecret(accessToken);
+
+  const accountResult = await query(
+    `INSERT INTO whatsapp_accounts (
+       tenant_id,
+       phone_number_id,
+       display_phone_number,
+       waba_id,
+       access_token_encrypted,
+       access_token_iv,
+       access_token_tag,
+       token_type,
+       active,
+       connected_by,
+       connected_at,
+       updated_at
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'business_integration_system_user',true,$8,now(),now())
+     ON CONFLICT (phone_number_id)
+     DO UPDATE SET
+       tenant_id = EXCLUDED.tenant_id,
+       display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
+       waba_id = EXCLUDED.waba_id,
+       access_token_encrypted = EXCLUDED.access_token_encrypted,
+       access_token_iv = EXCLUDED.access_token_iv,
+       access_token_tag = EXCLUDED.access_token_tag,
+       token_type = EXCLUDED.token_type,
+       active = true,
+       connected_by = EXCLUDED.connected_by,
+       connected_at = now(),
+       updated_at = now()
+     RETURNING id, phone_number_id, display_phone_number, waba_id, active, connected_at`,
+    [
+      req.user.tenantId,
+      phoneNumberId,
+      displayPhoneNumber || null,
+      wabaId,
+      encryptedToken.encrypted,
+      encryptedToken.iv,
+      encryptedToken.tag,
+      req.user.id,
+    ],
+  );
+
+  await query(
+    `UPDATE tenants
+     SET onboarding_status = 'whatsapp_mapped',
+         meta_business_id = COALESCE(NULLIF($2, ''), meta_business_id),
+         updated_at = now()
+     WHERE id = $1`,
+    [req.user.tenantId, wabaId],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'whatsapp.embedded_signup_connected',
+    entityType: 'whatsapp_account',
+    entityId: accountResult.rows[0].id,
+    metadata: {
+      phoneNumberId: maskValue(phoneNumberId),
+      wabaId: maskValue(wabaId),
+      displayPhoneNumber,
+    },
+  });
+
+  res.json({
+    ok: true,
+    account: {
+      id: accountResult.rows[0].id,
+      phoneNumberId: maskValue(accountResult.rows[0].phone_number_id || ''),
+      displayPhoneNumber: accountResult.rows[0].display_phone_number || '',
+      wabaId: maskValue(accountResult.rows[0].waba_id || ''),
+      active: accountResult.rows[0].active,
+      connectedAt: accountResult.rows[0].connected_at,
+    },
   });
 }));
 
