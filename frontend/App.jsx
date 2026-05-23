@@ -286,15 +286,45 @@ async function submit(event) {
 
 function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
   const signupInfoRef = useRef({})
+  const authCodeRef = useRef('')
+  const signupTimeoutRef = useRef(null)
+
   const metaAppId = onboarding?.metaAppId || import.meta.env.VITE_META_APP_ID || ''
   const configId = onboarding?.embeddedSignupConfigId || import.meta.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID || ''
+
   const hasRealMetaAppId = Boolean(metaAppId && !metaAppId.startsWith('your_') && !metaAppId.startsWith('your-'))
   const hasRealConfigId = Boolean(configId && !configId.startsWith('your_') && !configId.startsWith('your-'))
+
   const setupMessage = !hasRealMetaAppId
     ? 'Platform Meta setup pending hai. Platform owner ko Meta App ID configure karna hoga; client ko backend access ki zarurat nahi hai.'
     : !hasRealConfigId
       ? 'Platform Meta setup pending hai. Platform owner ko Embedded Signup Configuration ID configure karna hoga; client ko backend access ki zarurat nahi hai.'
       : ''
+
+  function clearSignupTimeout() {
+    if (signupTimeoutRef.current) {
+      window.clearTimeout(signupTimeoutRef.current)
+      signupTimeoutRef.current = null
+    }
+  }
+
+  async function completeIfReady(nextInfo = {}) {
+    const code = authCodeRef.current || ''
+    const phoneNumberId = nextInfo.phoneNumberId || signupInfoRef.current.phoneNumberId || ''
+    const wabaId = nextInfo.wabaId || signupInfoRef.current.wabaId || ''
+
+    if (!code || !phoneNumberId || !wabaId) return false
+
+    clearSignupTimeout()
+
+    await onComplete({
+      code,
+      phoneNumberId,
+      wabaId,
+    })
+
+    return true
+  }
 
   useEffect(() => {
     function handleEmbeddedSignupMessage(event) {
@@ -320,18 +350,53 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 
       if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return
 
+      console.log('WA Embedded Signup event:', payload)
+
       if (payload.event === 'FINISH' || payload.event === 'FINISH_ONLY_WABA') {
-        signupInfoRef.current = {
-          phoneNumberId: payload.data?.phone_number_id || payload.data?.phoneNumberId || '',
-          wabaId: payload.data?.waba_id || payload.data?.wabaId || '',
-          businessId: payload.data?.business_id || payload.data?.businessId || '',
+        const nextInfo = {
+          phoneNumberId:
+            payload.data?.phone_number_id ||
+            payload.data?.phoneNumberId ||
+            payload.data?.phone_number?.id ||
+            payload.data?.phoneNumber?.id ||
+            '',
+          wabaId:
+            payload.data?.waba_id ||
+            payload.data?.wabaId ||
+            payload.data?.whatsapp_business_account_id ||
+            payload.data?.whatsappBusinessAccountId ||
+            '',
+          businessId:
+            payload.data?.business_id ||
+            payload.data?.businessId ||
+            '',
         }
+
+        signupInfoRef.current = nextInfo
+
+        completeIfReady(nextInfo).catch((error) => {
+          console.error('Embedded signup completion failed:', error)
+        })
+      }
+
+      if (payload.event === 'CANCEL') {
+        clearSignupTimeout()
+        alert('Meta signup was cancelled.')
+      }
+
+      if (payload.event === 'ERROR') {
+        clearSignupTimeout()
+        console.error('WA Embedded Signup error:', payload)
+        alert(payload.data?.error_message || payload.data?.message || 'Meta signup failed.')
       }
     }
 
     window.addEventListener('message', handleEmbeddedSignupMessage)
 
-    return () => window.removeEventListener('message', handleEmbeddedSignupMessage)
+    return () => {
+      clearSignupTimeout()
+      window.removeEventListener('message', handleEmbeddedSignupMessage)
+    }
   }, [])
 
   useEffect(() => {
@@ -370,32 +435,44 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
     }
 
     signupInfoRef.current = {}
+    authCodeRef.current = ''
+    clearSignupTimeout()
 
     window.FB.login((response) => {
-      const code = response?.authResponse?.code
-      const phoneNumberId = signupInfoRef.current.phoneNumberId || ''
-      const wabaId = signupInfoRef.current.wabaId || ''
+      const code = response?.authResponse?.code || ''
 
       if (!code) {
+        clearSignupTimeout()
         alert('Meta signup was cancelled or authorization failed.')
         return
       }
 
-      if (!phoneNumberId || !wabaId) {
-        alert('Meta signup completed but phone number ID / WABA ID was not received. Please check Embedded Signup configuration.')
-        return
-      }
+      authCodeRef.current = code
 
-      onComplete({
-        code,
-        phoneNumberId,
-        wabaId,
+      completeIfReady().catch((error) => {
+        console.error('Embedded signup completion failed:', error)
       })
+
+      signupTimeoutRef.current = window.setTimeout(() => {
+        const phoneNumberId = signupInfoRef.current.phoneNumberId || ''
+        const wabaId = signupInfoRef.current.wabaId || ''
+
+        if (!phoneNumberId || !wabaId) {
+          console.error('WA Embedded Signup missing IDs:', {
+            signupInfo: signupInfoRef.current,
+            hasCode: Boolean(authCodeRef.current),
+          })
+
+          alert('Meta signup completed but phone number ID / WABA ID was not received. Please click Finish in the Meta popup. If it still fails, check Embedded Signup configuration/session info version.')
+        }
+      }, 12000)
     }, {
       config_id: configId,
       response_type: 'code',
       override_default_response_type: true,
       extras: {
+        feature: 'whatsapp_embedded_signup',
+        sessionInfoVersion: '3',
         setup: {},
       },
     })
@@ -1533,8 +1610,67 @@ async function saveCustomization(event) {
         {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
         {!isSuperAdminUser && activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {!isSuperAdminUser && activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
         {!isSuperAdminUser && activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
-        {!isSuperAdminUser && activePage === 'settings' && canMonitor && <SettingsPage status={status} whatsappConfig={whatsappConfig} testMessage={testMessage} setTestMessage={setTestMessage} testResult={testResult} onTest={sendTestMessage} onMapPhone={mapCurrentWhatsAppPhone} simulator={simulator} setSimulator={setSimulator} onSimulate={simulateInbound} customForm={customForm} setCustomForm={setCustomForm} onSaveCustomization={saveCustomization} settingsSaved={settingsSaved} templates={managedTemplates} templateForm={templateForm} setTemplateForm={setTemplateForm} editingTemplateId={editingTemplateId} onSaveTemplate={saveTemplate} onEditTemplate={editTemplate} onToggleTemplate={toggleTemplate} onCancelTemplateEdit={cancelTemplateEdit} userRole={user.role} isProduction={isProduction} />}
-        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
+{!isSuperAdminUser && activePage === 'connectWhatsApp' && user.role === 'admin' && (
+  <WhatsAppConnectGate
+    onboarding={whatsappOnboarding}
+    connecting={connectingWhatsApp}
+    onComplete={completeEmbeddedSignup}
+    onLogout={logout}
+  />
+)}
+
+{!isSuperAdminUser && activePage === 'settings' && canMonitor && (
+  <>
+    {whatsappOnboarding && !whatsappOnboarding.connected && user.role === 'admin' && (
+      <div className="setup-card">
+        <h3>Meta WhatsApp Embedded Signup</h3>
+        <p>
+          This company is not connected through Meta Embedded Signup yet.
+          Connect official WhatsApp Business API to unlock production messaging.
+        </p>
+        <div className="inline-actions">
+          <button
+            type="button"
+            onClick={() => setActivePage('connectWhatsApp')}
+          >
+            Connect Meta WhatsApp
+          </button>
+        </div>
+      </div>
+    )}
+
+    <SettingsPage
+      status={status}
+      whatsappConfig={whatsappConfig}
+      testMessage={testMessage}
+      setTestMessage={setTestMessage}
+      testResult={testResult}
+      onTest={sendTestMessage}
+      onMapPhone={mapCurrentWhatsAppPhone}
+      simulator={simulator}
+      setSimulator={setSimulator}
+      onSimulate={simulateInbound}
+      customForm={customForm}
+      setCustomForm={setCustomForm}
+      onSaveCustomization={saveCustomization}
+      settingsSaved={settingsSaved}
+      templates={managedTemplates}
+      templateForm={templateForm}
+      setTemplateForm={setTemplateForm}
+      editingTemplateId={editingTemplateId}
+      onSaveTemplate={saveTemplate}
+      onEditTemplate={editTemplate}
+      onToggleTemplate={toggleTemplate}
+      onCancelTemplateEdit={cancelTemplateEdit}
+      userRole={user.role}
+      knowledgeForm={knowledgeForm}
+      setKnowledgeForm={setKnowledgeForm}
+      knowledgeItems={knowledgeItems}
+      onSaveKnowledge={saveKnowledgeItem}
+      onDeleteKnowledge={deleteKnowledgeItem}
+    />
+  </>
+)}        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
         {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
