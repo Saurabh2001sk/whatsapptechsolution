@@ -793,15 +793,7 @@ const [authChecking, setAuthChecking] = useState(true)
     }
   }
 
-  useEffect(() => {
-    function showIssueToast(text) {
-      setNotice({ text, type: 'error' })
-      window.setTimeout(() => {
-        setNotice((current) => (current?.text === text ? null : current))
-      }, 8000)
-    }
-
-      async function removeClientAccess(tenant) {
+  async function removeClientAccess(tenant) {
     if (!tenant?.id) {
       notify('Select a client company first', 'error')
       return
@@ -824,6 +816,14 @@ const [authChecking, setAuthChecking] = useState(true)
       notify(apiErrorMessage(err, 'Unable to remove client access'), 'error')
     }
   }
+
+  useEffect(() => {
+    function showIssueToast(text) {
+      setNotice({ text, type: 'error' })
+      window.setTimeout(() => {
+        setNotice((current) => (current?.text === text ? null : current))
+      }, 8000)
+    }
 
     function showApiIssue(event) {
       showIssueToast(event.detail?.message || 'Frontend/API issue detected')
