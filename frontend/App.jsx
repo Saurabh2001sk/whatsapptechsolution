@@ -613,6 +613,18 @@ const [authChecking, setAuthChecking] = useState(true)
       return [
         { id: 'platformTenants', label: 'Clients', icon: Building2 },
         { id: 'platformStatus', label: 'Status', icon: Activity },
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'inbox', label: 'Inbox', icon: Inbox },
+        { id: 'new', label: 'Enquiries', icon: Bell },
+        { id: 'sales', label: 'Pipeline', icon: Activity },
+        { id: 'inventory', label: 'Inventory', icon: Boxes },
+        { id: 'bot', label: 'Automation', icon: Sparkles },
+        { id: 'quotes', label: 'Quotes', icon: ClipboardList },
+        { id: 'orders', label: 'Orders', icon: ShoppingCart },
+        { id: 'activeOrders', label: 'Active', icon: Clock3 },
+        { id: 'settings', label: 'Settings', icon: Settings },
+        { id: 'audit', label: 'Audit', icon: Shield },
+        { id: 'users', label: 'Users', icon: Users },
       ]
     }
 
@@ -757,7 +769,7 @@ const [authChecking, setAuthChecking] = useState(true)
     loadPlatformTenantStatus(tenantId)
   }
 
-    async function enterClientCrm(tenantId) {
+  async function enterClientCrm(tenantId, targetPage = 'dashboard') {
     if (!tenantId) {
       notify('Select a client company first', 'error')
       return
@@ -768,7 +780,7 @@ const [authChecking, setAuthChecking] = useState(true)
       notify(`Entered ${res.data.tenant?.name || 'client'} CRM for testing`)
 
       setUser(res.data.user)
-      setActivePage('dashboard')
+      setActivePage(targetPage)
       setSelectedPlatformTenantId('')
       setPlatformTenants([])
       setPlatformStatus(null)
@@ -1055,10 +1067,40 @@ if (
 
 function showPage(page, pageFilter = {}) {
   const platformPages = ['platformTenants', 'platformStatus']
+  const clientPreviewPages = [
+    'dashboard',
+    'inbox',
+    'new',
+    'sales',
+    'inventory',
+    'bot',
+    'quotes',
+    'orders',
+    'activeOrders',
+    'settings',
+    'audit',
+    'users',
+  ]
   const monitorOnlyPages = ['settings', 'audit']
   const adminOnlyPages = ['users']
 
   if (isSuperAdminUser) {
+    if (clientPreviewPages.includes(page)) {
+      const targetTenantId =
+        selectedPlatformTenantId ||
+        platformTenants.find((tenant) => tenant.slug !== 'platform' && tenant.status === 'active')?.id ||
+        platformTenants.find((tenant) => tenant.slug !== 'platform')?.id
+
+      if (!targetTenantId) {
+        notify('Create or select an active client company first', 'error')
+        setActivePage('platformTenants')
+        return
+      }
+
+      enterClientCrm(targetTenantId, page)
+      return
+    }
+
     if (!platformPages.includes(page)) {
       notify('Super Admin uses platform routes only', 'error')
       setActivePage('platformTenants')
@@ -1874,7 +1916,7 @@ function PlatformPage({
       <div className="workspace-head">
         <div>
           <h2>Client Company Control</h2>
-          <span>Create client companies, create the first admin, and verify WhatsApp/account status.</span>
+        <span>Create client companies, create the first admin, verify WhatsApp/account status, and enter client CRM for testing. Build: enter-crm-v2</span>
         </div>
       </div>
 
