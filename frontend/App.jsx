@@ -472,6 +472,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
       override_default_response_type: true,
       extras: {
         feature: 'whatsapp_embedded_signup',
+        featureType: 'whatsapp_business_app_onboarding',
         sessionInfoVersion: '3',
         setup: {},
       },
@@ -754,6 +755,30 @@ const [authChecking, setAuthChecking] = useState(true)
     setClientAdminForm((current) => ({ ...current, tenantId }))
     setActivePage('platformStatus')
     loadPlatformTenantStatus(tenantId)
+  }
+
+    async function enterClientCrm(tenantId) {
+    if (!tenantId) {
+      notify('Select a client company first', 'error')
+      return
+    }
+
+    try {
+      const res = await api.post(`/api/platform/tenants/${tenantId}/enter-crm`)
+      notify(`Entered ${res.data.tenant?.name || 'client'} CRM for testing`)
+
+      setUser(res.data.user)
+      setActivePage('dashboard')
+      setSelectedPlatformTenantId('')
+      setPlatformTenants([])
+      setPlatformStatus(null)
+      setSelectedId(null)
+      setMessages([])
+      setConversations([])
+      await loadAll()
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Unable to enter client CRM'), 'error')
+    }
   }
 
   useEffect(() => {
@@ -1581,6 +1606,7 @@ async function saveCustomization(event) {
             onCreateClientAdmin={createPlatformClientAdmin}
             onOpenStatus={openPlatformStatus}
             onLoadStatus={loadPlatformTenantStatus}
+            onEnterClientCrm={enterClientCrm}
           />
         )}
 
@@ -1636,6 +1662,41 @@ async function saveCustomization(event) {
             Connect Meta WhatsApp
           </button>
         </div>
+      </div>
+    )}c
+
+        {whatsappOnboarding?.connected && whatsappOnboarding?.whatsappAccount && (
+      <div className="setup-card">
+        <h3>Meta WhatsApp Connected</h3>
+
+        <div className="setup-grid">
+          <span className="ok">Connected</span>
+          <span className={whatsappOnboarding.whatsappAccount.active ? 'ok' : 'warn'}>
+            {whatsappOnboarding.whatsappAccount.active ? 'Active' : 'Inactive'}
+          </span>
+        </div>
+
+        <p className="setup-copy">
+          Phone: {whatsappOnboarding.whatsappAccount.displayPhoneNumber || '-'}
+        </p>
+
+        <p className="setup-copy">
+          Phone Number ID: {whatsappOnboarding.whatsappAccount.phoneNumberId || '-'}
+        </p>
+
+        <p className="setup-copy">
+          WABA ID: {whatsappOnboarding.whatsappAccount.wabaId || '-'}
+        </p>
+
+        <p className="setup-copy">
+          Connected At: {whatsappOnboarding.whatsappAccount.connectedAt
+            ? new Date(whatsappOnboarding.whatsappAccount.connectedAt).toLocaleString()
+            : '-'}
+        </p>
+
+        <small className="setup-copy">
+          Tokens are stored securely on backend only. Access token is never exposed to frontend.
+        </small>
       </div>
     )}
 
@@ -1796,6 +1857,7 @@ function PlatformPage({
   onCreateClientAdmin,
   onOpenStatus,
   onLoadStatus,
+  onEnterClientCrm,
 }) {
   const clientTenants = tenants.filter((tenant) => tenant.slug !== 'platform')
   const selectedTenant = clientTenants.find((tenant) => tenant.id === selectedTenantId) || clientTenants[0]
@@ -1873,6 +1935,14 @@ function PlatformPage({
                 <i>{tenant.onboardingStatus || 'pending'}</i>
                 <span>{tenant.activeUserCount || 0}/{tenant.userCount || 0} users</span>
                 <button type="button" onClick={() => onOpenStatus(tenant.id)}>Status</button>
+                <button
+                  className="platform-enter-btn"
+                  type="button"
+                  onClick={() => onEnterClientCrm(tenant.id)}
+                  disabled={tenant.status !== 'active'}
+                >
+                  Enter CRM
+                </button>
               </div>
             ))}
           </div>

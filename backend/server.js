@@ -3676,6 +3676,78 @@ app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin
   res.status(201).json(publicUser(result.rows[0]));
 }));
 
+app.post('/api/platform/tenants/:tenantId/enter-crm', requireAuth, requireSuperAdmin, rateLimit({
+  bucketName: 'platform-enter-client-crm',
+  maxRequests: 20,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+
+  const tenantResult = await query(
+    `SELECT id, slug, name, status
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const tenant = tenantResult.rows[0];
+
+  if (!tenant) {
+    return res.status(404).json({ error: 'Client company not found' });
+  }
+
+  if (tenant.slug === 'platform') {
+    return res.status(400).json({ error: 'Platform tenant cannot be opened as client CRM' });
+  }
+
+  if (tenant.status !== 'active') {
+    return res.status(400).json({ error: 'Client company is not active' });
+  }
+
+  const adminResult = await query(
+    `SELECT id, tenant_id, name, email, role, active
+     FROM users
+     WHERE tenant_id = $1
+       AND role = 'admin'
+       AND active = true
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const clientAdmin = adminResult.rows[0];
+
+  if (!clientAdmin) {
+    return res.status(400).json({
+      error: 'No active client admin found. Create first client admin before opening CRM.',
+    });
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'platform.enter_client_crm',
+    entityType: 'tenant',
+    entityId: tenant.id,
+    metadata: {
+      clientTenantId: tenant.id,
+      clientTenantName: tenant.name,
+      clientAdminUserId: clientAdmin.id,
+      clientAdminEmail: clientAdmin.email,
+      reason: 'Super admin entered client CRM for setup/testing/video verification',
+    },
+  });
+
+  setAuthCookie(res, clientAdmin);
+
+  res.json({
+    user: publicUser(clientAdmin),
+    supportMode: true,
+    tenant: publicTenant(tenant),
+  });
+}));
+
 app.get('/api/platform/tenants/:tenantId/status', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
   const tenantId = req.params.tenantId;
 

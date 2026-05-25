@@ -1639,7 +1639,7 @@ textarea:focus {
   background: #fff;
   padding: 12px;
   display: grid;
-  grid-template-columns: minmax(240px, 1.6fr) auto auto auto auto;
+  grid-template-columns: minmax(240px, 1.6fr) auto auto auto auto auto;
   gap: 10px;
   align-items: center;
 }
@@ -1667,6 +1667,15 @@ textarea:focus {
   color: #fff;
   font-size: 12px;
   font-weight: 900;
+}
+
+.platform-tenant-row .platform-enter-btn {
+  background: #2563eb;
+}
+
+.platform-tenant-row .platform-enter-btn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
 }
 
 .platform-status-toolbar {
