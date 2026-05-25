@@ -3594,6 +3594,79 @@ app.patch('/api/platform/tenants/:tenantId', requireAuth, requireSuperAdmin, asy
   res.json(publicTenant(result.rows[0]));
 }));
 
+app.post('/api/platform/tenants/:tenantId/remove-access', requireAuth, requireSuperAdmin, rateLimit({
+  bucketName: 'platform-remove-client-access',
+  maxRequests: 20,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+
+  const tenantResult = await query(
+    `SELECT id, slug, name, status
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const tenant = tenantResult.rows[0];
+
+  if (!tenant) {
+    return res.status(404).json({ error: 'Client company not found' });
+  }
+
+  if (tenant.slug === 'platform') {
+    return res.status(400).json({ error: 'Platform tenant access cannot be removed from this route' });
+  }
+
+  const updatedTenantResult = await query(
+    `UPDATE tenants
+     SET status = 'suspended',
+         onboarding_status = 'access_removed',
+         updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [tenantId],
+  );
+
+  await query(
+    `UPDATE users
+     SET active = false
+     WHERE tenant_id = $1`,
+    [tenantId],
+  );
+
+  await query(
+    `UPDATE whatsapp_accounts
+     SET active = false,
+         updated_at = now()
+     WHERE tenant_id = $1`,
+    [tenantId],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'platform.client_access_removed',
+    entityType: 'tenant',
+    entityId: tenantId,
+    metadata: {
+      clientTenantId: tenantId,
+      clientTenantName: tenant.name,
+      previousStatus: tenant.status,
+      newStatus: 'suspended',
+      usersDeactivated: true,
+      whatsappAccountsDeactivated: true,
+      reason: 'Super admin removed client access',
+    },
+  });
+
+  res.json({
+    ok: true,
+    tenant: publicTenant(updatedTenantResult.rows[0]),
+  });
+}));
+
 app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
   const tenantId = req.params.tenantId;
 

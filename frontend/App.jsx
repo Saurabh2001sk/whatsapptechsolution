@@ -801,6 +801,30 @@ const [authChecking, setAuthChecking] = useState(true)
       }, 8000)
     }
 
+      async function removeClientAccess(tenant) {
+    if (!tenant?.id) {
+      notify('Select a client company first', 'error')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Remove access for ${tenant.name}?\n\nThis will suspend the client, deactivate all client users, and disable WhatsApp account mapping. The client will not be able to login. Existing data will be preserved for audit/compliance.`
+    )
+
+    if (!confirmed) return
+
+    try {
+      await api.post(`/api/platform/tenants/${tenant.id}/remove-access`)
+      notify(`${tenant.name} access removed`)
+      await loadPlatformTenants()
+      if (selectedPlatformTenantId === tenant.id) {
+        await loadPlatformTenantStatus(tenant.id)
+      }
+    } catch (err) {
+      notify(apiErrorMessage(err, 'Unable to remove client access'), 'error')
+    }
+  }
+
     function showApiIssue(event) {
       showIssueToast(event.detail?.message || 'Frontend/API issue detected')
     }
@@ -1649,6 +1673,7 @@ async function saveCustomization(event) {
             onOpenStatus={openPlatformStatus}
             onLoadStatus={loadPlatformTenantStatus}
             onEnterClientCrm={enterClientCrm}
+            onRemoveClientAccess={removeClientAccess}
           />
         )}
 
@@ -1900,6 +1925,7 @@ function PlatformPage({
   onOpenStatus,
   onLoadStatus,
   onEnterClientCrm,
+  onRemoveClientAccess,
 }) {
   const clientTenants = tenants.filter((tenant) => tenant.slug !== 'platform')
   const selectedTenant = clientTenants.find((tenant) => tenant.id === selectedTenantId) || clientTenants[0]
@@ -1984,6 +2010,14 @@ function PlatformPage({
                   disabled={tenant.status !== 'active'}
                 >
                   Enter CRM
+                </button>
+                <button
+                  className="platform-remove-btn"
+                  type="button"
+                  onClick={() => onRemoveClientAccess(tenant)}
+                  disabled={tenant.status === 'suspended'}
+                >
+                  Remove Access
                 </button>
               </div>
             ))}
