@@ -1663,7 +1663,7 @@ async function saveCustomization(event) {
           </button>
         </div>
       </div>
-    )}c
+    )}
 
         {whatsappOnboarding?.connected && whatsappOnboarding?.whatsappAccount && (
       <div className="setup-card">
