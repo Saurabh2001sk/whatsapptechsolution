@@ -1791,11 +1791,7 @@ async function saveCustomization(event) {
       onToggleTemplate={toggleTemplate}
       onCancelTemplateEdit={cancelTemplateEdit}
       userRole={user.role}
-      knowledgeForm={knowledgeForm}
-      setKnowledgeForm={setKnowledgeForm}
-      knowledgeItems={knowledgeItems}
-      onSaveKnowledge={saveKnowledgeItem}
-      onDeleteKnowledge={deleteKnowledgeItem}
+      isProduction={isProduction}
     />
   </>
 )}        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
