@@ -12,6 +12,20 @@ async function main() {
     throw new Error('DATABASE_URL missing in backend/.env');
   }
 
+  if (process.env.CONFIRM_DEMO_PASSWORD_RESET !== 'RESET_DEMO_USERS') {
+    throw new Error('Set CONFIRM_DEMO_PASSWORD_RESET=RESET_DEMO_USERS before resetting demo user passwords');
+  }
+
+  const demoPasswords = {
+    admin: String(process.env.DEMO_ADMIN_PASSWORD || ''),
+    manager: String(process.env.DEMO_MANAGER_PASSWORD || ''),
+    sales: String(process.env.DEMO_SALES_PASSWORD || ''),
+  };
+
+  if (Object.values(demoPasswords).some((password) => password.length < 12)) {
+    throw new Error('DEMO_ADMIN_PASSWORD, DEMO_MANAGER_PASSWORD and DEMO_SALES_PASSWORD must each be at least 12 characters');
+  }
+
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
     ssl: shouldUseSsl(process.env.DATABASE_URL) ? { rejectUnauthorized: false } : undefined,
@@ -25,9 +39,22 @@ async function main() {
 
   console.log('Connected DB:', dbCheck.rows[0]);
 
-  const adminHash = await bcrypt.hash('admin123', 10);
-  const managerHash = await bcrypt.hash('manager123', 10);
-  const salesHash = await bcrypt.hash('sales123', 10);
+  const tenantResult = await client.query(
+    `SELECT id
+     FROM tenants
+     WHERE slug = 'demo'
+     LIMIT 1`,
+  );
+
+  const demoTenantId = tenantResult.rows[0]?.id;
+
+  if (!demoTenantId) {
+    throw new Error('Demo tenant not found. Passwords were not reset.');
+  }
+
+  const adminHash = await bcrypt.hash(demoPasswords.admin, 10);
+  const managerHash = await bcrypt.hash(demoPasswords.manager, 10);
+  const salesHash = await bcrypt.hash(demoPasswords.sales, 10);
 
   await client.query(`
     UPDATE tenants
@@ -42,10 +69,11 @@ async function main() {
     UPDATE users
     SET password_hash = $1,
         active = true
-    WHERE lower(email) = 'admin@bos.com'
+    WHERE tenant_id = $2
+      AND lower(email) = 'admin@bos.com'
     RETURNING email, role, active
     `,
-    [adminHash],
+    [adminHash, demoTenantId],
   );
 
   const manager = await client.query(
@@ -53,10 +81,11 @@ async function main() {
     UPDATE users
     SET password_hash = $1,
         active = true
-    WHERE lower(email) = 'manager@bos.com'
+    WHERE tenant_id = $2
+      AND lower(email) = 'manager@bos.com'
     RETURNING email, role, active
     `,
-    [managerHash],
+    [managerHash, demoTenantId],
   );
 
   const sales = await client.query(
@@ -64,10 +93,11 @@ async function main() {
     UPDATE users
     SET password_hash = $1,
         active = true
-    WHERE lower(email) = 'sales@bos.com'
+    WHERE tenant_id = $2
+      AND lower(email) = 'sales@bos.com'
     RETURNING email, role, active
     `,
-    [salesHash],
+    [salesHash, demoTenantId],
   );
 
   console.log('Admin reset:', admin.rows);

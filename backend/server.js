@@ -35,8 +35,7 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const apiRateBuckets = new Map();
 
 function getClientKey(req, bucketName) {
-  const forwardedFor = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return `${bucketName}:${forwardedFor || req.ip || 'unknown'}`;
+  return `${bucketName}:${req.ip || 'unknown'}`;
 }
 
 function rateLimit({ bucketName, maxRequests, windowMs }) {
@@ -78,8 +77,7 @@ setInterval(() => {
 
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  ...(!isProduction ? ['http://localhost:5173', 'http://127.0.0.1:5173'] : []),
 ].filter(Boolean));
 
 app.use(cors({
@@ -91,6 +89,32 @@ app.use(cors({
 }));
 
 app.set('trust proxy', 1);
+
+app.use((req, res, next) => {
+  const isApiWrite = req.path.startsWith('/api/')
+    && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+  if (!isProduction || !isApiWrite) {
+    return next();
+  }
+
+  const origin = String(req.headers.origin || '').trim();
+  const usesCookieSession = Boolean(getCookie(req, 'bosAuthToken'));
+
+  if (!origin) {
+    if (usesCookieSession) {
+      return res.status(403).json({ error: 'Trusted browser origin required' });
+    }
+
+    return next();
+  }
+
+  if (!allowedOrigins.has(origin)) {
+    return res.status(403).json({ error: 'Untrusted browser origin' });
+  }
+
+  return next();
+});
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1537,6 +1561,21 @@ async function validateSalesItemsForTenant(tenantId, items = []) {
   }
 }
 
+async function validateContactForTenant(tenantId, contactId) {
+  if (!contactId) return;
+
+  const result = await query(
+    'SELECT id FROM contacts WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+    [contactId, tenantId],
+  );
+
+  if (!result.rows[0]) {
+    const error = new Error('Contact does not belong to this company');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function extractText(message) {
   if (message.type === 'text') return message.text?.body || '';
   if (message.type === 'button') return message.button?.text || '';
@@ -2157,6 +2196,7 @@ async function getEnquiryDraftById(id, tenantId) {
 async function createQuotation({ tenantId, contactId, notes, items, source = 'WhatsApp Auto', validUntil }) {
   const normalizedItems = items.map(normalizeSalesItem);
 
+  await validateContactForTenant(tenantId, contactId);
   await validateSalesItemsForTenant(tenantId, normalizedItems);
 
   const amount = sumItems(normalizedItems);
@@ -2182,6 +2222,7 @@ async function createQuotation({ tenantId, contactId, notes, items, source = 'Wh
 async function createSalesOrder({ tenantId, contactId, notes, items, source = 'WhatsApp', paymentStatus = 'pending', dispatchStatus = 'pending' }) {
   const normalizedItems = items.map(normalizeSalesItem);
 
+  await validateContactForTenant(tenantId, contactId);
   await validateSalesItemsForTenant(tenantId, normalizedItems);
 
   const amount = sumItems(normalizedItems);
@@ -2298,8 +2339,8 @@ async function createOutboundMessageRecord({
   return result.rows[0];
 }
 
-async function markOutboundSending(outboundId) {
-  if (!outboundId) return null;
+async function markOutboundSending(outboundId, tenantId) {
+  if (!outboundId || !tenantId) return null;
 
   const result = await query(
     `UPDATE outbound_messages
@@ -2308,43 +2349,47 @@ async function markOutboundSending(outboundId) {
          updated_at = now(),
          last_error = NULL
      WHERE id = $1
+       AND tenant_id = $2
      RETURNING *`,
-    [outboundId],
+    [outboundId, tenantId],
   );
 
   return result.rows[0] || null;
 }
 
-async function markOutboundSent(outboundId, waMessageId) {
-  if (!outboundId) return null;
+async function markOutboundSent(outboundId, tenantId, waMessageId) {
+  if (!outboundId || !tenantId) return null;
 
   const result = await query(
     `UPDATE outbound_messages
      SET status = 'sent',
-         wa_message_id = COALESCE($2, wa_message_id),
+         wa_message_id = COALESCE($3, wa_message_id),
          sent_at = now(),
          updated_at = now(),
          last_error = NULL
      WHERE id = $1
+       AND tenant_id = $2
      RETURNING *`,
-    [outboundId, waMessageId || null],
+    [outboundId, tenantId, waMessageId || null],
   );
 
   return result.rows[0] || null;
 }
 
-async function markOutboundFailed(outboundId, error) {
-  if (!outboundId) return null;
+async function markOutboundFailed(outboundId, tenantId, error) {
+  if (!outboundId || !tenantId) return null;
 
   const result = await query(
     `UPDATE outbound_messages
      SET status = 'failed',
-         last_error = $2,
+         last_error = $3,
          updated_at = now()
      WHERE id = $1
+       AND tenant_id = $2
      RETURNING *`,
     [
       outboundId,
+      tenantId,
       String(error?.response?.data?.error?.message || error?.message || error || 'WhatsApp send failed').slice(0, 2000),
     ],
   );
@@ -3288,7 +3333,6 @@ app.get('/health', (req, res) => {
 
 app.get('/ready', asyncHandler(async (req, res) => {
   const db = await healthCheck();
-  const warnings = validateRuntimeConfig();
 
   const ready = Boolean(
     db.ok
@@ -3300,12 +3344,8 @@ app.get('/ready', asyncHandler(async (req, res) => {
 
   return res.status(ready ? 200 : 503).json({
     ok: ready,
-    database: db,
-    whatsappConfigured: isWhatsAppConfigured(),
-    webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-    webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
-    warnings,
+    service: 'bos-whatsapp-backend',
+    databaseReady: Boolean(db.ok),
     timestamp: new Date().toISOString(),
   });
 }));
@@ -4045,7 +4085,7 @@ app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
     whatsappTestNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
     phoneNumberMapped: accountStatus.phoneNumberMapped,
     phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
-    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
+    phoneNumberMappedTenantSlug: canMonitor(req.user) ? accountStatus.phoneNumberMappedTenantSlug : null,
     webhookUrl: '/webhook',
     labels: settings.labels,
     warnings,
@@ -4204,7 +4244,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
       `https://graph.facebook.com/${apiVersion}/${phoneNumberId}`,
       {
         params: {
-          fields: 'display_phone_number,verified_name',
+          fields: 'id,display_phone_number,verified_name',
         },
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -4213,6 +4253,12 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
       },
     );
 
+    if (String(phoneRes.data?.id || '') !== phoneNumberId) {
+      return res.status(400).json({
+        error: 'Meta signup phone verification failed. Connection was not saved.',
+      });
+    }
+
     displayPhoneNumber = phoneRes.data?.display_phone_number || phoneRes.data?.verified_name || '';
   } catch (error) {
     console.error('Meta phone lookup failed:', {
@@ -4220,6 +4266,10 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
       phoneNumberId: maskValue(phoneNumberId),
       status: error.response?.status || null,
       message: error.response?.data?.error?.message || error.message,
+    });
+
+    return res.status(400).json({
+      error: 'Unable to verify the WhatsApp phone number from Meta signup. Connection was not saved.',
     });
   }
 
@@ -4240,6 +4290,10 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
       wabaId: maskValue(wabaId),
       status: error.response?.status || null,
       message: error.response?.data?.error?.message || error.message,
+    });
+
+    return res.status(400).json({
+      error: 'Unable to subscribe the WhatsApp business account to webhooks. Connection was not saved.',
     });
   }
 
@@ -4509,7 +4563,7 @@ async function createWebhookEvent(payload = {}) {
   return result.rows[0];
 }
 
-async function markWebhookEventProcessing(eventId) {
+async function markWebhookEventProcessing(eventId, tenantId) {
   if (!eventId) return;
 
   await query(
@@ -4518,12 +4572,13 @@ async function markWebhookEventProcessing(eventId) {
          attempts = attempts + 1,
          processing_started_at = now(),
          last_error = NULL
-     WHERE id = $1`,
-    [eventId],
+     WHERE id = $1
+       AND tenant_id IS NOT DISTINCT FROM $2`,
+    [eventId, tenantId || null],
   );
 }
 
-async function markWebhookEventProcessed(eventId) {
+async function markWebhookEventProcessed(eventId, tenantId) {
   if (!eventId) return;
 
   await query(
@@ -4531,21 +4586,24 @@ async function markWebhookEventProcessed(eventId) {
      SET status = 'processed',
          processed_at = now(),
          last_error = NULL
-     WHERE id = $1`,
-    [eventId],
+     WHERE id = $1
+       AND tenant_id IS NOT DISTINCT FROM $2`,
+    [eventId, tenantId || null],
   );
 }
 
-async function markWebhookEventFailed(eventId, error) {
+async function markWebhookEventFailed(eventId, tenantId, error) {
   if (!eventId) return;
 
   await query(
     `UPDATE webhook_events
      SET status = 'failed',
-         last_error = $2
-     WHERE id = $1`,
+         last_error = $3
+     WHERE id = $1
+       AND tenant_id IS NOT DISTINCT FROM $2`,
     [
       eventId,
+      tenantId || null,
       String(error?.message || error || 'Webhook processing failed').slice(0, 2000),
     ],
   );
@@ -4631,11 +4689,11 @@ app.post('/webhook', (req, res) => {
 
     try {
       webhookEvent = await createWebhookEvent(payload);
-      await markWebhookEventProcessing(webhookEvent.id);
+      await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
 
       await processWhatsAppWebhookPayload(payload);
 
-      await markWebhookEventProcessed(webhookEvent.id);
+      await markWebhookEventProcessed(webhookEvent.id, webhookEvent.tenant_id);
     } catch (error) {
       console.error('WA webhook async processing failed:', {
         webhookEventId: webhookEvent?.id || null,
@@ -4644,7 +4702,7 @@ app.post('/webhook', (req, res) => {
       });
 
       if (webhookEvent?.id) {
-        await markWebhookEventFailed(webhookEvent.id, error);
+        await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
       }
     }
   });
@@ -5244,11 +5302,11 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
     });
   }
 
-  await markWebhookEventProcessing(event.id);
+  await markWebhookEventProcessing(event.id, req.user.tenantId);
 
   try {
     await processWhatsAppWebhookPayload(event.payload);
-    await markWebhookEventProcessed(event.id);
+    await markWebhookEventProcessed(event.id, req.user.tenantId);
 
     await recordAudit({
       tenantId: req.user.tenantId,
@@ -5269,7 +5327,7 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
       message: 'Webhook event retried successfully.',
     });
   } catch (error) {
-    await markWebhookEventFailed(event.id, error);
+    await markWebhookEventFailed(event.id, req.user.tenantId, error);
 
     await recordAudit({
       tenantId: req.user.tenantId,
@@ -5395,7 +5453,7 @@ app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (re
     });
   }
 
-  await markOutboundSending(outbound.id);
+  await markOutboundSending(outbound.id, req.user.tenantId);
 
   try {
     let waMessageId = null;
@@ -5415,7 +5473,7 @@ app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (re
       );
     }
 
-    await markOutboundSent(outbound.id, waMessageId);
+    await markOutboundSent(outbound.id, req.user.tenantId, waMessageId);
 
     const message = await addMessage({
       tenantId: req.user.tenantId,
@@ -5453,7 +5511,7 @@ app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (re
       message,
     });
   } catch (error) {
-    await markOutboundFailed(outbound.id, error);
+    await markOutboundFailed(outbound.id, req.user.tenantId, error);
 
     await recordAudit({
       tenantId: req.user.tenantId,
@@ -5669,7 +5727,7 @@ app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async 
         continue;
       }
 
-      await markOutboundSending(outbound.id);
+      await markOutboundSending(outbound.id, req.user.tenantId);
       summary.retried += 1;
 
       let waMessageId = null;
@@ -5689,7 +5747,7 @@ app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async 
         );
       }
 
-      await markOutboundSent(outbound.id, waMessageId);
+      await markOutboundSent(outbound.id, req.user.tenantId, waMessageId);
 
       await addMessage({
         tenantId: req.user.tenantId,
@@ -5710,7 +5768,7 @@ app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async 
     } catch (error) {
       summary.failed += 1;
 
-      await markOutboundFailed(outbound.id, error);
+      await markOutboundFailed(outbound.id, req.user.tenantId, error);
 
       summary.errors.push({
         id: outbound.id,
@@ -6002,7 +6060,7 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
     createdBy: req.user.id,
   });
 
-  await markOutboundSending(outboundRecord?.id);
+  await markOutboundSending(outboundRecord?.id, req.user.tenantId);
 
   try {
     if (cleanTemplateName) {
@@ -6013,9 +6071,9 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
       waMessageId = await sendWhatsAppText(contact, cleanText, req.user.tenantId);
     }
 
-    await markOutboundSent(outboundRecord?.id, waMessageId);
+    await markOutboundSent(outboundRecord?.id, req.user.tenantId, waMessageId);
   } catch (error) {
-    await markOutboundFailed(outboundRecord?.id, error);
+    await markOutboundFailed(outboundRecord?.id, req.user.tenantId, error);
 
     return res.status(400).json({
       error: error.response?.data?.error?.message || error.message || 'WhatsApp message failed',
@@ -7115,6 +7173,10 @@ app.patch('/api/orders/:id', requireAuth, asyncHandler(async (req, res) => {
 app.use((err, req, res, next) => {
   if (err.code === '22P02') {
     return res.status(400).json({ error: 'Invalid id format' });
+  }
+
+  if (Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode < 500) {
+    return res.status(err.statusCode).json({ error: err.message || 'Invalid request' });
   }
 
   console.error(err);

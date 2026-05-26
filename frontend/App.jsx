@@ -328,7 +328,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 
   useEffect(() => {
     function handleEmbeddedSignupMessage(event) {
-      let host = ''
+      let host
 
       try {
         host = new URL(event.origin).hostname
@@ -336,7 +336,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
         return
       }
 
-      if (!host.endsWith('facebook.com')) return
+      if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return
 
       let payload = event.data
 
@@ -349,8 +349,6 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
       }
 
       if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return
-
-      console.log('WA Embedded Signup event:', payload)
 
       if (payload.event === 'FINISH' || payload.event === 'FINISH_ONLY_WABA') {
         const nextInfo = {
@@ -386,7 +384,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 
       if (payload.event === 'ERROR') {
         clearSignupTimeout()
-        console.error('WA Embedded Signup error:', payload)
+        console.error('WA Embedded Signup returned an error event')
         alert(payload.data?.error_message || payload.data?.message || 'Meta signup failed.')
       }
     }
@@ -458,10 +456,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
         const wabaId = signupInfoRef.current.wabaId || ''
 
         if (!phoneNumberId || !wabaId) {
-          console.error('WA Embedded Signup missing IDs:', {
-            signupInfo: signupInfoRef.current,
-            hasCode: Boolean(authCodeRef.current),
-          })
+          console.error('WA Embedded Signup completed without required phone or WABA identifiers')
 
           alert('Meta signup completed but phone number ID / WABA ID was not received. Please click Finish in the Meta popup. If it still fails, check Embedded Signup configuration/session info version.')
         }
