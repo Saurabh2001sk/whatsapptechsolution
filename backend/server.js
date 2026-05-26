@@ -4324,6 +4324,156 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
+app.get('/api/whatsapp/health', requireAuth, async (req, res) => {
+  try {
+    const tenantId = req.user?.tenantId;
+    const role = req.user?.role;
+
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant session missing' });
+    }
+
+    if (!['admin', 'manager'].includes(role)) {
+      return res.status(403).json({ error: 'Admin/manager access required' });
+    }
+
+    const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+    const webhookUrl = publicBaseUrl ? `${publicBaseUrl}/webhook` : '';
+
+    const envAccessTokenSet = Boolean(process.env.WHATSAPP_ACCESS_TOKEN);
+    const envPhoneNumberIdSet = Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID);
+    const verifyTokenSet = Boolean(process.env.WHATSAPP_VERIFY_TOKEN);
+    const appSecretSet = Boolean(process.env.WHATSAPP_APP_SECRET);
+
+    const accountResult = await query(
+      `
+      SELECT
+        id,
+        phone_number_id,
+        display_phone_number,
+        waba_id,
+        active,
+        token_type,
+        access_token_encrypted,
+        connected_at,
+        updated_at
+      FROM whatsapp_accounts
+      WHERE tenant_id = $1
+      ORDER BY active DESC, updated_at DESC, connected_at DESC NULLS LAST, created_at DESC
+      LIMIT 1
+      `,
+      [tenantId]
+    );
+
+    const account = accountResult.rows[0] || null;
+
+    const activityResult = await query(
+      `
+      SELECT
+        (
+          SELECT MAX(created_at)
+          FROM messages
+          WHERE tenant_id = $1
+            AND direction = 'inbound'
+        ) AS last_inbound_at,
+        GREATEST(
+          COALESCE((
+            SELECT MAX(created_at)
+            FROM messages
+            WHERE tenant_id = $1
+              AND direction = 'outbound'
+          ), '1970-01-01'::timestamptz),
+          COALESCE((
+            SELECT MAX(COALESCE(sent_at, created_at))
+            FROM outbound_messages
+            WHERE tenant_id = $1
+          ), '1970-01-01'::timestamptz)
+        ) AS last_outbound_at
+      `,
+      [tenantId]
+    );
+
+    const activity = activityResult.rows[0] || {};
+
+    const hasTenantToken = Boolean(account?.access_token_encrypted);
+    const hasTenantPhone = Boolean(account?.phone_number_id);
+    const connected = Boolean(account?.active && hasTenantPhone && (hasTenantToken || envAccessTokenSet));
+
+    const tokenMode = hasTenantToken
+      ? 'tenant_embedded_signup'
+      : envAccessTokenSet
+        ? 'env_fallback'
+        : 'not_configured';
+
+    const setupIssues = [];
+
+    if (!account) {
+      setupIssues.push('WhatsApp account is not mapped for this tenant.');
+    }
+
+    if (account && !account.active) {
+      setupIssues.push('Mapped WhatsApp account is inactive.');
+    }
+
+    if (!hasTenantPhone && !envPhoneNumberIdSet) {
+      setupIssues.push('Phone Number ID is missing.');
+    }
+
+    if (!hasTenantToken && !envAccessTokenSet) {
+      setupIssues.push('WhatsApp access token is missing.');
+    }
+
+    if (!verifyTokenSet) {
+      setupIssues.push('Webhook verify token is missing.');
+    }
+
+    if (!publicBaseUrl) {
+      setupIssues.push('PUBLIC_BASE_URL is missing, webhook URL cannot be generated.');
+    }
+
+    if (!appSecretSet) {
+      setupIssues.push('WHATSAPP_APP_SECRET is missing, webhook signature verification cannot be enabled.');
+    }
+
+    const setupComplete = connected && verifyTokenSet && Boolean(publicBaseUrl) && appSecretSet;
+
+    return res.json({
+      connected,
+      setupComplete,
+      tokenMode,
+      webhookUrl,
+      account: account
+        ? {
+            displayPhoneNumber: account.display_phone_number || '',
+            phoneNumberId: account.phone_number_id || '',
+            wabaId: account.waba_id || '',
+            active: Boolean(account.active),
+            connectedAt: account.connected_at || null,
+            updatedAt: account.updated_at || null,
+          }
+        : null,
+      activity: {
+        lastInboundAt: activity.last_inbound_at || null,
+        lastOutboundAt:
+          activity.last_outbound_at &&
+          String(activity.last_outbound_at) !== '1970-01-01T00:00:00.000Z'
+            ? activity.last_outbound_at
+            : null,
+      },
+      setupIssues,
+    });
+  } catch (error) {
+    console.error('WhatsApp health check failed:', {
+      message: error.message,
+      code: error.code || null,
+    });
+
+    return res.status(500).json({
+      error: 'WhatsApp health check failed',
+    });
+  }
+});
+
 app.get('/api/whatsapp/health', requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
@@ -6370,6 +6520,165 @@ app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
   await recordAssignmentHistory({ tenantId: req.user.tenantId, contactId: req.params.id, fromUserId: before.rows[0]?.assigned_to, toUserId: result.rows[0]?.assigned_to, changedBy: req.user.id, reason: assignment_reason });
   res.json(result.rows[0]);
 }));
+
+app.get('/api/contacts/opt-outs', requireAuth, async (req, res) => {
+  try {
+    const tenantId = req.user?.tenantId;
+    const role = req.user?.role;
+
+    if (!tenantId) {
+      return res.status(401).json({ error: 'Tenant session missing' });
+    }
+
+    if (!['admin', 'manager'].includes(role)) {
+      return res.status(403).json({ error: 'Admin/manager access required' });
+    }
+
+    const result = await query(
+      `
+      SELECT
+        id,
+        name,
+        phone,
+        wa_id,
+        company,
+        label,
+        stage,
+        opted_out,
+        opted_out_at,
+        opted_out_reason,
+        updated_at,
+        last_inbound_at
+      FROM contacts
+      WHERE tenant_id = $1
+        AND opted_out = true
+      ORDER BY opted_out_at DESC NULLS LAST, updated_at DESC
+      LIMIT 500
+      `,
+      [tenantId]
+    );
+
+    return res.json(result.rows);
+  } catch (error) {
+    console.error('Load opt-out contacts failed:', {
+      message: error.message,
+      code: error.code || null,
+    });
+
+    return res.status(500).json({
+      error: 'Unable to load opt-out contacts',
+    });
+  }
+});
+
+app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
+  try {
+    const tenantId = req.user?.tenantId;
+    const userId = req.user?.id;
+    const role = req.user?.role;
+    const contactId = req.params.id;
+    const optedOut = Boolean(req.body?.optedOut);
+    const reason = String(req.body?.reason || '').trim();
+
+    if (!tenantId || !userId) {
+      return res.status(401).json({ error: 'Tenant session missing' });
+    }
+
+    if (!['admin', 'manager'].includes(role)) {
+      return res.status(403).json({ error: 'Admin/manager access required' });
+    }
+
+    const existingResult = await query(
+      `
+      SELECT id, name, phone, opted_out
+      FROM contacts
+      WHERE id = $1
+        AND tenant_id = $2
+      LIMIT 1
+      `,
+      [contactId, tenantId]
+    );
+
+    const existingContact = existingResult.rows[0];
+
+    if (!existingContact) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+
+    const updateResult = await query(
+      `
+      UPDATE contacts
+      SET
+        opted_out = $1,
+        opted_out_at = CASE
+          WHEN $1 = true THEN COALESCE(opted_out_at, now())
+          ELSE NULL
+        END,
+        opted_out_reason = CASE
+          WHEN $1 = true THEN NULLIF($2, '')
+          ELSE NULL
+        END,
+        updated_at = now()
+      WHERE id = $3
+        AND tenant_id = $4
+      RETURNING
+        id,
+        name,
+        phone,
+        wa_id,
+        company,
+        label,
+        stage,
+        opted_out,
+        opted_out_at,
+        opted_out_reason,
+        updated_at,
+        last_inbound_at
+      `,
+      [optedOut, reason, contactId, tenantId]
+    );
+
+    const updatedContact = updateResult.rows[0];
+
+    await query(
+      `
+      INSERT INTO audit_events (
+        tenant_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        metadata
+      )
+      VALUES ($1, $2, $3, 'contact', $4, $5::jsonb)
+      `,
+      [
+        tenantId,
+        userId,
+        optedOut ? 'contact_manual_opt_out' : 'contact_manual_opt_in',
+        contactId,
+        JSON.stringify({
+          phone: existingContact.phone,
+          name: existingContact.name,
+          previousOptedOut: existingContact.opted_out,
+          newOptedOut: optedOut,
+          reason: optedOut ? reason : '',
+        }),
+      ]
+    );
+
+    return res.json(updatedContact);
+  } catch (error) {
+    console.error('Update contact opt-out failed:', {
+      message: error.message,
+      code: error.code || null,
+    });
+
+    return res.status(500).json({
+      error: 'Unable to update contact opt-out status',
+    });
+  }
+});
 
 app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req, res) => {
   const { text, templateName, language } = req.body;

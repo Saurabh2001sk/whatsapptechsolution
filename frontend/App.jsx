@@ -238,7 +238,7 @@ function clearStoredSession() {
 }
 
 function PublicWebsite({ onAuthenticate, appSettings }) {
-  const [mode, setMode] = useState('login')
+  const [mode, setMode] = useState('')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [registerForm, setRegisterForm] = useState({
     companyName: '',
@@ -260,15 +260,25 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
     { icon: ShoppingCart, title: 'Orders & Follow-up', copy: 'Track converted orders, payment progress and dispatch activity from the same workflow.' },
     { icon: Users, title: 'Contacts & Customers', copy: 'Maintain tenant-isolated customer history, labels, stages and ownership.' },
     { icon: Settings, title: 'Business Controls', copy: 'Configure business profile, branding, automations and monitoring settings.' },
+    { icon: UserRound, title: 'Team Access', copy: 'Keep administrators, managers and sales users inside their permitted workspace.' },
+    { icon: Shield, title: 'Audit & Compliance', copy: 'Track operational activity while enforcing opt-out and reply-window protection.' },
   ]
 
   function openAccess(nextMode) {
     setMode(nextMode)
     setError('')
-    window.setTimeout(() => {
-      document.getElementById('secure-access')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 0)
   }
+
+  useEffect(() => {
+    if (!mode) return undefined
+
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setMode('')
+    }
+
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [mode])
 
   async function submitLogin(event) {
     event.preventDefault()
@@ -328,29 +338,28 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
           </div>
         </a>
         <nav className="public-nav">
-          <a href="#capabilities">Platform</a>
-          <a href="#workflow">Workflow</a>
+          <a href="#home">Home</a>
+          <a href="#capabilities">Features</a>
+          <a href="#workflow">How it works</a>
           <a href="#security">Security</a>
         </nav>
         <div className="public-actions">
-          <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Sign in</button>
-          <button className="public-primary" type="button" onClick={() => openAccess('register')}>Get started</button>
+          <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Login</button>
+          <button className="public-primary" type="button" onClick={() => openAccess('register')}>Register</button>
         </div>
       </header>
 
       <section className="public-hero" id="home">
         <div className="hero-copy">
-          <span className="hero-kicker"><Shield size={15} /> Secure WhatsApp Business Operations</span>
-          <h1>Turn WhatsApp conversations into structured business growth.</h1>
+          <span className="hero-kicker"><Shield size={15} /> WhatsApp Business Management Platform</span>
+          <h1>Manage WhatsApp sales, customers and operations in one place</h1>
           <p>
-            A professional multi-user workspace for Meta WhatsApp setup, team inbox management,
-            customer follow-ups, quotations, orders and controlled automation.
+            Connect Meta WhatsApp, manage customer conversations, create templates, track
+            quotations and orders, and run your business with a secure professional workspace.
           </p>
           <div className="hero-actions">
-            <button className="public-primary" type="button" onClick={() => openAccess('register')}>
-              Create business account <ArrowRight size={18} />
-            </button>
-            <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Access dashboard</button>
+            <a className="public-primary" href="#capabilities">Explore features <ArrowRight size={18} /></a>
+            <a className="public-ghost" href="#workflow">See how it works</a>
           </div>
           <div className="hero-trust">
             <span><CheckCircle2 size={16} /> Tenant-isolated data</span>
@@ -358,34 +367,44 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
             <span><CheckCircle2 size={16} /> Policy-aware messaging</span>
           </div>
         </div>
-        <div className="hero-console" aria-hidden="true">
-          <div className="console-top"><span /><span /><span /><small>Operations command center</small></div>
-          <div className="console-status">
-            <div><strong>Connected</strong><span>Meta Cloud API</span></div>
-            <div><strong>24h</strong><span>Reply guard</span></div>
-            <div><strong>Secure</strong><span>Tenant access</span></div>
-          </div>
-          <div className="console-layout">
-            <div className="console-menu">
-              <span className="active">Inbox</span>
-              <span>Contacts</span>
-              <span>Quotes</span>
-              <span>Orders</span>
+        <div className="hero-stage">
+          <div className="hero-console" aria-hidden="true">
+            <div className="console-top"><span /><span /><span /><small>Operations command center</small></div>
+            <div className="console-status">
+              <div><strong>Connected</strong><span>Meta Cloud API</span></div>
+              <div><strong>24h</strong><span>Reply guard</span></div>
+              <div><strong>Secure</strong><span>Tenant access</span></div>
             </div>
-            <div className="console-thread">
-              <p>New enquiry received</p>
-              <b>Need price for 250 units</b>
-              <small>Assigned to Sales Team</small>
-              <div className="console-tags"><span>Quotation</span><span>24h Open</span></div>
+            <div className="console-layout">
+              <div className="console-menu">
+                <span className="active">Inbox</span>
+                <span>Contacts</span>
+                <span>Quotes</span>
+                <span>Orders</span>
+              </div>
+              <div className="console-thread">
+                <p>New enquiry received</p>
+                <b>Need price for 250 units</b>
+                <small>Assigned to Sales Team</small>
+                <div className="console-tags"><span>Quotation</span><span>24h Open</span></div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
+      <section className="public-metrics" aria-label="Platform value">
+        <article><strong>1</strong><span>Secure shared workspace for every business</span></article>
+        <article><strong>24h</strong><span>Customer service window controls</span></article>
+        <article><strong>360</strong><span>Customer journey from inbox to order</span></article>
+        <article><strong>Meta</strong><span>Official WhatsApp Cloud API connection</span></article>
+      </section>
+
       <section className="public-section" id="capabilities">
         <div className="section-heading">
-          <span>Capabilities</span>
-          <h2>Everything required for a professional WhatsApp sales workspace</h2>
+          <span>Features</span>
+          <h2>Powerful tools to operate your customer communication</h2>
+          <p>Every feature is organized around real business work, team accountability and policy-safe WhatsApp messaging.</p>
         </div>
         <div className="capability-grid">
           {capabilities.map(({ icon: Icon, title, copy }) => (
@@ -411,10 +430,11 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
         </div>
       </section>
 
-      <section className="secure-access" id="secure-access">
-        <div className="security-panel" id="security">
+      <section className="security-showcase" id="security">
+        <div className="security-panel">
           <span className="hero-kicker"><Shield size={15} /> Security by design</span>
-          <h2>Customer data and WhatsApp access remain protected.</h2>
+          <h2>Built for responsible customer communication</h2>
+          <p className="security-description">Your team gets a modern workspace without compromising tenant isolation or WhatsApp policy controls.</p>
           <div className="security-points">
             <p><CheckCircle2 size={17} /> Every business operates inside an isolated tenant workspace.</p>
             <p><CheckCircle2 size={17} /> Meta access tokens stay encrypted on backend storage only.</p>
@@ -422,48 +442,12 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
             <p><CheckCircle2 size={17} /> Opt-out customers are protected from unauthorized messaging.</p>
           </div>
         </div>
-
-        <div className="access-card">
-          <div className="access-tabs" role="tablist" aria-label="Account access">
-            <button className={mode === 'login' ? 'active' : ''} type="button" onClick={() => { setMode('login'); setError('') }}>Sign in</button>
-            <button className={mode === 'register' ? 'active' : ''} type="button" onClick={() => { setMode('register'); setError('') }}>Register</button>
-          </div>
-
-          {mode === 'login' ? (
-            <form className="access-form" onSubmit={submitLogin}>
-              <h2>Welcome back</h2>
-              <p>Access your secured business operations dashboard.</p>
-              <label>Work email<input type="email" autoComplete="email" required value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="admin@company.com" /></label>
-              <label>Password<input type="password" autoComplete="current-password" required value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Enter your password" /></label>
-              {error && <p className="error-text">{error}</p>}
-              <button className="public-primary" type="submit" disabled={submitting}>
-                {submitting ? 'Signing in...' : 'Sign in securely'} <ArrowRight size={17} />
-              </button>
-              <small>Session access is managed securely by the backend.</small>
-            </form>
-          ) : (
-            <form className="access-form register-form" onSubmit={submitRegistration}>
-              <h2>Create your workspace</h2>
-              <p>Start with an administrator account for your business.</p>
-              <label>Business name<input required value={registerForm.companyName} onChange={(event) => setRegisterForm({ ...registerForm, companyName: event.target.value })} placeholder="Your business name" /></label>
-              <label>Industry<input value={registerForm.industry} onChange={(event) => setRegisterForm({ ...registerForm, industry: event.target.value })} placeholder="Manufacturing, Retail, Services..." /></label>
-              <label>Administrator name<input required autoComplete="name" value={registerForm.adminName} onChange={(event) => setRegisterForm({ ...registerForm, adminName: event.target.value })} placeholder="Full name" /></label>
-              <label>Work email<input required type="email" autoComplete="email" value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="admin@company.com" /></label>
-              <div className="register-passwords">
-                <label>Password<input required type="password" autoComplete="new-password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Minimum 12 characters" /></label>
-                <label>Confirm password<input required type="password" autoComplete="new-password" value={registerForm.confirmPassword} onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })} placeholder="Repeat password" /></label>
-              </div>
-              <small>Use 12+ characters with uppercase, lowercase, a number and a symbol.</small>
-              <label className="policy-consent">
-                <input type="checkbox" checked={registerForm.acceptedPolicy} onChange={(event) => setRegisterForm({ ...registerForm, acceptedPolicy: event.target.checked })} />
-                <span>I will send WhatsApp communications only to opted-in customers and follow Meta messaging policies.</span>
-              </label>
-              {error && <p className="error-text">{error}</p>}
-              <button className="public-primary" type="submit" disabled={submitting}>
-                {submitting ? 'Creating workspace...' : 'Create secure workspace'} <ArrowRight size={17} />
-              </button>
-            </form>
-          )}
+        <div className="security-visual" aria-hidden="true">
+          <div><Shield size={28} /><strong>Protected Operations</strong><small>Role access and audit history</small></div>
+          <span><CheckCircle2 size={18} /> Tenant isolated records</span>
+          <span><CheckCircle2 size={18} /> Encrypted token storage</span>
+          <span><CheckCircle2 size={18} /> Opt-out enforcement</span>
+          <span><CheckCircle2 size={18} /> Template-aware messaging</span>
         </div>
       </section>
 
@@ -474,6 +458,51 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
         </div>
         <p>WhatsApp Business operations with tenant-aware security and policy controls.</p>
       </footer>
+
+      {mode && (
+        <div className="access-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMode('') }}>
+          <div className="access-card access-dialog" role="dialog" aria-modal="true" aria-labelledby="access-title">
+            <button className="access-close" type="button" onClick={() => setMode('')} aria-label="Close account access"><X size={19} /></button>
+            {mode === 'login' ? (
+              <form className="access-form" onSubmit={submitLogin}>
+                <span className="access-label">Secure Login</span>
+                <h2 id="access-title">Welcome back</h2>
+                <p>Access your secured business operations dashboard.</p>
+                <label>Work email<input type="email" autoComplete="email" required value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="admin@company.com" /></label>
+                <label>Password<input type="password" autoComplete="current-password" required value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Enter your password" /></label>
+                {error && <p className="error-text">{error}</p>}
+                <button className="public-primary" type="submit" disabled={submitting}>
+                  {submitting ? 'Signing in...' : 'Continue securely'} <ArrowRight size={17} />
+                </button>
+                <small>Session access is managed securely by the backend.</small>
+              </form>
+            ) : (
+              <form className="access-form register-form" onSubmit={submitRegistration}>
+                <span className="access-label">New Business Workspace</span>
+                <h2 id="access-title">Create your account</h2>
+                <p>Start with an administrator account for your business.</p>
+                <label>Business name<input required value={registerForm.companyName} onChange={(event) => setRegisterForm({ ...registerForm, companyName: event.target.value })} placeholder="Your business name" /></label>
+                <label>Industry<input value={registerForm.industry} onChange={(event) => setRegisterForm({ ...registerForm, industry: event.target.value })} placeholder="Manufacturing, Retail, Services..." /></label>
+                <label>Administrator name<input required autoComplete="name" value={registerForm.adminName} onChange={(event) => setRegisterForm({ ...registerForm, adminName: event.target.value })} placeholder="Full name" /></label>
+                <label>Work email<input required type="email" autoComplete="email" value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="admin@company.com" /></label>
+                <div className="register-passwords">
+                  <label>Password<input required type="password" autoComplete="new-password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Minimum 12 characters" /></label>
+                  <label>Confirm password<input required type="password" autoComplete="new-password" value={registerForm.confirmPassword} onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })} placeholder="Repeat password" /></label>
+                </div>
+                <small>Use 12+ characters with uppercase, lowercase, a number and a symbol.</small>
+                <label className="policy-consent">
+                  <input type="checkbox" checked={registerForm.acceptedPolicy} onChange={(event) => setRegisterForm({ ...registerForm, acceptedPolicy: event.target.checked })} />
+                  <span>I will send WhatsApp communications only to opted-in customers and follow Meta messaging policies.</span>
+                </label>
+                {error && <p className="error-text">{error}</p>}
+                <button className="public-primary" type="submit" disabled={submitting}>
+                  {submitting ? 'Creating workspace...' : 'Create workspace'} <ArrowRight size={17} />
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   )
 }
@@ -739,8 +768,10 @@ const [authChecking, setAuthChecking] = useState(true)
   const [auditEvents, setAuditEvents] = useState([])
   const [webhookEvents, setWebhookEvents] = useState([])
   const [webhookActionLoading, setWebhookActionLoading] = useState('')
-  const [outboundEvents, setOutboundEvents] = useState([])
-  const [outboundActionLoading, setOutboundActionLoading] = useState('')
+const [outboundEvents, setOutboundEvents] = useState([])
+const [outboundActionLoading, setOutboundActionLoading] = useState('')
+const [optOutContacts, setOptOutContacts] = useState([])
+const [optOutActionLoading, setOptOutActionLoading] = useState('')
   const [filter, setFilter] = useState('all')
   const [windowFilter, setWindowFilter] = useState('all')
   const [stageFilter, setStageFilter] = useState('all')
@@ -836,9 +867,10 @@ const [authChecking, setAuthChecking] = useState(true)
     ]
     if (user?.role === 'admin') common.splice(1, 0, { id: 'connectWhatsApp', label: 'Meta Setup', icon: MessageCircle })
     if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
-    if (canMonitor) common.push({ id: 'webhooks', label: 'Webhooks', icon: Activity })
-    if (canMonitor) common.push({ id: 'outbound', label: 'Outbound', icon: Send })
-    if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
+if (canMonitor) common.push({ id: 'webhooks', label: 'Webhooks', icon: Activity })
+if (canMonitor) common.push({ id: 'outbound', label: 'Outbound', icon: Send })
+if (canMonitor) common.push({ id: 'optOuts', label: 'Opt-outs', icon: Shield })
+if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
     if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
     return common
   }, [canMonitor, isSuperAdminUser, user?.role])
@@ -1091,8 +1123,9 @@ const [authChecking, setAuthChecking] = useState(true)
         calls.push(api.get('/api/whatsapp/health', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
         calls.push(api.get('/api/webhook-events/failed', { silentError: true }).catch(() => ({ data: [] })))
-        calls.push(api.get('/api/outbound-messages/failed', { silentError: true }).catch(() => ({ data: [] })))
-        calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
+calls.push(api.get('/api/outbound-messages/failed', { silentError: true }).catch(() => ({ data: [] })))
+calls.push(api.get('/api/contacts/opt-outs', { silentError: true }).catch(() => ({ data: [] })))
+calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
       }
 
 const [
@@ -1110,9 +1143,10 @@ const [
         whatsappConfigRes,
         whatsappHealthRes,
         auditRes,
-        webhookEventsRes,
-        outboundEventsRes,
-        manageTemplateRes,
+     webhookEventsRes,
+outboundEventsRes,
+optOutContactsRes,
+manageTemplateRes,
       ] = await Promise.all(calls)
 
       if (onboardingRes?.data) setWhatsappOnboarding(onboardingRes.data)
@@ -1143,9 +1177,10 @@ const [
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (whatsappHealthRes) setWhatsappHealth(whatsappHealthRes.data)
       if (auditRes) setAuditEvents(auditRes.data)
-      if (webhookEventsRes) setWebhookEvents(webhookEventsRes.data)
-      if (outboundEventsRes) setOutboundEvents(outboundEventsRes.data)
-      if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
+if (webhookEventsRes) setWebhookEvents(webhookEventsRes.data)
+if (outboundEventsRes) setOutboundEvents(outboundEventsRes.data)
+if (optOutContactsRes) setOptOutContacts(optOutContactsRes.data)
+if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
     } catch (err) {
       const message = err.response?.data?.error || err.message || 'Unable to load CRM data'
@@ -1318,6 +1353,47 @@ async function retryFailedOutboundMessages() {
   } finally {
     setOutboundActionLoading('')
   }
+}
+
+async function updateContactOptOut(contactId, optedOut, reason = '') {
+  if (!canMonitor || optOutActionLoading) return
+
+  setOptOutActionLoading(contactId)
+
+  try {
+    await api.patch(`/api/contacts/${contactId}/opt-out`, {
+      optedOut,
+      reason,
+    })
+
+    notify(optedOut ? 'Contact marked as opted-out' : 'Contact marked as opted-in')
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Unable to update opt-out status'), 'error')
+  } finally {
+    setOptOutActionLoading('')
+  }
+}
+
+function manualOptOut(contact) {
+  const reason = window.prompt(
+    `Reason for opting out ${contact.name || contact.phone}?`,
+    'Manual compliance update'
+  )
+
+  if (reason === null) return
+
+  updateContactOptOut(contact.id, true, reason)
+}
+
+function manualOptIn(contact) {
+  const confirmed = window.confirm(
+    `Mark ${contact.name || contact.phone} as opted-in again? Only do this if the customer has clearly requested opt-in.`
+  )
+
+  if (!confirmed) return
+
+  updateContactOptOut(contact.id, false, '')
 }
 
 async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
@@ -2085,18 +2161,31 @@ async function saveCustomization(event) {
           />
         )}
 
-        {!isSuperAdminUser && activePage === 'outbound' && canMonitor && (
-          <OutboundQueuePage
-            events={outboundEvents}
-            loadingId={outboundActionLoading}
-            onRetry={retryOutboundMessage}
-            onRetryFailed={retryFailedOutboundMessages}
-          />
-        )}
+{!isSuperAdminUser && activePage === 'outbound' && canMonitor && (
+  <OutboundQueuePage
+    events={outboundEvents}
+    loadingId={outboundActionLoading}
+    onRetry={retryOutboundMessage}
+    onRetryFailed={retryFailedOutboundMessages}
+  />
+)}
 
-        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
-        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'webhooks' && activePage !== 'outbound' && activePage !== 'audit' && (          <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
-        )}
+{!isSuperAdminUser && activePage === 'optOuts' && canMonitor && (
+  <OptOutManagementPage
+    contacts={optOutContacts}
+    loadingId={optOutActionLoading}
+    onManualOptOut={manualOptOut}
+    onManualOptIn={manualOptIn}
+  />
+)}
+
+{!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
+{!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'webhooks' && activePage !== 'outbound' && activePage !== 'optOuts' && activePage !== 'audit' && (
+  <EmptyState
+    title="Page not available"
+    text="Select a valid page from the sidebar."
+  />
+)}
       </section>
 
       {chatPages && (
@@ -3212,6 +3301,85 @@ function OutboundQueuePage({ events, loadingId, onRetry, onRetryFailed }) {
               >
                 {loadingId === event.id ? 'Retrying...' : 'Retry'}
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OptOutManagementPage({ contacts, loadingId, onManualOptOut, onManualOptIn }) {
+  return (
+    <section className="table-module optout-module">
+      <div className="module-title">
+        <Shield size={18} />
+        <h3>Opt-out Compliance</h3>
+      </div>
+
+      <div className="optout-summary">
+        <div>
+          <strong>{contacts.length}</strong>
+          <span>Opted-out contacts</span>
+        </div>
+        <p>
+          These customers must not receive WhatsApp campaigns or manual messages unless they clearly opt in again.
+        </p>
+      </div>
+
+      {!contacts.length && (
+        <EmptyState
+          title="No opted-out contacts"
+          text="STOP, UNSUBSCRIBE, DND, DO NOT MESSAGE and manual opt-outs will appear here."
+        />
+      )}
+
+      {!!contacts.length && (
+        <div className="optout-table">
+          <div className="optout-table-head">
+            <span>Customer</span>
+            <span>Phone</span>
+            <span>Reason</span>
+            <span>Opted-out at</span>
+            <span>Action</span>
+          </div>
+
+          {contacts.map((contact) => (
+            <div className="optout-row" key={contact.id}>
+              <div>
+                <strong>{contact.name || 'Unknown customer'}</strong>
+                <small>{contact.company || contact.label || '-'}</small>
+              </div>
+
+              <span>{contact.phone || contact.wa_id || '-'}</span>
+
+              <span>{contact.opted_out_reason || 'Customer opt-out / compliance update'}</span>
+
+              <span>
+                {contact.opted_out_at
+                  ? new Date(contact.opted_out_at).toLocaleString()
+                  : '-'}
+              </span>
+
+              <div className="optout-actions">
+                <button
+                  type="button"
+                  className="optout-in-btn"
+                  onClick={() => onManualOptIn(contact)}
+                  disabled={loadingId === contact.id}
+                >
+                  {loadingId === contact.id ? 'Updating...' : 'Mark Opt-in'}
+                </button>
+
+                <button
+                  type="button"
+                  className="optout-out-btn"
+                  onClick={() => onManualOptOut(contact)}
+                  disabled={loadingId === contact.id}
+                >
+                  Keep Opt-out
+                </button>
+              </div>
             </div>
           ))}
         </div>
