@@ -768,10 +768,12 @@ const [authChecking, setAuthChecking] = useState(true)
   const [auditEvents, setAuditEvents] = useState([])
   const [webhookEvents, setWebhookEvents] = useState([])
   const [webhookActionLoading, setWebhookActionLoading] = useState('')
-const [outboundEvents, setOutboundEvents] = useState([])
-const [outboundActionLoading, setOutboundActionLoading] = useState('')
-const [optOutContacts, setOptOutContacts] = useState([])
-const [optOutActionLoading, setOptOutActionLoading] = useState('')
+  const [outboundEvents, setOutboundEvents] = useState([])
+  const [outboundActionLoading, setOutboundActionLoading] = useState('')
+  const [optOutContacts, setOptOutContacts] = useState([])
+  const [optOutActionLoading, setOptOutActionLoading] = useState('')
+  const [salesWorkspaceTab, setSalesWorkspaceTab] = useState('quotes')
+  const [controlCenterTab, setControlCenterTab] = useState('settings')
   const [filter, setFilter] = useState('all')
   const [windowFilter, setWindowFilter] = useState('all')
   const [stageFilter, setStageFilter] = useState('all')
@@ -834,45 +836,65 @@ const [optOutActionLoading, setOptOutActionLoading] = useState('')
   const labels = useMemo(() => ['all', ...(appSettings.labels || defaultAppSettings.labels)], [appSettings.labels])
   const stages = useMemo(() => appSettings.stages || defaultAppSettings.stages, [appSettings.stages])
 
-  const pageItems = useMemo(() => {
+  const navigationGroups = useMemo(() => {
     if (isSuperAdminUser) {
       return [
-        { id: 'platformTenants', label: 'Clients', icon: Building2 },
-        { id: 'platformStatus', label: 'Status', icon: Activity },
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'inbox', label: 'Inbox', icon: Inbox },
-        { id: 'new', label: 'Enquiries', icon: Bell },
-        { id: 'sales', label: 'Pipeline', icon: Activity },
-        { id: 'inventory', label: 'Inventory', icon: Boxes },
-        { id: 'bot', label: 'Automation', icon: Sparkles },
-        { id: 'quotes', label: 'Quotes', icon: ClipboardList },
-        { id: 'orders', label: 'Orders', icon: ShoppingCart },
-        { id: 'activeOrders', label: 'Active', icon: Clock3 },
-        { id: 'settings', label: 'Settings', icon: Settings },
-        { id: 'audit', label: 'Audit', icon: Shield },
-        { id: 'users', label: 'Users', icon: Users },
+        {
+          label: 'Platform',
+          items: [
+            { id: 'platformTenants', label: 'Clients', icon: Building2 },
+            { id: 'platformStatus', label: 'Status', icon: Activity },
+          ],
+        },
+        {
+          label: 'Client Preview',
+          items: [
+            { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+            { id: 'inbox', label: 'Inbox', icon: Inbox },
+            { id: 'salesWorkspace', label: 'Sales Workspace', icon: ClipboardList },
+          ],
+        },
       ]
     }
 
-    const common = [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'inbox', label: 'Inbox', icon: Inbox },
-      { id: 'new', label: 'Enquiries', icon: Bell },
-      { id: 'sales', label: 'Pipeline', icon: Activity },
-      { id: 'inventory', label: 'Inventory', icon: Boxes },
-      { id: 'bot', label: 'Automation', icon: Sparkles },
-      { id: 'quotes', label: 'Quotes', icon: ClipboardList },
-      { id: 'orders', label: 'Orders', icon: ShoppingCart },
-      { id: 'activeOrders', label: 'Active', icon: Clock3 },
+    const groups = [
+      {
+        label: 'Overview',
+        items: [
+          { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'inbox', label: 'Inbox', icon: Inbox },
+        ],
+      },
+      {
+        label: 'Sales',
+        items: [
+          { id: 'new', label: 'Enquiries', icon: Bell },
+          { id: 'sales', label: 'Pipeline', icon: Activity },
+          { id: 'salesWorkspace', label: 'Sales Workspace', icon: ClipboardList },
+          { id: 'inventory', label: 'Inventory', icon: Boxes },
+        ],
+      },
+      {
+        label: 'Automation',
+        items: [
+          { id: 'bot', label: 'Automation Studio', icon: Sparkles },
+        ],
+      },
     ]
-    if (user?.role === 'admin') common.splice(1, 0, { id: 'connectWhatsApp', label: 'Meta Setup', icon: MessageCircle })
-    if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
-if (canMonitor) common.push({ id: 'webhooks', label: 'Webhooks', icon: Activity })
-if (canMonitor) common.push({ id: 'outbound', label: 'Outbound', icon: Send })
-if (canMonitor) common.push({ id: 'optOuts', label: 'Opt-outs', icon: Shield })
-if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
-    if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
-    return common
+
+    if (user?.role === 'admin') {
+      groups[2].items.unshift({ id: 'connectWhatsApp', label: 'Meta WhatsApp Setup', icon: MessageCircle })
+    }
+
+    if (canMonitor) {
+      const administrationItems = [
+        { id: 'controlCenter', label: 'Control Center', icon: Settings },
+      ]
+      if (user?.role === 'admin') administrationItems.push({ id: 'users', label: 'Team & Roles', icon: Users })
+      groups.push({ label: 'Administration', items: administrationItems })
+    }
+
+    return groups
   }, [canMonitor, isSuperAdminUser, user?.role])
 
  useEffect(() => {
@@ -1422,26 +1444,31 @@ function enterWorkspace(authenticatedUser) {
 
 if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={appSettings} />
 
-function showPage(page, pageFilter = {}) {
-  const platformPages = ['platformTenants', 'platformStatus']
-  const clientPreviewPages = [
+  function showPage(page, pageFilter = {}) {
+    const platformPages = ['platformTenants', 'platformStatus']
+    const clientPreviewPages = [
     'dashboard',
     'inbox',
     'new',
     'sales',
     'inventory',
-    'bot',
-    'quotes',
-    'orders',
-    'activeOrders',
-    'settings',
-    'webhooks',
-    'outbound',
-    'audit',
-    'users',
-  ]
-  const monitorOnlyPages = ['settings', 'webhooks', 'outbound', 'audit']
-  const adminOnlyPages = ['users', 'connectWhatsApp']
+      'bot',
+      'salesWorkspace',
+      'quotes',
+      'orders',
+      'activeOrders',
+      'controlCenter',
+      'settings',
+      'webhooks',
+      'outbound',
+      'optOuts',
+      'audit',
+      'users',
+    ]
+    const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit']
+    const adminOnlyPages = ['users', 'connectWhatsApp']
+    const salesSubPages = ['quotes', 'orders', 'activeOrders']
+    const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
 
   if (isSuperAdminUser) {
     if (clientPreviewPages.includes(page)) {
@@ -1487,6 +1514,18 @@ function showPage(page, pageFilter = {}) {
   if (adminOnlyPages.includes(page) && user?.role !== 'admin') {
     notify('Admin access required', 'error')
     setActivePage('inbox')
+    return
+  }
+
+  if (salesSubPages.includes(page)) {
+    setSalesWorkspaceTab(page)
+    setActivePage('salesWorkspace')
+    return
+  }
+
+  if (controlSubPages.includes(page)) {
+    setControlCenterTab(page)
+    setActivePage('controlCenter')
     return
   }
 
@@ -1642,7 +1681,8 @@ async function simulateInbound(event) {
     try {
       await api.post(`/api/quotations/${quote.id}/convert-order`)
       notify('Customer-approved quotation converted to order')
-      setActivePage('orders')
+      setSalesWorkspaceTab('orders')
+      setActivePage('salesWorkspace')
       await loadAll()
     } catch (err) {
       notify(apiErrorMessage(err, 'Order creation failed'), 'error')
@@ -1981,34 +2021,102 @@ async function saveCustomization(event) {
     kicker: 'All conversations',
     helper: 'Customer chats, owner, stage and reply window in one clean view.',
   }
+  const failedOperationsCount = webhookEvents.length + outboundEvents.length
+  const pageContext = {
+    platformTenants: { section: 'Platform', title: 'Client Companies' },
+    platformStatus: { section: 'Platform', title: 'Service Status' },
+    dashboard: { section: 'Overview', title: 'Dashboard' },
+    inbox: { section: 'Conversations', title: 'Inbox' },
+    new: { section: 'Conversations', title: 'New Enquiries' },
+    sales: { section: 'Conversations', title: 'Sales Pipeline' },
+    salesWorkspace: { section: 'Sales', title: 'Sales Workspace' },
+    inventory: { section: 'Sales', title: 'Inventory' },
+    bot: { section: 'Automation', title: 'Automation Studio' },
+    connectWhatsApp: { section: 'Automation', title: 'Meta WhatsApp Setup' },
+    controlCenter: { section: 'Administration', title: 'Control Center' },
+    users: { section: 'Administration', title: 'Team & Roles' },
+  }[activePage] || { section: 'Workspace', title: appSettings.appName }
 
   return (
     <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
-      <aside className="nav-rail">
-        <div className="rail-logo"><MessageCircle size={26} /></div>
-        {pageItems.map((item) => {
-          const Icon = item.icon
-          return (
-            <button key={item.id} className={activePage === item.id ? 'active' : ''} type="button" onClick={() => showPage(item.id)}>
-              <Icon size={20} />
-              <span>{item.label}</span>
-            </button>
-          )
-        })}
-        <button className="logout-btn" type="button" onClick={logout}><LogOut size={20} /><span>Logout</span></button>
+      <aside className="nav-rail workspace-sidebar">
+        <div className="sidebar-brand">
+          <div className="rail-logo"><MessageCircle size={25} /></div>
+          <div>
+            <strong>{isSuperAdminUser ? 'BOS Platform' : appSettings.appName}</strong>
+            <span>{isSuperAdminUser ? 'Owner Console' : 'Business Workspace'}</span>
+          </div>
+        </div>
+        <nav className="sidebar-navigation" aria-label="Workspace navigation">
+          {navigationGroups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-group-label">{group.label}</span>
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const badgeCount = item.id === 'controlCenter'
+                  ? failedOperationsCount + optOutContacts.length
+                  : item.id === 'salesWorkspace'
+                    ? activeOrders.length
+                    : null
+                return (
+                  <button key={item.id} className={activePage === item.id ? 'active' : ''} type="button" onClick={() => showPage(item.id)}>
+                    <Icon size={19} />
+                    <span>{item.label}</span>
+                    {badgeCount > 0 && <b>{badgeCount}</b>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-account">
+          <div className="sidebar-user">
+            <strong>{user.name}</strong>
+            <span>{user.role}</span>
+          </div>
+          <button className="logout-btn" type="button" onClick={logout}><LogOut size={18} /><span>Logout</span></button>
+        </div>
       </aside>
 
       <section className="module-panel">
-        <div className="app-title inbox-title">
+        <div className="app-title inbox-title workspace-topbar">
           <div>
-            <h1>{isSuperAdminUser ? 'Platform Console' : appSettings.appName}</h1>
+            <small>{pageContext.section}</small>
+            <h1>{pageContext.title}</h1>
             <span>{isSuperAdminUser ? `Platform Owner - ${user.name} / ${user.role}` : `${appSettings.companyName} - ${user.name} / ${user.role}`}</span>
           </div>
-          <button type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={17} /> Refresh</button>
+          <div className="workspace-topbar-actions">
+            {!isSuperAdminUser && canMonitor && (
+              <span className={`workspace-status ${whatsappHealth?.setupComplete ? 'ready' : 'attention'}`}>
+                {whatsappHealth?.setupComplete ? 'WhatsApp Ready' : 'Setup Attention'}
+              </span>
+            )}
+            <button type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={17} /> Refresh</button>
+          </div>
         </div>
         {loadError && <div className="load-error">{loadError}</div>}
         {platformError && <div className="load-error">{platformError}</div>}
+        {!isSuperAdminUser && user.role === 'admin' && whatsappOnboarding && !whatsappOnboarding.connected && activePage !== 'connectWhatsApp' && (
+          <div className="workspace-alert warning">
+            <MessageCircle size={20} />
+            <div>
+              <strong>Meta WhatsApp connection is pending</strong>
+              <span>Connect the official account before enabling production customer messaging.</span>
+            </div>
+            <button type="button" onClick={() => showPage('connectWhatsApp')}>Complete Setup</button>
+          </div>
+        )}
+        {!isSuperAdminUser && canMonitor && failedOperationsCount > 0 && activePage !== 'controlCenter' && (
+          <div className="workspace-alert danger">
+            <Activity size={20} />
+            <div>
+              <strong>{failedOperationsCount} messaging event{failedOperationsCount === 1 ? '' : 's'} need review</strong>
+              <span>Check failed webhook and outbound activity before retrying any customer communication.</span>
+            </div>
+            <button type="button" onClick={() => showPage('webhooks')}>Review Events</button>
+          </div>
+        )}
 
         {isSuperAdminUser && (
           <PlatformPage
@@ -2053,10 +2161,34 @@ async function saveCustomization(event) {
         )}
 
         {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
-        {!isSuperAdminUser && activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
+        {!isSuperAdminUser && activePage === 'inventory' && (
+          <section className="workspace-page">
+            <WorkspaceHeading title="Inventory & Product Catalog" description="Manage product stock, pricing and searchable fields used in sales workflows." />
+            <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />
+          </section>
+        )}
         {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
-        {!isSuperAdminUser && activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {!isSuperAdminUser && activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
-        {!isSuperAdminUser && activePage === 'users' && user.role === 'admin' && <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />}
+        {!isSuperAdminUser && activePage === 'salesWorkspace' && (
+          <SalesWorkspacePage
+            activeTab={salesWorkspaceTab}
+            onChangeTab={setSalesWorkspaceTab}
+            quotations={quotations}
+            orders={orders}
+            activeOrders={activeOrders}
+            onQuoteStatus={updateQuote}
+            onConvertQuote={convertQuote}
+            onDownloadQuote={downloadQuote}
+            onSendManagerApproval={sendQuoteForManagerApproval}
+            onSendCustomer={sendQuoteToCustomer}
+            onUpdateOrder={updateOrder}
+          />
+        )}
+        {!isSuperAdminUser && activePage === 'users' && user.role === 'admin' && (
+          <section className="workspace-page">
+            <WorkspaceHeading title="Team & Role Access" description="Create and manage authorised workspace users for this company only." />
+            <UsersPage users={users} newUser={newUser} setNewUser={setNewUser} editingUserId={editingUserId} onCreate={createUser} onEdit={editUser} onCancel={cancelUserEdit} onToggle={toggleUser} onDelete={deleteUser} />
+          </section>
+        )}
 {!isSuperAdminUser && activePage === 'connectWhatsApp' && user.role === 'admin' && (
   <WhatsAppConnectGate
     onboarding={whatsappOnboarding}
@@ -2066,121 +2198,54 @@ async function saveCustomization(event) {
   />
 )}
 
-{!isSuperAdminUser && activePage === 'settings' && canMonitor && (
-  <>
-    {whatsappOnboarding && !whatsappOnboarding.connected && user.role === 'admin' && (
-      <div className="setup-card">
-        <h3>Meta WhatsApp Embedded Signup</h3>
-        <p>
-          This company is not connected through Meta Embedded Signup yet.
-          Connect official WhatsApp Business API to unlock production messaging.
-        </p>
-        <div className="inline-actions">
-          <button
-            type="button"
-            onClick={() => setActivePage('connectWhatsApp')}
-          >
-            Connect Meta WhatsApp
-          </button>
-        </div>
-      </div>
-    )}
-
-        {whatsappOnboarding?.connected && whatsappOnboarding?.whatsappAccount && (
-      <div className="setup-card">
-        <h3>Meta WhatsApp Connected</h3>
-
-        <div className="setup-grid">
-          <span className="ok">Connected</span>
-          <span className={whatsappOnboarding.whatsappAccount.active ? 'ok' : 'warn'}>
-            {whatsappOnboarding.whatsappAccount.active ? 'Active' : 'Inactive'}
-          </span>
-        </div>
-
-        <p className="setup-copy">
-          Phone: {whatsappOnboarding.whatsappAccount.displayPhoneNumber || '-'}
-        </p>
-
-        <p className="setup-copy">
-          Phone Number ID: {whatsappOnboarding.whatsappAccount.phoneNumberId || '-'}
-        </p>
-
-        <p className="setup-copy">
-          WABA ID: {whatsappOnboarding.whatsappAccount.wabaId || '-'}
-        </p>
-
-        <p className="setup-copy">
-          Connected At: {whatsappOnboarding.whatsappAccount.connectedAt
-            ? new Date(whatsappOnboarding.whatsappAccount.connectedAt).toLocaleString()
-            : '-'}
-        </p>
-
-        <small className="setup-copy">
-          Tokens are stored securely on backend only. Access token is never exposed to frontend.
-        </small>
-      </div>
-    )}
-
-    <SettingsPage
-      status={status}
-      whatsappConfig={whatsappConfig}
-      testMessage={testMessage}
-      setTestMessage={setTestMessage}
-      testResult={testResult}
-      onTest={sendTestMessage}
-      onMapPhone={mapCurrentWhatsAppPhone}
-      simulator={simulator}
-      setSimulator={setSimulator}
-      onSimulate={simulateInbound}
-      customForm={customForm}
-      setCustomForm={setCustomForm}
-      onSaveCustomization={saveCustomization}
-      settingsSaved={settingsSaved}
-      templates={managedTemplates}
-      templateForm={templateForm}
-      setTemplateForm={setTemplateForm}
-      editingTemplateId={editingTemplateId}
-      onSaveTemplate={saveTemplate}
-      onEditTemplate={editTemplate}
-      onToggleTemplate={toggleTemplate}
-      onCancelTemplateEdit={cancelTemplateEdit}
-      onSyncTemplates={syncTemplatesFromMeta}
-      templateSyncing={templateSyncing}
-      userRole={user.role}
-      isProduction={isProduction}
-    />
-  </>
-)}
-        {!isSuperAdminUser && activePage === 'webhooks' && canMonitor && (
-          <WebhookEventsPage
-            events={webhookEvents}
-            loadingId={webhookActionLoading}
-            isAdmin={user.role === 'admin'}
-            onRetry={retryWebhookEvent}
+        {!isSuperAdminUser && activePage === 'controlCenter' && canMonitor && (
+          <ControlCenterPage
+            activeTab={controlCenterTab}
+            onChangeTab={setControlCenterTab}
+            onboarding={whatsappOnboarding}
+            onOpenMetaSetup={() => showPage('connectWhatsApp')}
+            status={status}
+            whatsappConfig={whatsappConfig}
+            testMessage={testMessage}
+            setTestMessage={setTestMessage}
+            testResult={testResult}
+            onTest={sendTestMessage}
+            onMapPhone={mapCurrentWhatsAppPhone}
+            simulator={simulator}
+            setSimulator={setSimulator}
+            onSimulate={simulateInbound}
+            customForm={customForm}
+            setCustomForm={setCustomForm}
+            onSaveCustomization={saveCustomization}
+            settingsSaved={settingsSaved}
+            templates={managedTemplates}
+            templateForm={templateForm}
+            setTemplateForm={setTemplateForm}
+            editingTemplateId={editingTemplateId}
+            onSaveTemplate={saveTemplate}
+            onEditTemplate={editTemplate}
+            onToggleTemplate={toggleTemplate}
+            onCancelTemplateEdit={cancelTemplateEdit}
+            onSyncTemplates={syncTemplatesFromMeta}
+            templateSyncing={templateSyncing}
+            userRole={user.role}
+            isProduction={isProduction}
+            webhookEvents={webhookEvents}
+            webhookActionLoading={webhookActionLoading}
+            onRetryWebhook={retryWebhookEvent}
             onRecoverStuck={recoverStuckWebhookEvents}
+            outboundEvents={outboundEvents}
+            outboundActionLoading={outboundActionLoading}
+            onRetryOutbound={retryOutboundMessage}
+            onRetryFailedOutbound={retryFailedOutboundMessages}
+            optOutContacts={optOutContacts}
+            optOutActionLoading={optOutActionLoading}
+            onManualOptOut={manualOptOut}
+            onManualOptIn={manualOptIn}
+            auditEvents={auditEvents}
           />
         )}
-
-{!isSuperAdminUser && activePage === 'outbound' && canMonitor && (
-  <OutboundQueuePage
-    events={outboundEvents}
-    loadingId={outboundActionLoading}
-    onRetry={retryOutboundMessage}
-    onRetryFailed={retryFailedOutboundMessages}
-  />
-)}
-
-{!isSuperAdminUser && activePage === 'optOuts' && canMonitor && (
-  <OptOutManagementPage
-    contacts={optOutContacts}
-    loadingId={optOutActionLoading}
-    onManualOptOut={manualOptOut}
-    onManualOptIn={manualOptIn}
-  />
-)}
-
-{!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
-{!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'webhooks' && activePage !== 'outbound' && activePage !== 'optOuts' && activePage !== 'audit' && (
+        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'salesWorkspace' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'controlCenter' && (
   <EmptyState
     title="Page not available"
     text="Select a valid page from the sidebar."
@@ -2899,6 +2964,151 @@ function BotStudioPage({ appSettings, products, drafts, lowStockProducts, onOpen
 
 function EmptyState({ title, text }) {
   return <div className="empty-list"><strong>{title}</strong><span>{text}</span></div>
+}
+
+function WorkspaceHeading({ title, description, action }) {
+  return (
+    <div className="workspace-head workspace-head-structured">
+      <div>
+        <span className="workspace-eyebrow">Workspace Module</span>
+        <h2>{title}</h2>
+        <span>{description}</span>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+function WorkspaceTabs({ tabs, activeTab, onChangeTab }) {
+  return (
+    <nav className="workspace-tabs" aria-label="Module sections">
+      {tabs.map((tab) => {
+        const Icon = tab.icon
+        return (
+          <button key={tab.id} className={activeTab === tab.id ? 'active' : ''} type="button" onClick={() => onChangeTab(tab.id)}>
+            <Icon size={17} />
+            <span>{tab.label}</span>
+            {tab.count > 0 && <b>{tab.count}</b>}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function SalesWorkspacePage({ activeTab, onChangeTab, quotations, orders, activeOrders, onQuoteStatus, onConvertQuote, onDownloadQuote, onSendManagerApproval, onSendCustomer, onUpdateOrder }) {
+  const tabs = [
+    { id: 'quotes', label: 'Quotations', icon: ClipboardList, count: quotations.length },
+    { id: 'orders', label: 'All Orders', icon: ShoppingCart, count: orders.length },
+    { id: 'activeOrders', label: 'Active Orders', icon: Clock3, count: activeOrders.length },
+  ]
+
+  return (
+    <section className="workspace-page workspace-hub-page">
+      <WorkspaceHeading
+        title="Sales Workspace"
+        description="Quotations and orders are organized as subpages so each workflow stays focused and easy to review."
+      />
+      <WorkspaceTabs tabs={tabs} activeTab={activeTab} onChangeTab={onChangeTab} />
+      {activeTab === 'quotes' && (
+        <QuotesPage quotations={quotations} onStatus={onQuoteStatus} onConvert={onConvertQuote} onDownload={onDownloadQuote} onSendManagerApproval={onSendManagerApproval} onSendCustomer={onSendCustomer} />
+      )}
+      {activeTab === 'orders' && <OrdersPage orders={orders} onUpdate={onUpdateOrder} />}
+      {activeTab === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={onUpdateOrder} title="Active Orders" />}
+    </section>
+  )
+}
+
+function ControlCenterPage({
+  activeTab,
+  onChangeTab,
+  onboarding,
+  onOpenMetaSetup,
+  userRole,
+  webhookEvents,
+  webhookActionLoading,
+  onRetryWebhook,
+  onRecoverStuck,
+  outboundEvents,
+  outboundActionLoading,
+  onRetryOutbound,
+  onRetryFailedOutbound,
+  optOutContacts,
+  optOutActionLoading,
+  onManualOptOut,
+  onManualOptIn,
+  auditEvents,
+  ...settingsProps
+}) {
+  const tabs = [
+    { id: 'settings', label: 'Settings & Templates', icon: Settings },
+    { id: 'webhooks', label: 'Webhooks', icon: Activity, count: webhookEvents.length },
+    { id: 'outbound', label: 'Outbound', icon: Send, count: outboundEvents.length },
+    { id: 'optOuts', label: 'Opt-outs', icon: Shield, count: optOutContacts.length },
+    { id: 'audit', label: 'Audit Log', icon: ClipboardList },
+  ]
+
+  return (
+    <section className="workspace-page workspace-hub-page">
+      <WorkspaceHeading
+        title="Control Center"
+        description="Business setup, Meta monitoring and compliance checks are grouped into secure operational subpages."
+      />
+      <WorkspaceTabs tabs={tabs} activeTab={activeTab} onChangeTab={onChangeTab} />
+
+      {activeTab === 'settings' && (
+        <>
+          {onboarding && !onboarding.connected && userRole === 'admin' && (
+            <div className="setup-card">
+              <h3>Meta WhatsApp Embedded Signup</h3>
+              <p>This company is not connected through Meta Embedded Signup yet. Connect official WhatsApp Business API to unlock production messaging.</p>
+              <div className="inline-actions">
+                <button type="button" onClick={onOpenMetaSetup}>Connect Meta WhatsApp</button>
+              </div>
+            </div>
+          )}
+
+          {onboarding?.connected && onboarding?.whatsappAccount && (
+            <div className="setup-card">
+              <h3>Meta WhatsApp Connected</h3>
+              <div className="setup-grid">
+                <span className="ok">Connected</span>
+                <span className={onboarding.whatsappAccount.active ? 'ok' : 'warn'}>
+                  {onboarding.whatsappAccount.active ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+              <p className="setup-copy">Phone: {onboarding.whatsappAccount.displayPhoneNumber || '-'}</p>
+              <p className="setup-copy">Phone Number ID: {onboarding.whatsappAccount.phoneNumberId || '-'}</p>
+              <p className="setup-copy">WABA ID: {onboarding.whatsappAccount.wabaId || '-'}</p>
+              <p className="setup-copy">
+                Connected At: {onboarding.whatsappAccount.connectedAt ? new Date(onboarding.whatsappAccount.connectedAt).toLocaleString() : '-'}
+              </p>
+              <small className="setup-copy">Tokens are stored securely on backend only. Access token is never exposed to frontend.</small>
+            </div>
+          )}
+
+          <SettingsPage {...settingsProps} userRole={userRole} />
+        </>
+      )}
+
+      {activeTab === 'webhooks' && (
+        <WebhookEventsPage
+          events={webhookEvents}
+          loadingId={webhookActionLoading}
+          isAdmin={userRole === 'admin'}
+          onRetry={onRetryWebhook}
+          onRecoverStuck={onRecoverStuck}
+        />
+      )}
+      {activeTab === 'outbound' && (
+        <OutboundQueuePage events={outboundEvents} loadingId={outboundActionLoading} onRetry={onRetryOutbound} onRetryFailed={onRetryFailedOutbound} />
+      )}
+      {activeTab === 'optOuts' && (
+        <OptOutManagementPage contacts={optOutContacts} loadingId={optOutActionLoading} onManualOptOut={onManualOptOut} onManualOptIn={onManualOptIn} />
+      )}
+      {activeTab === 'audit' && <AuditPage events={auditEvents} />}
+    </section>
+  )
 }
 
 function InventoryPage({ products, productForm, setProductForm, editingProductId, onSave, onEdit, onDelete, onCancel, productSearch, setProductSearch, onSearch, canManage, currency, inventoryColumnsText, setInventoryColumnsText, onImport, importResult }) {
