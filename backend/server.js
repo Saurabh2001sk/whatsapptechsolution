@@ -22,11 +22,22 @@ const app = express();
 const port = Number(process.env.PORT || 5000);
 const isProduction = process.env.NODE_ENV === 'production';
 
-if (isProduction && !process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET is required in production');
+const rawJwtSecret = String(process.env.JWT_SECRET || '').trim();
+
+if (isProduction) {
+  const jwtLooksUnsafe =
+    !rawJwtSecret ||
+    rawJwtSecret.length < 32 ||
+    rawJwtSecret.startsWith('your-') ||
+    rawJwtSecret.startsWith('change-') ||
+    rawJwtSecret === 'dev-only-local-secret';
+
+  if (jwtLooksUnsafe) {
+    throw new Error('JWT_SECRET must be a real random secret with at least 32 characters in production');
+  }
 }
 
-const jwtSecret = process.env.JWT_SECRET || 'dev-only-local-secret';
+const jwtSecret = rawJwtSecret || 'dev-only-local-secret';
 
 const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -202,6 +213,8 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
 // =========================================================
 // CONSTANTS
 // =========================================================
+
+const MAX_WHATSAPP_TEXT_LENGTH = 4096;
 
 const DEFAULT_APP_SETTINGS = {
   appName: 'WhatsApp Sales CRM',
@@ -1576,6 +1589,36 @@ async function validateContactForTenant(tenantId, contactId) {
   }
 }
 
+async function validateTemplateRetryAllowed(tenantId, templateName, language = 'en') {
+  const cleanTemplateName = String(templateName || '').trim();
+  const cleanLanguage = String(language || 'en').trim() || 'en';
+
+  if (!cleanTemplateName) {
+    const error = new Error('Template name missing. Template retry is not allowed.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const result = await query(
+    `SELECT id, name, language, active
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND active = true
+     LIMIT 1`,
+    [tenantId, cleanTemplateName, cleanLanguage],
+  );
+
+  if (!result.rows[0]) {
+    const error = new Error('Template is not active for this company. Sync/add the approved Meta template before retrying.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return result.rows[0];
+}
+
 function extractText(message) {
   if (message.type === 'text') return message.text?.body || '';
   if (message.type === 'button') return message.button?.text || '';
@@ -2292,6 +2335,68 @@ async function getWhatsAppSendConfig(tenantId) {
     phoneNumberId,
     accessToken,
   };
+}
+
+async function getWhatsAppTemplateSyncConfig(tenantId) {
+  const accountResult = await query(
+    `SELECT
+       waba_id,
+       access_token_encrypted,
+       access_token_iv,
+       access_token_tag
+     FROM whatsapp_accounts
+     WHERE tenant_id = $1
+       AND active = true
+     ORDER BY connected_at DESC NULLS LAST, created_at DESC
+     LIMIT 1`,
+    [tenantId],
+  );
+
+  const account = accountResult.rows[0];
+
+  if (account?.waba_id && account?.access_token_encrypted) {
+    const accessToken = decryptSecret({
+      encrypted: account.access_token_encrypted,
+      iv: account.access_token_iv,
+      tag: account.access_token_tag,
+    });
+
+    if (hasRealValue(accessToken)) {
+      return {
+        apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
+        wabaId: account.waba_id,
+        accessToken,
+        source: 'tenant_embedded_signup',
+      };
+    }
+  }
+
+  const envWabaId = String(process.env.WHATSAPP_WABA_ID || '').trim();
+  const envToken = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
+
+  if (hasRealValue(envWabaId) && hasRealValue(envToken)) {
+    return {
+      apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
+      wabaId: envWabaId,
+      accessToken: envToken,
+      source: 'env_fallback',
+    };
+  }
+
+  return null;
+}
+
+function extractMetaTemplateBody(template = {}) {
+  const bodyComponent = (template.components || []).find((component) => component.type === 'BODY');
+  return String(bodyComponent?.text || '').trim().slice(0, 1000);
+}
+
+function normalizeMetaTemplateStatus(value = '') {
+  return String(value || 'unknown').trim().toLowerCase();
+}
+
+function normalizeMetaTemplateCategory(value = '') {
+  return String(value || 'utility').trim().toLowerCase();
 }
 
 function whatsappMessagesUrl(config) {
@@ -4219,6 +4324,147 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
+app.get('/api/whatsapp/health', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const callbackUrl = process.env.PUBLIC_BASE_URL
+    ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook`
+    : '';
+
+  const accountResult = await query(
+    `SELECT
+       id,
+       phone_number_id,
+       display_phone_number,
+       waba_id,
+       active,
+       access_token_encrypted,
+       access_token_iv,
+       access_token_tag,
+       connected_at,
+       updated_at
+     FROM whatsapp_accounts
+     WHERE tenant_id = $1
+     ORDER BY active DESC, connected_at DESC NULLS LAST, created_at DESC
+     LIMIT 1`,
+    [req.user.tenantId],
+  );
+
+  const account = accountResult.rows[0] || null;
+
+  const hasTenantEncryptedToken = Boolean(
+    account?.access_token_encrypted &&
+    account?.access_token_iv &&
+    account?.access_token_tag,
+  );
+
+  const envTokenConfigured = isWhatsAppConfigured();
+  const tokenMode = hasTenantEncryptedToken
+    ? 'tenant_embedded_signup'
+    : envTokenConfigured
+      ? 'env_fallback'
+      : 'not_configured';
+
+  const [lastInbound, lastOutbound, webhookRecent, outboundRecent] = await Promise.all([
+    query(
+      `SELECT created_at
+       FROM messages
+       WHERE tenant_id = $1
+         AND direction = 'inbound'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT COALESCE(sent_at, updated_at, created_at) AS at
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND status = 'sent'
+       ORDER BY COALESCE(sent_at, updated_at, created_at) DESC
+       LIMIT 1`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM webhook_events
+       WHERE tenant_id = $1
+         AND received_at >= now() - interval '24 hours'
+       GROUP BY status`,
+      [req.user.tenantId],
+    ),
+    query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND created_at >= now() - interval '24 hours'
+       GROUP BY status`,
+      [req.user.tenantId],
+    ),
+  ]);
+
+  const connected = Boolean(
+    account?.active &&
+    account?.phone_number_id &&
+    (hasTenantEncryptedToken || envTokenConfigured),
+  );
+
+  const setupIssues = [];
+
+  if (!account?.phone_number_id && !hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)) {
+    setupIssues.push('No WhatsApp phone number is connected.');
+  }
+
+  if (!hasTenantEncryptedToken && !envTokenConfigured) {
+    setupIssues.push('No tenant token or environment fallback token is configured.');
+  }
+
+  if (!hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)) {
+    setupIssues.push('WHATSAPP_VERIFY_TOKEN is missing.');
+  }
+
+  if (isProduction && !hasRealValue(process.env.WHATSAPP_APP_SECRET)) {
+    setupIssues.push('WHATSAPP_APP_SECRET is missing. Production webhooks need signature verification.');
+  }
+
+  if (!callbackUrl) {
+    setupIssues.push('PUBLIC_BASE_URL is missing, so webhook callback URL cannot be shown.');
+  }
+
+  res.json({
+    connected,
+    setupComplete: connected && setupIssues.length === 0,
+    tokenMode,
+    webhookUrl: callbackUrl || 'Set PUBLIC_BASE_URL to show full webhook URL',
+    webhookPath: '/webhook',
+    signatureRequired: isProduction,
+    verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
+    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
+    apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
+    account: account
+      ? {
+          id: account.id,
+          active: account.active,
+          phoneNumberId: maskValue(account.phone_number_id || ''),
+          displayPhoneNumber: account.display_phone_number || '',
+          wabaId: maskValue(account.waba_id || ''),
+          connectedAt: account.connected_at,
+          updatedAt: account.updated_at,
+          tokenStored: hasTenantEncryptedToken,
+        }
+      : null,
+    activity: {
+      lastInboundAt: lastInbound.rows[0]?.created_at || null,
+      lastOutboundAt: lastOutbound.rows[0]?.at || null,
+      webhookEvents24h: webhookRecent.rows,
+      outboundMessages24h: outboundRecent.rows,
+    },
+    setupIssues,
+    timestamp: new Date().toISOString(),
+  });
+}));
+
 app.get('/api/whatsapp/onboarding', requireAuth, asyncHandler(async (req, res) => {
   const tenantResult = await query(
     `SELECT id, name, slug, onboarding_status
@@ -4767,7 +5013,7 @@ async function processWhatsAppWebhookPayload(payload) {
   }
 }
 
-app.post('/webhook', (req, res) => {
+app.post('/webhook', asyncHandler(async (req, res) => {
   console.log('WA webhook received:', {
     object: req.body?.object || null,
     entries: req.body?.entry?.length || 0,
@@ -4780,14 +5026,12 @@ app.post('/webhook', (req, res) => {
   }
 
   const payload = req.body;
+  const webhookEvent = await createWebhookEvent(payload);
 
   res.sendStatus(200);
 
   setImmediate(async () => {
-    let webhookEvent = null;
-
     try {
-      webhookEvent = await createWebhookEvent(payload);
       await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
 
       await processWhatsAppWebhookPayload(payload);
@@ -4800,12 +5044,10 @@ app.post('/webhook', (req, res) => {
         stack: error.stack,
       });
 
-      if (webhookEvent?.id) {
-        await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
-      }
+      await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
     }
   });
-});
+}));
 
 app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
   if (isProduction) {
@@ -5401,11 +5643,13 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
     });
   }
 
-  await markWebhookEventProcessing(event.id, req.user.tenantId);
+  const eventTenantId = event.tenant_id;
+
+  await markWebhookEventProcessing(event.id, eventTenantId);
 
   try {
     await processWhatsAppWebhookPayload(event.payload);
-    await markWebhookEventProcessed(event.id, req.user.tenantId);
+    await markWebhookEventProcessed(event.id, eventTenantId);
 
     await recordAudit({
       tenantId: req.user.tenantId,
@@ -5416,6 +5660,7 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
       metadata: {
         previousAttempts: event.attempts,
         result: 'processed',
+        eventTenantId,
       },
     });
 
@@ -5426,7 +5671,7 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
       message: 'Webhook event retried successfully.',
     });
   } catch (error) {
-    await markWebhookEventFailed(event.id, req.user.tenantId, error);
+    await markWebhookEventFailed(event.id, eventTenantId, error);
 
     await recordAudit({
       tenantId: req.user.tenantId,
@@ -5437,6 +5682,7 @@ app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, 
       metadata: {
         previousAttempts: event.attempts,
         result: 'failed',
+        eventTenantId,
         error: String(error.message || error).slice(0, 500),
       },
     });
@@ -5546,10 +5792,29 @@ app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (re
     });
   }
 
+  if (!['text', 'template'].includes(outbound.message_type)) {
+    return res.status(400).json({
+      error: `Retry is not supported for outbound message type: ${outbound.message_type}`,
+    });
+  }
+
+  if (outbound.message_type === 'text' && String(outbound.body || '').length > MAX_WHATSAPP_TEXT_LENGTH) {
+    return res.status(400).json({
+      error: `WhatsApp text message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
+    });
+  }
+
   if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
     return res.status(400).json({
       error: '24-hour reply window expired. Text retry is not allowed. Use approved template.',
     });
+  }
+  if (outbound.message_type === 'template') {
+    await validateTemplateRetryAllowed(
+      req.user.tenantId,
+      outbound.template_name,
+      outbound.language || 'en',
+    );
   }
 
   await markOutboundSending(outbound.id, req.user.tenantId);
@@ -5817,6 +6082,25 @@ app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async 
         continue;
       }
 
+      if (!['text', 'template'].includes(outbound.message_type)) {
+        summary.skipped += 1;
+        summary.errors.push({
+          id: outbound.id,
+          reason: 'unsupported_message_type',
+          messageType: outbound.message_type,
+        });
+        continue;
+      }
+
+      if (outbound.message_type === 'text' && String(outbound.body || '').length > MAX_WHATSAPP_TEXT_LENGTH) {
+        summary.skipped += 1;
+        summary.errors.push({
+          id: outbound.id,
+          reason: 'text_too_long',
+        });
+        continue;
+      }
+
       if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
         summary.skipped += 1;
         summary.errors.push({
@@ -5824,6 +6108,24 @@ app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async 
           reason: 'reply_window_expired',
         });
         continue;
+      }
+
+      if (outbound.message_type === 'template') {
+        try {
+          await validateTemplateRetryAllowed(
+            req.user.tenantId,
+            outbound.template_name,
+            outbound.language || 'en',
+          );
+        } catch (error) {
+          summary.skipped += 1;
+          summary.errors.push({
+            id: outbound.id,
+            reason: 'template_not_active',
+            error: String(error.message || error).slice(0, 300),
+          });
+          continue;
+        }
       }
 
       await markOutboundSending(outbound.id, req.user.tenantId);
@@ -6075,14 +6377,14 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
   const contact = await findContact(req.params.id, req.user.tenantId);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
-    if (contact.opted_out) {
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
+  if (contact.opted_out) {
     return res.status(403).json({
       error: 'Customer has opted out. Do not send WhatsApp messages to this contact.',
     });
-  }
-
-  if (!canAccessContact(req.user, contact)) {
-    return res.status(403).json({ error: 'Conversation assigned to another user' });
   }
 
   const cleanText = String(text || '').trim();
@@ -6091,6 +6393,12 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
 
   if (!cleanText && !cleanTemplateName) {
     return res.status(400).json({ error: 'Message text or template is required' });
+  }
+
+  if (cleanText && !cleanTemplateName && cleanText.length > MAX_WHATSAPP_TEXT_LENGTH) {
+    return res.status(400).json({
+      error: `WhatsApp text message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
+    });
   }
 
   if (cleanText && cleanTemplateName) {
@@ -6222,7 +6530,7 @@ app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req
 
 app.get('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   const result = await query(
-    `SELECT id, name, language, body, active, created_at
+    `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND active = true
@@ -6239,7 +6547,7 @@ app.get('/api/templates/manage', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const result = await query(
-    `SELECT id, name, language, body, active, created_at
+    `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
      FROM whatsapp_templates
      WHERE tenant_id = $1
      ORDER BY active DESC, name, language`,
@@ -6278,12 +6586,13 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const result = await query(
-    `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active, category, meta_status)
+     VALUES ($1, $2, $3, $4, $5, 'manual', 'manual')
      ON CONFLICT (tenant_id, name, language)
      DO UPDATE SET body = EXCLUDED.body,
-                   active = EXCLUDED.active
-     RETURNING id, name, language, body, active, created_at`,
+                   active = EXCLUDED.active,
+                   meta_status = COALESCE(NULLIF(whatsapp_templates.meta_status, ''), 'manual')
+     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
     [req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
   );
 
@@ -6301,6 +6610,94 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   });
 
   res.status(201).json(result.rows[0]);
+}));
+
+app.post('/api/templates/sync-meta', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const config = await getWhatsAppTemplateSyncConfig(req.user.tenantId);
+
+  if (!config) {
+    return res.status(400).json({
+      error: 'Meta template sync is not configured. Connect WhatsApp through Embedded Signup or set WHATSAPP_WABA_ID + WHATSAPP_ACCESS_TOKEN for local/demo.',
+    });
+  }
+
+  const response = await axios.get(
+    `https://graph.facebook.com/${config.apiVersion}/${config.wabaId}/message_templates`,
+    {
+      headers: { Authorization: `Bearer ${config.accessToken}` },
+      params: {
+        fields: 'name,language,status,category,components',
+        limit: 100,
+      },
+      timeout: 15000,
+    },
+  );
+
+  const templates = Array.isArray(response.data?.data) ? response.data.data : [];
+  const synced = [];
+
+  for (const template of templates) {
+    const cleanName = String(template.name || '').trim().toLowerCase();
+    const cleanLanguage = String(template.language || 'en').trim() || 'en';
+
+    if (!cleanName || !/^[a-z0-9_]{2,80}$/.test(cleanName)) {
+      continue;
+    }
+
+    const body = extractMetaTemplateBody(template) || `[${cleanName}]`;
+    const metaStatus = normalizeMetaTemplateStatus(template.status);
+    const category = normalizeMetaTemplateCategory(template.category);
+    const active = metaStatus === 'approved';
+
+    const result = await query(
+      `INSERT INTO whatsapp_templates
+         (tenant_id, name, language, body, active, category, meta_status, last_synced_at, meta_payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
+       ON CONFLICT (tenant_id, name, language)
+       DO UPDATE SET body = EXCLUDED.body,
+                     active = EXCLUDED.active,
+                     category = EXCLUDED.category,
+                     meta_status = EXCLUDED.meta_status,
+                     last_synced_at = now(),
+                     meta_payload = EXCLUDED.meta_payload
+       RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
+      [
+        req.user.tenantId,
+        cleanName,
+        cleanLanguage,
+        body.slice(0, 1000),
+        active,
+        category,
+        metaStatus,
+        template,
+      ],
+    );
+
+    synced.push(result.rows[0]);
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'template.synced_from_meta',
+    entityType: 'whatsapp_template',
+    metadata: {
+      syncedCount: synced.length,
+      metaCount: templates.length,
+      source: config.source,
+    },
+  });
+
+  res.json({
+    ok: true,
+    syncedCount: synced.length,
+    metaCount: templates.length,
+    templates: synced,
+  });
 }));
 
 app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
@@ -6378,7 +6775,7 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
          active = $6
      WHERE id = $1
        AND tenant_id = $2
-     RETURNING id, name, language, body, active, created_at`,
+     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
     [req.params.id, req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
   );
 

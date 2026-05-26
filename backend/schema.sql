@@ -680,6 +680,18 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_templates_tenant_name_language_idx
 ON whatsapp_templates (tenant_id, name, language);
 
+ALTER TABLE whatsapp_templates
+ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'utility';
+
+ALTER TABLE whatsapp_templates
+ADD COLUMN IF NOT EXISTS meta_status TEXT DEFAULT 'manual';
+
+ALTER TABLE whatsapp_templates
+ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
+
+ALTER TABLE whatsapp_templates
+ADD COLUMN IF NOT EXISTS meta_payload JSONB DEFAULT '{}'::jsonb;
+
 -- =========================================================
 -- 13. APP SETTINGS
 -- =========================================================

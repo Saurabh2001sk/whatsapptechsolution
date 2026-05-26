@@ -725,16 +725,22 @@ const [authChecking, setAuthChecking] = useState(true)
   const emptyTemplate = { name: '', language: 'en', body: '', active: true }
   const [templateForm, setTemplateForm] = useState(emptyTemplate)
   const [editingTemplateId, setEditingTemplateId] = useState('')
+  const [templateSyncing, setTemplateSyncing] = useState(false)
   const [drafts, setDrafts] = useState([])
   const [products, setProducts] = useState([])
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
   const [whatsappConfig, setWhatsappConfig] = useState(null)
   const [whatsappOnboarding, setWhatsappOnboarding] = useState(null)
+  const [whatsappHealth, setWhatsappHealth] = useState(null)
   const [connectingWhatsApp, setConnectingWhatsApp] = useState(false)
   const [assignmentHistory, setAssignmentHistory] = useState([])
   const [timeline, setTimeline] = useState([])
   const [auditEvents, setAuditEvents] = useState([])
+  const [webhookEvents, setWebhookEvents] = useState([])
+  const [webhookActionLoading, setWebhookActionLoading] = useState('')
+  const [outboundEvents, setOutboundEvents] = useState([])
+  const [outboundActionLoading, setOutboundActionLoading] = useState('')
   const [filter, setFilter] = useState('all')
   const [windowFilter, setWindowFilter] = useState('all')
   const [stageFilter, setStageFilter] = useState('all')
@@ -830,6 +836,8 @@ const [authChecking, setAuthChecking] = useState(true)
     ]
     if (user?.role === 'admin') common.splice(1, 0, { id: 'connectWhatsApp', label: 'Meta Setup', icon: MessageCircle })
     if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
+    if (canMonitor) common.push({ id: 'webhooks', label: 'Webhooks', icon: Activity })
+    if (canMonitor) common.push({ id: 'outbound', label: 'Outbound', icon: Send })
     if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
     if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
     return common
@@ -1080,7 +1088,10 @@ const [authChecking, setAuthChecking] = useState(true)
       if (canMonitor) {
         calls.push(api.get('/api/users').catch(() => ({ data: [] })))
         calls.push(api.get('/api/whatsapp/config', { silentError: true }).catch(() => ({ data: null })))
+        calls.push(api.get('/api/whatsapp/health', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
+        calls.push(api.get('/api/webhook-events/failed', { silentError: true }).catch(() => ({ data: [] })))
+        calls.push(api.get('/api/outbound-messages/failed', { silentError: true }).catch(() => ({ data: [] })))
         calls.push(api.get('/api/templates/manage').catch(() => ({ data: [] })))
       }
 
@@ -1097,7 +1108,10 @@ const [
         appSettingsRes,
         usersRes,
         whatsappConfigRes,
+        whatsappHealthRes,
         auditRes,
+        webhookEventsRes,
+        outboundEventsRes,
         manageTemplateRes,
       ] = await Promise.all(calls)
 
@@ -1127,7 +1141,10 @@ const [
       setInventoryColumnsText(toCsv(nextSettings.inventoryFields))
       if (usersRes) setUsers(usersRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
+      if (whatsappHealthRes) setWhatsappHealth(whatsappHealthRes.data)
       if (auditRes) setAuditEvents(auditRes.data)
+      if (webhookEventsRes) setWebhookEvents(webhookEventsRes.data)
+      if (outboundEventsRes) setOutboundEvents(outboundEventsRes.data)
       if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
       if (!selectedId && convoRes.data[0]) setSelectedId(convoRes.data[0].id)
     } catch (err) {
@@ -1243,6 +1260,66 @@ if (authChecking) {
   )
 }
 
+async function retryWebhookEvent(eventId) {
+  if (!eventId) return
+
+  setWebhookActionLoading(eventId)
+
+  try {
+    await api.post(`/api/webhook-events/${eventId}/retry`)
+    notify('Webhook event retried successfully')
+    await loadAll()
+  } catch (err) {
+    notify(err.response?.data?.error || 'Webhook retry failed', 'error')
+  } finally {
+    setWebhookActionLoading('')
+  }
+}
+
+async function recoverStuckWebhookEvents() {
+  setWebhookActionLoading('recover-stuck')
+
+  try {
+    const res = await api.post('/api/webhook-events/recover-stuck', { stuckMinutes: 10 })
+    notify(`Recovered ${res.data?.recoveredCount || 0} stuck webhook event(s)`)
+    await loadAll()
+  } catch (err) {
+    notify(err.response?.data?.error || 'Recover stuck webhooks failed', 'error')
+  } finally {
+    setWebhookActionLoading('')
+  }
+}
+
+async function retryOutboundMessage(outboundId) {
+  if (!outboundId) return
+
+  setOutboundActionLoading(outboundId)
+
+  try {
+    await api.post(`/api/outbound-messages/${outboundId}/retry`)
+    notify('Outbound message retried successfully')
+    await loadAll()
+  } catch (err) {
+    notify(err.response?.data?.error || 'Outbound retry failed', 'error')
+  } finally {
+    setOutboundActionLoading('')
+  }
+}
+
+async function retryFailedOutboundMessages() {
+  setOutboundActionLoading('retry-all')
+
+  try {
+    const res = await api.post('/api/outbound-messages/retry-failed', { limit: 10 })
+    notify(`Retried ${res.data?.retried || 0}, sent ${res.data?.sent || 0}, skipped ${res.data?.skipped || 0}, failed ${res.data?.failed || 0}`)
+    await loadAll()
+  } catch (err) {
+    notify(err.response?.data?.error || 'Bulk outbound retry failed', 'error')
+  } finally {
+    setOutboundActionLoading('')
+  }
+}
+
 async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
   setConnectingWhatsApp(true)
 
@@ -1282,10 +1359,12 @@ function showPage(page, pageFilter = {}) {
     'orders',
     'activeOrders',
     'settings',
+    'webhooks',
+    'outbound',
     'audit',
     'users',
   ]
-  const monitorOnlyPages = ['settings', 'audit']
+  const monitorOnlyPages = ['settings', 'webhooks', 'outbound', 'audit']
   const adminOnlyPages = ['users', 'connectWhatsApp']
 
   if (isSuperAdminUser) {
@@ -1615,6 +1694,25 @@ async function simulateInbound(event) {
     }
   }
 
+  async function syncTemplatesFromMeta() {
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  setTemplateSyncing(true)
+
+  try {
+    const res = await api.post('/api/templates/sync-meta')
+    notify(`Synced ${res.data?.syncedCount || 0} Meta template(s)`)
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Meta template sync failed'), 'error')
+  } finally {
+    setTemplateSyncing(false)
+  }
+}
+
   async function saveTemplate(event) {
   event.preventDefault()
 
@@ -1878,7 +1976,7 @@ async function saveCustomization(event) {
           </>
         )}
 
-        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
+        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
         {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
         {!isSuperAdminUser && activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {!isSuperAdminUser && activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
@@ -1970,13 +2068,34 @@ async function saveCustomization(event) {
       onEditTemplate={editTemplate}
       onToggleTemplate={toggleTemplate}
       onCancelTemplateEdit={cancelTemplateEdit}
+      onSyncTemplates={syncTemplatesFromMeta}
+      templateSyncing={templateSyncing}
       userRole={user.role}
       isProduction={isProduction}
     />
   </>
-)}        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
-        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'audit' && (
-          <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
+)}
+        {!isSuperAdminUser && activePage === 'webhooks' && canMonitor && (
+          <WebhookEventsPage
+            events={webhookEvents}
+            loadingId={webhookActionLoading}
+            isAdmin={user.role === 'admin'}
+            onRetry={retryWebhookEvent}
+            onRecoverStuck={recoverStuckWebhookEvents}
+          />
+        )}
+
+        {!isSuperAdminUser && activePage === 'outbound' && canMonitor && (
+          <OutboundQueuePage
+            events={outboundEvents}
+            loadingId={outboundActionLoading}
+            onRetry={retryOutboundMessage}
+            onRetryFailed={retryFailedOutboundMessages}
+          />
+        )}
+
+        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
+        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'webhooks' && activePage !== 'outbound' && activePage !== 'audit' && (          <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
 
@@ -2309,19 +2428,84 @@ function ConversationList({ conversations, selectedId, onSelect, onReset }) {
   )
 }
 
+function getReplyWindowInfo(selected, currentTime) {
+  if (!selected) {
+    return {
+      open: false,
+      label: 'No conversation selected',
+      helper: 'Select a customer to see reply-window status.',
+      className: 'neutral',
+    }
+  }
+
+  if (selected.opted_out) {
+    return {
+      open: false,
+      label: 'Sending Locked',
+      helper: 'Customer has opted out.',
+      className: 'danger',
+    }
+  }
+
+  if (!selected.last_inbound_at) {
+    return {
+      open: false,
+      label: 'Template Required',
+      helper: 'No inbound customer message found.',
+      className: 'warn',
+    }
+  }
+
+  const expiresAt = new Date(selected.last_inbound_at).getTime() + (24 * 60 * 60 * 1000)
+  const remainingMs = Math.max(0, expiresAt - currentTime)
+
+  if (selected.reply_window_open && remainingMs > 0) {
+    const totalMinutes = Math.ceil(remainingMs / (60 * 1000))
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+
+    return {
+      open: true,
+      label: 'Reply Window Open',
+      helper: `${hours}h ${minutes}m left for free-form reply.`,
+      className: 'ok',
+    }
+  }
+
+  return {
+    open: false,
+    label: 'Reply Window Expired',
+    helper: 'Use approved WhatsApp template.',
+    className: 'warn',
+  }
+}
+
 function ChatHeader({ selected, onProfile, currentTime }) {
-  const hoursLeft = selected?.last_inbound_at
-    ? Math.max(0, Math.ceil((24 * 60 * 60 * 1000 - (currentTime - new Date(selected.last_inbound_at).getTime())) / (60 * 60 * 1000)))
-    : 0
+  const windowInfo = getReplyWindowInfo(selected, currentTime)
+
   return (
     <header className="chat-header">
       <span className="avatar large">{initials(selected?.name || selected?.phone)}</span>
-      <div>
+
+      <div className="chat-title-block">
         <h2>{selected?.name || 'No conversation selected'}</h2>
-        <span>{selected?.phone || ''} {selected?.reply_window_open ? `- ${hoursLeft}h reply window left` : '- template required'}</span>
+        <span>{selected?.phone || ''}</span>
       </div>
-      <span className={`status-pill ${selected?.reply_window_open ? 'ok' : 'warn'}`}>{selected?.label || 'No label'}</span>
-      <button className="profile-toggle" type="button" onClick={onProfile} disabled={!selected}><UserRound size={18} /></button>
+
+      <div className="reply-window-badge-wrap">
+        <span className={`reply-window-badge ${windowInfo.className}`}>
+          {windowInfo.label}
+        </span>
+        <small>{windowInfo.helper}</small>
+      </div>
+
+      <span className={`status-pill ${selected?.reply_window_open ? 'ok' : 'warn'}`}>
+        {selected?.label || 'No label'}
+      </span>
+
+      <button className="profile-toggle" type="button" onClick={onProfile} disabled={!selected}>
+        <UserRound size={18} />
+      </button>
     </header>
   )
 }
@@ -2390,7 +2574,30 @@ function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp }) {
   )
 }
 
-function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onboarding, isAdmin, canManage, onOpenPage }) {
+function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onboarding, whatsappHealth, isAdmin, canManage, onOpenPage }) {
+  
+    const healthStatusLabel = whatsappHealth?.setupComplete
+    ? 'Healthy'
+    : whatsappHealth?.connected
+      ? 'Needs Review'
+      : 'Not Connected'
+
+  const healthStatusClass = whatsappHealth?.setupComplete
+    ? 'ok'
+    : whatsappHealth?.connected
+      ? 'warn'
+      : 'danger'
+
+  const tokenModeLabel = whatsappHealth?.tokenMode === 'tenant_embedded_signup'
+    ? 'Tenant Embedded Signup'
+    : whatsappHealth?.tokenMode === 'env_fallback'
+      ? 'Environment Fallback'
+      : 'Not Configured'
+
+  const formatHealthTime = (value) => (
+    value ? new Date(value).toLocaleString() : '-'
+  )
+  
   const cards = [
     { label: 'Conversations', value: dashboard?.total_conversations || conversations.length, action: 'inbox' },
     { label: 'Open Windows', value: dashboard?.open_windows || 0, action: 'inbox' },
@@ -2431,6 +2638,72 @@ function DashboardPage({ dashboard, conversations, drafts, products, lowStockPro
           <button type="button" onClick={() => onOpenPage('orders')}><ShoppingCart size={17} /> Orders</button>
         </div>
       </section>
+
+      {canManage && (
+        <section className="whatsapp-health-card">
+          <div className="health-head">
+            <div>
+              <span className="launchpad-kicker">WhatsApp Health</span>
+              <h3>Connection & activity status</h3>
+            </div>
+            <span className={`health-pill ${healthStatusClass}`}>
+              {healthStatusLabel}
+            </span>
+          </div>
+
+          <div className="health-grid">
+            <div>
+              <small>Connection</small>
+              <strong>{whatsappHealth?.connected ? 'Connected' : 'Not connected'}</strong>
+            </div>
+            <div>
+              <small>Token Mode</small>
+              <strong>{tokenModeLabel}</strong>
+            </div>
+            <div>
+              <small>Phone</small>
+              <strong>{whatsappHealth?.account?.displayPhoneNumber || '-'}</strong>
+            </div>
+            <div>
+              <small>Phone Number ID</small>
+              <strong>{whatsappHealth?.account?.phoneNumberId || '-'}</strong>
+            </div>
+            <div>
+              <small>Last Inbound</small>
+              <strong>{formatHealthTime(whatsappHealth?.activity?.lastInboundAt)}</strong>
+            </div>
+            <div>
+              <small>Last Outbound</small>
+              <strong>{formatHealthTime(whatsappHealth?.activity?.lastOutboundAt)}</strong>
+            </div>
+          </div>
+
+          <div className="health-webhook">
+            <small>Webhook URL</small>
+            <code>{whatsappHealth?.webhookUrl || '-'}</code>
+          </div>
+
+          {whatsappHealth?.setupIssues?.length > 0 && (
+            <div className="health-issues">
+              {whatsappHealth.setupIssues.map((issue) => (
+                <p key={issue}>{issue}</p>
+              ))}
+            </div>
+          )}
+
+          <div className="inline-actions">
+            {isAdmin && !whatsappHealth?.connected && (
+              <button type="button" onClick={() => onOpenPage('connectWhatsApp')}>
+                Connect Meta WhatsApp
+              </button>
+            )}
+            <button type="button" onClick={() => onOpenPage('settings')}>
+              Open WhatsApp Settings
+            </button>
+          </div>
+        </section>
+      )}
+
       <div className="kpi-grid">
         {cards.map((card) => (
           <button type="button" key={card.label} onClick={() => onOpenPage(card.action)}>
@@ -2779,6 +3052,174 @@ function UsersPage({ users, newUser, setNewUser, editingUserId, onCreate, onEdit
   )
 }
 
+function WebhookEventsPage({ events, loadingId, isAdmin, onRetry, onRecoverStuck }) {
+  const failedCount = events.length
+  const totalAttempts = events.reduce((sum, event) => sum + Number(event.attempts || 0), 0)
+
+  return (
+    <section className="table-module webhook-monitor-module">
+      <div className="module-title webhook-monitor-head">
+        <div>
+          <Activity size={18} />
+          <h3>Webhook Events Monitor</h3>
+        </div>
+        <div className="webhook-monitor-actions">
+          <span>{failedCount} failed</span>
+          <span>{totalAttempts} retry attempts</span>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onRecoverStuck}
+              disabled={loadingId === 'recover-stuck'}
+            >
+              {loadingId === 'recover-stuck' ? 'Recovering...' : 'Recover stuck'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <p className="module-helper">
+        Failed Meta webhook events appear here. Retry only after fixing token, mapping, media, or processing errors.
+      </p>
+
+      {!events.length && (
+        <EmptyState
+          title="No failed webhook events"
+          text="Meta webhooks are processing normally. Failed events will appear here for review."
+        />
+      )}
+
+      {!!events.length && (
+        <div className="webhook-event-table">
+          <div className="webhook-event-head">
+            <span>Event</span>
+            <span>Status</span>
+            <span>Attempts</span>
+            <span>Received</span>
+            <span>Action</span>
+          </div>
+
+          {events.map((event) => (
+            <div className="webhook-event-row" key={event.id}>
+              <div className="webhook-event-main">
+                <strong>{event.event_type || 'webhook'}</strong>
+                <small>Phone ID: {event.phone_number_id || '-'}</small>
+                {event.last_error && <p>{event.last_error}</p>}
+              </div>
+
+              <span className={`webhook-status-pill ${event.status || 'failed'}`}>
+                {event.status || 'failed'}
+              </span>
+
+              <span>{Number(event.attempts || 0)}</span>
+
+              <span>
+                {event.received_at ? new Date(event.received_at).toLocaleString() : '-'}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => onRetry(event.id)}
+                disabled={loadingId === event.id}
+              >
+                {loadingId === event.id ? 'Retrying...' : 'Retry'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OutboundQueuePage({ events, loadingId, onRetry, onRetryFailed }) {
+  const failedCount = events.length
+  const totalAttempts = events.reduce((sum, event) => sum + Number(event.attempts || 0), 0)
+  const templateCount = events.filter((event) => event.message_type === 'template').length
+  const textCount = events.filter((event) => event.message_type === 'text').length
+
+  return (
+    <section className="table-module outbound-monitor-module">
+      <div className="module-title outbound-monitor-head">
+        <div>
+          <Send size={18} />
+          <h3>Outbound Queue Monitor</h3>
+        </div>
+        <div className="outbound-monitor-actions">
+          <span>{failedCount} failed</span>
+          <span>{textCount} text</span>
+          <span>{templateCount} template</span>
+          <span>{totalAttempts} attempts</span>
+          <button
+            type="button"
+            onClick={onRetryFailed}
+            disabled={!events.length || loadingId === 'retry-all'}
+          >
+            {loadingId === 'retry-all' ? 'Retrying...' : 'Bulk retry 10'}
+          </button>
+        </div>
+      </div>
+
+      <p className="module-helper">
+        Failed outbound WhatsApp messages appear here. Retry only after checking opt-out, 24-hour window, template approval, and Meta API errors.
+      </p>
+
+      {!events.length && (
+        <EmptyState
+          title="No failed outbound messages"
+          text="Failed outbound WhatsApp messages will appear here for review and retry."
+        />
+      )}
+
+      {!!events.length && (
+        <div className="outbound-event-table">
+          <div className="outbound-event-head">
+            <span>Message</span>
+            <span>Type</span>
+            <span>Status</span>
+            <span>Attempts</span>
+            <span>Updated</span>
+            <span>Action</span>
+          </div>
+
+          {events.map((event) => (
+            <div className="outbound-event-row" key={event.id}>
+              <div className="outbound-event-main">
+                <strong>{event.template_name || event.to_phone || 'Outbound message'}</strong>
+                <small>To: {event.to_phone || '-'}</small>
+                {event.body && <em>{String(event.body).slice(0, 180)}</em>}
+                {event.last_error && <p>{event.last_error}</p>}
+              </div>
+
+              <span className="outbound-type-pill">
+                {event.message_type || 'text'}
+              </span>
+
+              <span className={`outbound-status-pill ${event.status || 'failed'}`}>
+                {event.status || 'failed'}
+              </span>
+
+              <span>{Number(event.attempts || 0)}</span>
+
+              <span>
+                {event.updated_at ? new Date(event.updated_at).toLocaleString() : '-'}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => onRetry(event.id)}
+                disabled={loadingId === event.id}
+              >
+                {loadingId === event.id ? 'Retrying...' : 'Retry'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function AuditPage({ events }) {
   return (
     <section className="table-module">
@@ -2931,7 +3372,7 @@ function KnowledgeBaseManager() {
   )
 }
 
-function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, onMapPhone, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, userRole, isProduction }) {
+function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, onMapPhone, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, onSyncTemplates, templateSyncing, userRole, isProduction }) {
       const warnings = status?.warnings || []
 
   return (
@@ -3098,7 +3539,15 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
         )}
       </section>
             <section className="table-module">
-        <div className="module-title"><MessageCircle size={18} /><h3>Approved WhatsApp Templates</h3></div>
+        <div className="module-title template-sync-head">
+          <div>
+            <MessageCircle size={18} />
+            <h3>Approved WhatsApp Templates</h3>
+          </div>
+          <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
+            {templateSyncing ? 'Syncing...' : 'Sync from Meta'}
+          </button>
+        </div>
         <small className="setup-copy">
           Add only templates that are already approved in Meta WhatsApp Manager. This does not create templates inside Meta.
         </small>
@@ -3156,10 +3605,12 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
 
         {!!templates.length && (
           <div className="user-table">
-            <div className="user-table-head">
+            <div className="user-table-head template-table-head">
               <span>Name</span>
               <span>Language</span>
-              <span>Status</span>
+              <span>Meta Status</span>
+              <span>Category</span>
+              <span>Active</span>
               <span>Body</span>
               <span>Actions</span>
             </div>
@@ -3171,6 +3622,10 @@ function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, tes
                   <small>ID: {String(template.id).slice(0, 8)}</small>
                 </div>
                 <span>{template.language}</span>
+                <i className={`meta-status-pill ${template.meta_status || 'manual'}`}>
+                  {template.meta_status || 'manual'}
+                </i>
+                <span>{template.category || '-'}</span>
                 <i className={template.active ? 'status-active' : 'status-inactive'}>
                   {template.active ? 'Active' : 'Inactive'}
                 </i>

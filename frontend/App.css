@@ -1369,7 +1369,7 @@ textarea:focus {
   border-bottom: 1px solid var(--line);
   padding: 14px 20px;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) auto 44px;
+  grid-template-columns: 52px minmax(0, 1fr) minmax(210px, auto) auto 44px;
   gap: 12px;
   align-items: center;
   backdrop-filter: blur(10px);
@@ -1382,6 +1382,65 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-title-block {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.chat-title-block > span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-window-badge-wrap {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+}
+
+.reply-window-badge-wrap small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.reply-window-badge {
+  border-radius: 999px;
+  min-height: 30px;
+  padding: 0 11px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.reply-window-badge.ok {
+  color: var(--green);
+  background: var(--green-2);
+}
+
+.reply-window-badge.warn {
+  color: #8a5a00;
+  background: var(--warn);
+}
+
+.reply-window-badge.danger {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.reply-window-badge.neutral {
+  color: var(--muted);
+  background: #eef4ef;
 }
 
 .status-pill {
@@ -2897,4 +2956,568 @@ textarea:focus {
 .connect-card small {
   color: var(--muted);
   line-height: 1.45;
+}
+
+.whatsapp-health-card {
+  border: 1px solid #d4e9e1;
+  border-radius: 17px;
+  padding: 18px;
+  display: grid;
+  gap: 15px;
+  background: linear-gradient(135deg, #ffffff, #f5fffa);
+  box-shadow: var(--shadow-sm);
+}
+
+.health-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.health-head h3 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.health-pill {
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.health-pill.ok {
+  color: var(--green);
+  background: var(--green-2);
+}
+
+.health-pill.warn {
+  color: #8a5a00;
+  background: var(--warn);
+}
+
+.health-pill.danger {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.health-grid div,
+.health-webhook {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px;
+  display: grid;
+  gap: 5px;
+  background: #fff;
+}
+
+.health-grid small,
+.health-webhook small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.health-grid strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.health-webhook code {
+  color: var(--green-strong);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.health-issues {
+  border: 1px solid #f4b4ae;
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  background: #fff7f5;
+}
+
+.health-issues p {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+@media (max-width: 920px) {
+  .health-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .health-head {
+    flex-direction: column;
+  }
+
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .chat-header {
+    grid-template-columns: 52px minmax(0, 1fr) auto 44px;
+  }
+
+  .reply-window-badge-wrap {
+    grid-column: 2 / 4;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-header {
+    grid-template-columns: 44px minmax(0, 1fr) 40px;
+    row-gap: 8px;
+    padding: 12px;
+  }
+
+  .chat-header .status-pill {
+    grid-column: 2 / 3;
+    justify-self: start;
+  }
+
+  .chat-header .profile-toggle {
+    grid-column: 3 / 4;
+    grid-row: 1 / 2;
+  }
+
+  .reply-window-badge-wrap {
+    grid-column: 1 / -1;
+    justify-items: start;
+  }
+
+  .reply-window-badge-wrap small {
+    white-space: normal;
+  }
+}
+
+.webhook-monitor-module {
+  gap: 14px;
+}
+
+.webhook-monitor-head {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.webhook-monitor-head > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.webhook-monitor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.webhook-monitor-actions span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
+.webhook-monitor-actions button,
+.webhook-event-row button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.webhook-monitor-actions button:disabled,
+.webhook-event-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.module-helper {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.webhook-event-table {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.webhook-event-head,
+.webhook-event-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 110px 90px 180px 100px;
+  gap: 10px;
+  align-items: center;
+}
+
+.webhook-event-head {
+  background: #eef5f1;
+  border-bottom: 1px solid var(--line);
+  color: #415149;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 10px 12px;
+  text-transform: uppercase;
+}
+
+.webhook-event-row {
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+
+.webhook-event-row:last-child {
+  border-bottom: 0;
+}
+
+.webhook-event-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.webhook-event-main strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.webhook-event-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.webhook-event-main p {
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.webhook-event-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.webhook-status-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.webhook-status-pill.failed {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.webhook-status-pill.processing {
+  color: #8a5a00;
+  background: var(--warn);
+}
+
+.webhook-status-pill.processed {
+  color: var(--green);
+  background: var(--green-2);
+}
+
+.webhook-status-pill.received {
+  color: var(--blue);
+  background: #eff6ff;
+}
+
+@media (max-width: 980px) {
+  .webhook-event-head {
+    display: none;
+  }
+
+  .webhook-event-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .webhook-event-row button {
+    width: fit-content;
+  }
+}
+
+.outbound-monitor-module {
+  gap: 14px;
+}
+
+.outbound-monitor-head {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.outbound-monitor-head > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.outbound-monitor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.outbound-monitor-actions span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
+.outbound-monitor-actions button,
+.outbound-event-row button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.outbound-monitor-actions button:disabled,
+.outbound-event-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.outbound-event-table {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.outbound-event-head,
+.outbound-event-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 90px 100px 90px 180px 100px;
+  gap: 10px;
+  align-items: center;
+}
+
+.outbound-event-head {
+  background: #eef5f1;
+  border-bottom: 1px solid var(--line);
+  color: #415149;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 10px 12px;
+  text-transform: uppercase;
+}
+
+.outbound-event-row {
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+
+.outbound-event-row:last-child {
+  border-bottom: 0;
+}
+
+.outbound-event-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.outbound-event-main strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.outbound-event-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.outbound-event-main em {
+  color: #4f625b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.outbound-event-main p {
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.outbound-event-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.outbound-type-pill,
+.outbound-status-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.outbound-type-pill {
+  color: var(--blue);
+  background: #eff6ff;
+}
+
+.outbound-status-pill.failed {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.outbound-status-pill.sending,
+.outbound-status-pill.pending {
+  color: #8a5a00;
+  background: var(--warn);
+}
+
+.outbound-status-pill.sent {
+  color: var(--green);
+  background: var(--green-2);
+}
+
+@media (max-width: 980px) {
+  .outbound-event-head {
+    display: none;
+  }
+
+  .outbound-event-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .outbound-event-row button {
+    width: fit-content;
+  }
+}
+.template-sync-head {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.template-sync-head > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.template-sync-head button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 36px;
+  padding: 0 12px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.template-sync-head button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.template-table-head,
+.user-row {
+  grid-template-columns: minmax(160px, 1fr) 90px 110px 100px 90px minmax(220px, 1.3fr) 160px;
+}
+
+.meta-status-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.meta-status-pill.approved {
+  color: var(--green);
+  background: var(--green-2);
+}
+
+.meta-status-pill.pending,
+.meta-status-pill.in_review {
+  color: #8a5a00;
+  background: var(--warn);
+}
+
+.meta-status-pill.rejected,
+.meta-status-pill.paused,
+.meta-status-pill.disabled {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.meta-status-pill.manual,
+.meta-status-pill.unknown {
+  color: var(--muted);
+  background: #eef4ef;
+}
+
+@media (max-width: 980px) {
+  .template-table-head,
+  .user-row {
+    grid-template-columns: 1fr;
+  }
+
+  .template-sync-head {
+    align-items: flex-start;
+  }
 }
