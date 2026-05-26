@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   BarChart3,
   Activity,
+  ArrowRight,
   Boxes,
   Building2,
   ClipboardList,
@@ -236,50 +237,243 @@ function clearStoredSession() {
   delete api.defaults.headers.common.Authorization
 }
 
-function Login({ onLogin, appSettings }) {
-const [form, setForm] = useState({ email: '', password: '' })
-const [error, setError] = useState('')
-const [submitting, setSubmitting] = useState(false)
+function PublicWebsite({ onAuthenticate, appSettings }) {
+  const [mode, setMode] = useState('login')
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [registerForm, setRegisterForm] = useState({
+    companyName: '',
+    industry: '',
+    adminName: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    acceptedPolicy: false,
+  })
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const platformName = appSettings.appName || 'BOS WhatsApp CRM'
 
-async function submit(event) {
-  event.preventDefault()
-  if (submitting) return
+  const capabilities = [
+    { icon: MessageCircle, title: 'Meta WhatsApp Setup', copy: 'Connect an official WhatsApp Business account through secure Embedded Signup.' },
+    { icon: Inbox, title: 'Shared Team Inbox', copy: 'Organize customer conversations, assignment and reply-window controls in one place.' },
+    { icon: ClipboardList, title: 'Templates & Quotations', copy: 'Manage approved templates and transform enquiries into controlled sales documents.' },
+    { icon: ShoppingCart, title: 'Orders & Follow-up', copy: 'Track converted orders, payment progress and dispatch activity from the same workflow.' },
+    { icon: Users, title: 'Contacts & Customers', copy: 'Maintain tenant-isolated customer history, labels, stages and ownership.' },
+    { icon: Settings, title: 'Business Controls', copy: 'Configure business profile, branding, automations and monitoring settings.' },
+  ]
 
-  setError('')
-  setSubmitting(true)
-
-  try {
-    const res = await api.post('/api/auth/login', {
-      email: form.email.trim().toLowerCase(),
-      password: form.password,
-    })
-
-    onLogin(res.data.user)
-  } catch (err) {
-    setError(err.response?.data?.error || 'Login failed')
-  } finally {
-    setSubmitting(false)
+  function openAccess(nextMode) {
+    setMode(nextMode)
+    setError('')
+    window.setTimeout(() => {
+      document.getElementById('secure-access')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 0)
   }
-}
+
+  async function submitLogin(event) {
+    event.preventDefault()
+    if (submitting) return
+    setError('')
+    setSubmitting(true)
+
+    try {
+      const res = await api.post('/api/auth/login', {
+        email: loginForm.email.trim().toLowerCase(),
+        password: loginForm.password,
+      })
+      onAuthenticate(res.data.user)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Login failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitRegistration(event) {
+    event.preventDefault()
+    if (submitting) return
+    if (registerForm.password !== registerForm.confirmPassword) {
+      setError('Passwords do not match')
+      return
+    }
+
+    setError('')
+    setSubmitting(true)
+
+    try {
+      const res = await api.post('/api/auth/register', {
+        companyName: registerForm.companyName.trim(),
+        industry: registerForm.industry.trim(),
+        adminName: registerForm.adminName.trim(),
+        email: registerForm.email.trim().toLowerCase(),
+        password: registerForm.password,
+        acceptedPolicy: registerForm.acceptedPolicy,
+      })
+      onAuthenticate(res.data.user)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Registration failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
-    <main className="login-page">
-      <form className="login-card" onSubmit={submit}>
-        <div className="login-brand">
-          <MessageCircle size={34} />
+    <main className="public-site">
+      <header className="public-header">
+        <a className="public-brand" href="#home" aria-label={`${platformName} home`}>
+          <span><MessageCircle size={26} /></span>
           <div>
-            <h1>{appSettings.appName}</h1>
-            <span>{appSettings.companyName} - {appSettings.industry}</span>
+            <strong>{platformName}</strong>
+            <small>Business Automation Platform</small>
+          </div>
+        </a>
+        <nav className="public-nav">
+          <a href="#capabilities">Platform</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#security">Security</a>
+        </nav>
+        <div className="public-actions">
+          <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Sign in</button>
+          <button className="public-primary" type="button" onClick={() => openAccess('register')}>Get started</button>
+        </div>
+      </header>
+
+      <section className="public-hero" id="home">
+        <div className="hero-copy">
+          <span className="hero-kicker"><Shield size={15} /> Secure WhatsApp Business Operations</span>
+          <h1>Turn WhatsApp conversations into structured business growth.</h1>
+          <p>
+            A professional multi-user workspace for Meta WhatsApp setup, team inbox management,
+            customer follow-ups, quotations, orders and controlled automation.
+          </p>
+          <div className="hero-actions">
+            <button className="public-primary" type="button" onClick={() => openAccess('register')}>
+              Create business account <ArrowRight size={18} />
+            </button>
+            <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Access dashboard</button>
+          </div>
+          <div className="hero-trust">
+            <span><CheckCircle2 size={16} /> Tenant-isolated data</span>
+            <span><CheckCircle2 size={16} /> Backend-only Meta tokens</span>
+            <span><CheckCircle2 size={16} /> Policy-aware messaging</span>
           </div>
         </div>
-        <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
-        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" />
-        {error && <p className="error-text">{error}</p>}
-        <button type="submit" disabled={submitting}>
-  {submitting ? 'Logging in...' : 'Login'}
-</button>
-        <small>Use your assigned CRM credentials.</small>
-      </form>
+        <div className="hero-console" aria-hidden="true">
+          <div className="console-top"><span /><span /><span /><small>Operations command center</small></div>
+          <div className="console-status">
+            <div><strong>Connected</strong><span>Meta Cloud API</span></div>
+            <div><strong>24h</strong><span>Reply guard</span></div>
+            <div><strong>Secure</strong><span>Tenant access</span></div>
+          </div>
+          <div className="console-layout">
+            <div className="console-menu">
+              <span className="active">Inbox</span>
+              <span>Contacts</span>
+              <span>Quotes</span>
+              <span>Orders</span>
+            </div>
+            <div className="console-thread">
+              <p>New enquiry received</p>
+              <b>Need price for 250 units</b>
+              <small>Assigned to Sales Team</small>
+              <div className="console-tags"><span>Quotation</span><span>24h Open</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="public-section" id="capabilities">
+        <div className="section-heading">
+          <span>Capabilities</span>
+          <h2>Everything required for a professional WhatsApp sales workspace</h2>
+        </div>
+        <div className="capability-grid">
+          {capabilities.map(({ icon: Icon, title, copy }) => (
+            <article key={title}>
+              <Icon size={22} />
+              <h3>{title}</h3>
+              <p>{copy}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="public-workflow" id="workflow">
+        <div className="section-heading">
+          <span>Workflow</span>
+          <h2>From connection to customer conversion</h2>
+        </div>
+        <div className="workflow-steps">
+          <article><b>01</b><h3>Register business</h3><p>Create a protected company workspace and admin account.</p></article>
+          <article><b>02</b><h3>Connect Meta</h3><p>Use official Embedded Signup to connect your WhatsApp Business account.</p></article>
+          <article><b>03</b><h3>Configure operations</h3><p>Set business profile, templates, users and automation controls.</p></article>
+          <article><b>04</b><h3>Manage customers</h3><p>Handle inbox, quotations and orders with policy-safe messaging.</p></article>
+        </div>
+      </section>
+
+      <section className="secure-access" id="secure-access">
+        <div className="security-panel" id="security">
+          <span className="hero-kicker"><Shield size={15} /> Security by design</span>
+          <h2>Customer data and WhatsApp access remain protected.</h2>
+          <div className="security-points">
+            <p><CheckCircle2 size={17} /> Every business operates inside an isolated tenant workspace.</p>
+            <p><CheckCircle2 size={17} /> Meta access tokens stay encrypted on backend storage only.</p>
+            <p><CheckCircle2 size={17} /> Free-form replies follow the WhatsApp 24-hour service window.</p>
+            <p><CheckCircle2 size={17} /> Opt-out customers are protected from unauthorized messaging.</p>
+          </div>
+        </div>
+
+        <div className="access-card">
+          <div className="access-tabs" role="tablist" aria-label="Account access">
+            <button className={mode === 'login' ? 'active' : ''} type="button" onClick={() => { setMode('login'); setError('') }}>Sign in</button>
+            <button className={mode === 'register' ? 'active' : ''} type="button" onClick={() => { setMode('register'); setError('') }}>Register</button>
+          </div>
+
+          {mode === 'login' ? (
+            <form className="access-form" onSubmit={submitLogin}>
+              <h2>Welcome back</h2>
+              <p>Access your secured business operations dashboard.</p>
+              <label>Work email<input type="email" autoComplete="email" required value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="admin@company.com" /></label>
+              <label>Password<input type="password" autoComplete="current-password" required value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Enter your password" /></label>
+              {error && <p className="error-text">{error}</p>}
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Signing in...' : 'Sign in securely'} <ArrowRight size={17} />
+              </button>
+              <small>Session access is managed securely by the backend.</small>
+            </form>
+          ) : (
+            <form className="access-form register-form" onSubmit={submitRegistration}>
+              <h2>Create your workspace</h2>
+              <p>Start with an administrator account for your business.</p>
+              <label>Business name<input required value={registerForm.companyName} onChange={(event) => setRegisterForm({ ...registerForm, companyName: event.target.value })} placeholder="Your business name" /></label>
+              <label>Industry<input value={registerForm.industry} onChange={(event) => setRegisterForm({ ...registerForm, industry: event.target.value })} placeholder="Manufacturing, Retail, Services..." /></label>
+              <label>Administrator name<input required autoComplete="name" value={registerForm.adminName} onChange={(event) => setRegisterForm({ ...registerForm, adminName: event.target.value })} placeholder="Full name" /></label>
+              <label>Work email<input required type="email" autoComplete="email" value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="admin@company.com" /></label>
+              <div className="register-passwords">
+                <label>Password<input required type="password" autoComplete="new-password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Minimum 12 characters" /></label>
+                <label>Confirm password<input required type="password" autoComplete="new-password" value={registerForm.confirmPassword} onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })} placeholder="Repeat password" /></label>
+              </div>
+              <small>Use 12+ characters with uppercase, lowercase, a number and a symbol.</small>
+              <label className="policy-consent">
+                <input type="checkbox" checked={registerForm.acceptedPolicy} onChange={(event) => setRegisterForm({ ...registerForm, acceptedPolicy: event.target.checked })} />
+                <span>I will send WhatsApp communications only to opted-in customers and follow Meta messaging policies.</span>
+              </label>
+              {error && <p className="error-text">{error}</p>}
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Creating workspace...' : 'Create secure workspace'} <ArrowRight size={17} />
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+
+      <footer className="public-footer">
+        <div className="public-brand">
+          <span><MessageCircle size={23} /></span>
+          <strong>{platformName}</strong>
+        </div>
+        <p>WhatsApp Business operations with tenant-aware security and policy controls.</p>
+      </footer>
     </main>
   )
 }
@@ -519,7 +713,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 function App() {
   const [user, setUser] = useState(null)
 const [authChecking, setAuthChecking] = useState(true)
-  const [activePage, setActivePage] = useState('inbox')
+  const [activePage, setActivePage] = useState('dashboard')
   const [status, setStatus] = useState(null)
   const [dashboard, setDashboard] = useState(null)
   const [users, setUsers] = useState([])
@@ -634,6 +828,7 @@ const [authChecking, setAuthChecking] = useState(true)
       { id: 'orders', label: 'Orders', icon: ShoppingCart },
       { id: 'activeOrders', label: 'Active', icon: Clock3 },
     ]
+    if (user?.role === 'admin') common.splice(1, 0, { id: 'connectWhatsApp', label: 'Meta Setup', icon: MessageCircle })
     if (canMonitor) common.push({ id: 'settings', label: 'Settings', icon: Settings })
     if (canMonitor) common.push({ id: 'audit', label: 'Audit', icon: Shield })
     if (user?.role === 'admin') common.push({ id: 'users', label: 'Users', icon: Users })
@@ -1067,22 +1262,12 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
   }
 }
 
-if (!user) return <Login onLogin={setUser} appSettings={appSettings} />
-
-if (
-  user &&
-  !isSuperAdminUser &&
-  (!whatsappOnboarding || !whatsappOnboarding.connected)
-) {
-  return (
-    <WhatsAppConnectGate
-      onboarding={whatsappOnboarding}
-      connecting={connectingWhatsApp}
-      onComplete={completeEmbeddedSignup}
-      onLogout={logout}
-    />
-  )
+function enterWorkspace(authenticatedUser) {
+  setActivePage(authenticatedUser.role === 'super_admin' ? 'platformTenants' : 'dashboard')
+  setUser(authenticatedUser)
 }
+
+if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={appSettings} />
 
 function showPage(page, pageFilter = {}) {
   const platformPages = ['platformTenants', 'platformStatus']
@@ -1101,7 +1286,7 @@ function showPage(page, pageFilter = {}) {
     'users',
   ]
   const monitorOnlyPages = ['settings', 'audit']
-  const adminOnlyPages = ['users']
+  const adminOnlyPages = ['users', 'connectWhatsApp']
 
   if (isSuperAdminUser) {
     if (clientPreviewPages.includes(page)) {
@@ -1693,7 +1878,7 @@ async function saveCustomization(event) {
           </>
         )}
 
-        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onOpenPage={showPage} />}
+        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />}
         {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
         {!isSuperAdminUser && activePage === 'quotes' && <QuotesPage quotations={quotations} onStatus={updateQuote} onConvert={convertQuote} onDownload={downloadQuote} onSendManagerApproval={sendQuoteForManagerApproval} onSendCustomer={sendQuoteToCustomer} />}        {!isSuperAdminUser && activePage === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={updateOrder} title="Active Orders" />}
@@ -1790,7 +1975,7 @@ async function saveCustomization(event) {
     />
   </>
 )}        {!isSuperAdminUser && activePage === 'audit' && canMonitor && <AuditPage events={auditEvents} />}
-        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'settings' && activePage !== 'audit' && (
+        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'quotes' && activePage !== 'orders' && activePage !== 'activeOrders' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'settings' && activePage !== 'audit' && (
           <DraftsPanel drafts={drafts} quoteRates={quoteRates} setQuoteRates={setQuoteRates} onQuote={createQuoteFromDraft} onErp={createErp} />
         )}
       </section>
@@ -2205,7 +2390,7 @@ function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp }) {
   )
 }
 
-function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onOpenPage }) {
+function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onboarding, isAdmin, canManage, onOpenPage }) {
   const cards = [
     { label: 'Conversations', value: dashboard?.total_conversations || conversations.length, action: 'inbox' },
     { label: 'Open Windows', value: dashboard?.open_windows || 0, action: 'inbox' },
@@ -2224,6 +2409,28 @@ function DashboardPage({ dashboard, conversations, drafts, products, lowStockPro
           <span>Sales, inventory, quotations, and WhatsApp activity in one view.</span>
         </div>
       </div>
+      <section className="dashboard-launchpad">
+        <div className="launchpad-copy">
+          <span className="launchpad-kicker">Workspace setup</span>
+          <h3>{onboarding?.connected ? 'Your WhatsApp operations workspace is connected.' : 'Complete your business workspace setup.'}</h3>
+          <p>
+            {onboarding?.connected
+              ? 'Manage conversations, templates and operations controls from the secure dashboard.'
+              : 'Connect Meta WhatsApp, configure templates and prepare your team before customer messaging.'}
+          </p>
+        </div>
+        <div className="launchpad-actions">
+          {isAdmin && (
+            <button type="button" className={onboarding?.connected ? 'complete' : 'primary'} onClick={() => onOpenPage(onboarding?.connected ? 'settings' : 'connectWhatsApp')}>
+              <MessageCircle size={17} />
+              {onboarding?.connected ? 'Meta Connected' : 'Connect Meta WhatsApp'}
+            </button>
+          )}
+          {canManage && <button type="button" onClick={() => onOpenPage('settings')}><Settings size={17} /> Settings & Templates</button>}
+          <button type="button" onClick={() => onOpenPage('inbox')}><Inbox size={17} /> Inbox & Contacts</button>
+          <button type="button" onClick={() => onOpenPage('orders')}><ShoppingCart size={17} /> Orders</button>
+        </div>
+      </section>
       <div className="kpi-grid">
         {cards.map((card) => (
           <button type="button" key={card.label} onClick={() => onOpenPage(card.action)}>

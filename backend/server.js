@@ -3440,6 +3440,105 @@ app.post('/api/auth/login', rateLimit({
   });
 }));
 
+app.post('/api/auth/register', rateLimit({
+  bucketName: 'register',
+  maxRequests: 5,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  const companyName = String(req.body?.companyName || '').trim();
+  const industry = String(req.body?.industry || 'General Sales').trim() || 'General Sales';
+  const adminName = String(req.body?.adminName || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  const acceptedPolicy = req.body?.acceptedPolicy === true;
+
+  if (companyName.length < 2 || companyName.length > 120) {
+    return res.status(400).json({ error: 'Business name must be between 2 and 120 characters' });
+  }
+
+  if (industry.length > 80) {
+    return res.status(400).json({ error: 'Industry must be 80 characters or fewer' });
+  }
+
+  if (adminName.length < 2 || adminName.length > 100) {
+    return res.status(400).json({ error: 'Your name must be between 2 and 100 characters' });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Valid work email required' });
+  }
+
+  if (
+    password.length < 12
+    || password.length > 128
+    || !/[a-z]/.test(password)
+    || !/[A-Z]/.test(password)
+    || !/[0-9]/.test(password)
+    || !/[^a-zA-Z0-9]/.test(password)
+  ) {
+    return res.status(400).json({
+      error: 'Password must be 12-128 characters with uppercase, lowercase, number and symbol',
+    });
+  }
+
+  if (!acceptedPolicy) {
+    return res.status(400).json({ error: 'Accept the platform and WhatsApp policy requirements to continue' });
+  }
+
+  const slugPrefix = normalizeTenantSlug(companyName).slice(0, 45) || 'business';
+  const tenantSlug = `${slugPrefix}-${crypto.randomBytes(4).toString('hex')}`;
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  try {
+    const result = await query(
+      `WITH created_tenant AS (
+         INSERT INTO tenants
+           (name, slug, industry, status, plan, business_email, onboarding_status, updated_at)
+         VALUES
+           ($1, $2, $3, 'active', 'starter', $4, 'admin_created', now())
+         RETURNING id
+       ),
+       created_user AS (
+         INSERT INTO users (tenant_id, name, email, password_hash, role, active)
+         SELECT id, $5, $4, $6, 'admin', true
+         FROM created_tenant
+         RETURNING id, tenant_id, name, email, role, active
+       ),
+       created_settings AS (
+         INSERT INTO app_settings (tenant_id, key, value, updated_at)
+         SELECT id, 'customization',
+                jsonb_build_object('companyName', $1, 'industry', $3),
+                now()
+         FROM created_tenant
+       ),
+       created_audit AS (
+         INSERT INTO audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+         SELECT tenant_id, id, 'account.registered', 'tenant', tenant_id,
+                jsonb_build_object('onboardingStatus', 'admin_created', 'plan', 'starter')
+         FROM created_user
+       )
+       SELECT id, tenant_id, name, email, role, active
+       FROM created_user`,
+      [companyName, tenantSlug, industry, email, adminName, passwordHash],
+    );
+
+    const user = result.rows[0];
+
+    setAuthCookie(res, user);
+
+    return res.status(201).json({
+      user: publicUser(user),
+      nextStep: 'connect_whatsapp',
+    });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
+
+    throw error;
+  }
+}));
+
 app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
 
 app.post('/api/auth/logout', (req, res) => {
