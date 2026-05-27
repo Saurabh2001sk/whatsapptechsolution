@@ -6,8 +6,18 @@ import {
   ArrowRight,
   Boxes,
   Building2,
+  CalendarClock,
+  ChevronDown,
   ClipboardList,
+  Code2,
+  Copy,
+  CreditCard,
   LayoutDashboard,
+  Headphones,
+  Link2,
+  Menu,
+  Megaphone,
+  PhoneCall,
   ShoppingCart,
   Sparkles,
   Bell,
@@ -29,6 +39,8 @@ import {
   UserPlus,
   UserRound,
   Users,
+  Upload,
+  Wallet,
   X,
 } from 'lucide-react'
 import './App.css'
@@ -742,7 +754,9 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 function App() {
   const [user, setUser] = useState(null)
 const [authChecking, setAuthChecking] = useState(true)
-  const [activePage, setActivePage] = useState('dashboard')
+  const [activePage, setActivePage] = useState('inbox')
+  const [expandedSuiteMenu, setExpandedSuiteMenu] = useState('sendMessage')
+  const [expandedSuiteSubmenu, setExpandedSuiteSubmenu] = useState('')
   const [status, setStatus] = useState(null)
   const [dashboard, setDashboard] = useState(null)
   const [users, setUsers] = useState([])
@@ -896,6 +910,124 @@ const [authChecking, setAuthChecking] = useState(true)
 
     return groups
   }, [canMonitor, isSuperAdminUser, user?.role])
+
+  const suiteNavigation = useMemo(() => [
+    { id: 'connectedAccounts', label: 'Connected Accounts', icon: Link2, page: user?.role === 'admin' ? 'connectWhatsApp' : 'connectedAccounts' },
+    { id: 'inbox', label: 'Inbox', icon: Inbox, page: 'inbox' },
+    {
+      id: 'sendMessage',
+      label: 'Send Message',
+      icon: MessageCircle,
+      children: [
+        { id: 'sendSingle', label: 'Single', icon: Send },
+        { id: 'sendBulk', label: 'Bulk Message', icon: Megaphone },
+        { id: 'sendCanned', label: 'Canned Message', icon: Inbox },
+      ],
+    },
+    {
+      id: 'reports',
+      label: 'Reports',
+      icon: ClipboardList,
+      children: [
+        { id: 'dashboard', label: 'Messages', icon: MessageCircle },
+        { id: 'campaignReports', label: 'Campaigns', icon: Megaphone },
+        { id: 'callingReports', label: 'Calling Reports', icon: PhoneCall },
+        { id: 'chatbotReports', label: 'Chatbot Executions', icon: Bot },
+        { id: 'orders', label: 'Catalog Orders', icon: ShoppingCart },
+        { id: 'paymentTransactions', label: 'Payment Transactions', icon: CreditCard },
+        {
+          id: 'scheduledItems',
+          label: 'Scheduled Items',
+          icon: CalendarClock,
+          children: [
+            { id: 'scheduledSingleMessages', label: 'Single Messages', icon: MessageCircle },
+            { id: 'scheduledCampaigns', label: 'Campaigns', icon: Megaphone },
+            { id: 'scheduledChatbots', label: 'Chatbots', icon: Bot },
+          ],
+        },
+        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+      ],
+    },
+    {
+      id: 'money',
+      label: 'Money',
+      icon: Wallet,
+      children: [
+        { id: 'creditCenter', label: 'Credit Center', icon: CreditCard },
+        { id: 'subscriptionPlan', label: 'Subscription Plan', icon: ClipboardList },
+        { id: 'whatsappCredits', label: 'WhatsApp Credits', icon: MessageCircle },
+        { id: 'aiCredits', label: 'AI Credits', icon: Sparkles },
+      ],
+    },
+    {
+      id: 'automation',
+      label: 'Automation',
+      icon: Bot,
+      children: [
+        { id: 'bot', label: 'Advanced Chatbot', icon: Bot },
+        { id: 'basicChatbot', label: 'Basic Chatbot', icon: MessageCircle },
+        { id: 'drips', label: 'Drips', icon: Megaphone, badge: 'New' },
+        { id: 'settings', label: 'Canned Messages', icon: Inbox },
+      ],
+    },
+    {
+      id: 'contact',
+      label: 'Contact',
+      icon: Users,
+      children: [
+        { id: 'contactsList', label: 'Contacts List', icon: Users },
+        { id: 'settings', label: 'Contact Settings', icon: Settings },
+        { id: 'optOuts', label: 'Blocked Contacts', icon: Shield },
+        { id: 'contactAddresses', label: 'Contact Addresses', icon: Building2 },
+      ],
+    },
+    {
+      id: 'whatsappItems',
+      label: 'WhatsApp Items',
+      icon: MessageCircle,
+      children: [
+        { id: 'settings', label: 'Templates', icon: FileText },
+        {
+          id: 'catalogs',
+          label: 'Catalogs',
+          icon: ShoppingCart,
+          children: [
+            { id: 'inventory', label: 'Products / Items', icon: Boxes },
+            { id: 'catalogSettings', label: 'Catalog Settings', icon: Settings },
+            { id: 'catalogManager', label: 'Catalog Manager (Beta)', icon: ShoppingCart },
+          ],
+        },
+        { id: 'flows', label: 'Flows', icon: Activity },
+        { id: 'paymentConfigurations', label: 'Payment Configurations', icon: CreditCard },
+        { id: 'whatsappGroups', label: 'WhatsApp Groups', icon: Users },
+      ],
+    },
+    {
+      id: 'integrationsUtilities',
+      label: 'Integrations & Utilities',
+      icon: Sparkles,
+      children: [
+        { id: 'integrations', label: 'Integrations', icon: Sparkles },
+        { id: 'openaiIntegration', label: 'ChatGPT / OpenAI', icon: Bot },
+        { id: 'googleSheets', label: 'Google Sheets', icon: ClipboardList },
+        {
+          id: 'developer',
+          label: 'Developer',
+          icon: Code2,
+          children: [
+            { id: 'apiKeys', label: 'API Keys', icon: Code2 },
+            { id: 'webhooks', label: 'Webhooks', icon: Activity },
+            { id: 'apiDocumentation', label: 'API Documentation', icon: FileText },
+          ],
+        },
+        { id: 'cloneItems', label: 'Clone Items', icon: Copy },
+        { id: 'chatLink', label: 'WhatsApp Chat Link', icon: Link2 },
+        { id: 'widget', label: 'WhatsApp Widget', icon: MessageCircle },
+        { id: 'templateMatchLogs', label: 'Template Match Logs', icon: ClipboardList },
+      ],
+    },
+    { id: 'controlCenter', label: 'Settings', icon: Settings, page: 'settings' },
+  ], [user?.role])
 
  useEffect(() => {
   api.get('/api/me', { silentError: true })
@@ -1438,7 +1570,7 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
 }
 
 function enterWorkspace(authenticatedUser) {
-  setActivePage(authenticatedUser.role === 'super_admin' ? 'platformTenants' : 'dashboard')
+  setActivePage(authenticatedUser.role === 'super_admin' ? 'platformTenants' : 'inbox')
   setUser(authenticatedUser)
 }
 
@@ -1531,7 +1663,26 @@ if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={ap
 
   setActivePage(page)
 
-  if (page === 'inbox') {
+  if (page === 'sendSingle') {
+    setTemplateName('')
+    setSendError('')
+    setFilter('all')
+    setWindowFilter('all')
+    setStageFilter('all')
+    loadAll({ filter: 'all', windowFilter: 'all', search: '' })
+  } else if (page === 'sendCanned') {
+    setDraft('')
+    setSendError('')
+    setFilter('all')
+    setWindowFilter('all')
+    setStageFilter('all')
+    loadAll({ filter: 'all', windowFilter: 'all', search: '' })
+  } else if (page === 'sendBulk' || page === 'contactsList') {
+    setFilter('all')
+    setWindowFilter('all')
+    setStageFilter('all')
+    loadAll({ filter: 'all', windowFilter: 'all', search: '' })
+  } else if (page === 'inbox') {
     const nextFilter = pageFilter.label || 'all'
     const nextWindowFilter = pageFilter.window || 'all'
     setFilter(nextFilter)
@@ -2022,34 +2173,146 @@ async function saveCustomization(event) {
     helper: 'Customer chats, owner, stage and reply window in one clean view.',
   }
   const failedOperationsCount = webhookEvents.length + outboundEvents.length
-  const pageContext = {
-    platformTenants: { section: 'Platform', title: 'Client Companies' },
-    platformStatus: { section: 'Platform', title: 'Service Status' },
-    dashboard: { section: 'Overview', title: 'Dashboard' },
-    inbox: { section: 'Conversations', title: 'Inbox' },
-    new: { section: 'Conversations', title: 'New Enquiries' },
-    sales: { section: 'Conversations', title: 'Sales Pipeline' },
-    salesWorkspace: { section: 'Sales', title: 'Sales Workspace' },
-    inventory: { section: 'Sales', title: 'Inventory' },
-    bot: { section: 'Automation', title: 'Automation Studio' },
-    connectWhatsApp: { section: 'Automation', title: 'Meta WhatsApp Setup' },
-    controlCenter: { section: 'Administration', title: 'Control Center' },
-    users: { section: 'Administration', title: 'Team & Roles' },
-  }[activePage] || { section: 'Workspace', title: appSettings.appName }
-
+  const featureGate = {
+    connectedAccounts: {
+      title: 'Connected Accounts',
+      text: 'WhatsApp account connection and phone mapping can be changed only by an Admin.',
+    },
+    campaignReports: {
+      title: 'Campaign Reports',
+      text: 'Campaign reports will be available after compliant opt-in campaign sending is enabled.',
+    },
+    callingReports: {
+      title: 'Calling Reports',
+      text: 'Calling activity is not recorded by the current WhatsApp Cloud API module.',
+    },
+    chatbotReports: {
+      title: 'Chatbot Executions',
+      text: 'Execution reporting will activate after chatbot run logging is stored tenant-wise.',
+    },
+    paymentTransactions: {
+      title: 'Payment Transactions',
+      text: 'Orders currently store payment status only. No payment gateway transaction feed is connected.',
+    },
+    scheduledItems: {
+      title: 'Scheduled Items',
+      text: 'Scheduling is not enabled until approved-template and consent checks are stored for every queued message.',
+    },
+    scheduledSingleMessages: {
+      title: 'Scheduled Single Messages',
+      text: 'Single message scheduling is not enabled until approved-template checks are stored for each queued send.',
+    },
+    scheduledCampaigns: {
+      title: 'Scheduled Campaigns',
+      text: 'Campaign scheduling remains locked until explicit marketing opt-in and campaign audit storage are implemented.',
+    },
+    scheduledChatbots: {
+      title: 'Scheduled Chatbots',
+      text: 'Chatbot scheduling is not stored by the current tenant-scoped backend.',
+    },
+    analytics: {
+      title: 'Analytics',
+      text: 'Use Messages report for live conversation totals. Extended analytics needs reporting endpoints.',
+    },
+    creditCenter: {
+      title: 'Credit Center',
+      text: 'Credit ledger and recharge settlement are not configured for this tenant.',
+    },
+    subscriptionPlan: {
+      title: 'Subscription Plan',
+      text: 'Subscription billing is not connected to this workspace yet.',
+    },
+    whatsappCredits: {
+      title: 'WhatsApp Credits',
+      text: 'Meta conversation charges need a billing integration before credits can be displayed.',
+    },
+    aiCredits: {
+      title: 'AI Credits',
+      text: 'AI usage billing is not enabled in the current WhatsApp CRM engine.',
+    },
+    basicChatbot: {
+      title: 'Basic Chatbot',
+      text: 'Use Advanced Chatbot for the current supported automation controls.',
+    },
+    drips: {
+      title: 'Drips',
+      text: 'Drip campaigns remain locked until explicit marketing opt-in and approved-template scheduling are implemented.',
+    },
+    contactSettings: {
+      title: 'Contact Settings',
+      text: 'Customer labels and sales stages are available to Manager/Admin from Settings.',
+    },
+    contactAddresses: {
+      title: 'Contact Addresses',
+      text: 'Address storage is not part of the current tenant-isolated contacts schema.',
+    },
+    catalogSettings: {
+      title: 'Catalog Settings',
+      text: 'Catalog sync requires a Meta Commerce catalog connection.',
+    },
+    catalogManager: {
+      title: 'Catalog Manager (Beta)',
+      text: 'Use Products / Items for the current live inventory catalog.',
+    },
+    flows: {
+      title: 'Flows',
+      text: 'WhatsApp Flows publishing is not configured for this tenant.',
+    },
+    paymentConfigurations: {
+      title: 'Payment Configurations',
+      text: 'Payment providers are not configured; order payment status remains available in Catalog Orders.',
+    },
+    whatsappGroups: {
+      title: 'WhatsApp Groups',
+      text: 'WhatsApp Business Cloud API customer messaging does not use unauthorised group broadcasting.',
+    },
+    integrations: {
+      title: 'Integrations',
+      text: 'No external integration credentials are configured in this module.',
+    },
+    openaiIntegration: {
+      title: 'ChatGPT / OpenAI',
+      text: 'AI automation remains off until data handling and tenant configuration are defined.',
+    },
+    googleSheets: {
+      title: 'Google Sheets',
+      text: 'Google Sheets sync is not connected to the backend.',
+    },
+    developer: {
+      title: 'Developer',
+      text: 'Webhook monitoring is available through Settings for authorised users.',
+    },
+    apiKeys: {
+      title: 'API Keys',
+      text: 'Sensitive API key management is not exposed in the browser.',
+    },
+    apiDocumentation: {
+      title: 'API Documentation',
+      text: 'API documentation publishing is not configured for this workspace.',
+    },
+    cloneItems: {
+      title: 'Clone Items',
+      text: 'Use Products / Items import for controlled tenant inventory creation.',
+    },
+    chatLink: {
+      title: 'WhatsApp Chat Link',
+      text: 'Link generation needs the connected business phone configuration.',
+    },
+    widget: {
+      title: 'WhatsApp Widget',
+      text: 'Website widget publishing is not configured in this module.',
+    },
+    templateMatchLogs: {
+      title: 'Template Match Logs',
+      text: 'Approved templates are visible in Templates; per-match logging is not stored yet.',
+    },
+  }[activePage]
   return (
-    <main className={`app-shell ${chatPages ? '' : 'workspace-mode'}`}>
+    <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'}`}>
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail workspace-sidebar">
-        <div className="sidebar-brand">
-          <div className="rail-logo"><MessageCircle size={25} /></div>
-          <div>
-            <strong>{isSuperAdminUser ? 'BOS Platform' : appSettings.appName}</strong>
-            <span>{isSuperAdminUser ? 'Owner Console' : 'Business Workspace'}</span>
-          </div>
-        </div>
         <nav className="sidebar-navigation" aria-label="Workspace navigation">
-          {navigationGroups.map((group) => (
+          {isSuperAdminUser && navigationGroups.map((group) => (
             <div className="nav-group" key={group.label}>
               <span className="nav-group-label">{group.label}</span>
               {group.items.map((item) => {
@@ -2069,32 +2332,130 @@ async function saveCustomization(event) {
               })}
             </div>
           ))}
+          {!isSuperAdminUser && suiteNavigation.map((item) => {
+            const Icon = item.icon
+            const children = item.children || []
+            const hasChildren = children.length > 0
+            const includesCurrentPage = children.some((child) => (
+              child.id === activePage ||
+              (child.id === 'settings' && activePage === 'controlCenter') ||
+              (child.id === 'orders' && activePage === 'salesWorkspace') ||
+              (child.children || []).some((nestedChild) => (
+                nestedChild.id === activePage ||
+                (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
+                (nestedChild.id === 'inventory' && activePage === 'inventory')
+              ))
+            ))
+            const isExpanded = hasChildren && expandedSuiteMenu === item.id
+            const isActive = item.page ? activePage === item.page || (item.page === 'settings' && activePage === 'controlCenter') : includesCurrentPage
+
+            return (
+              <div className={`suite-nav-item ${isExpanded ? 'expanded' : ''}`} key={item.id}>
+                <button
+                  className={isActive ? 'active' : ''}
+                  type="button"
+                  onClick={() => {
+                    if (hasChildren) {
+                      setExpandedSuiteMenu((current) => (current === item.id ? '' : item.id))
+                    } else {
+                      showPage(item.page)
+                    }
+                  }}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                  {hasChildren && <ChevronDown className="suite-chevron" size={16} />}
+                </button>
+                {isExpanded && (
+                  <div className="suite-subnav">
+                    {children.map((child) => {
+                      const ChildIcon = child.icon
+                      const nestedChildren = child.children || []
+                      const hasNestedChildren = nestedChildren.length > 0
+                      const nestedActive = nestedChildren.some((nestedChild) => (
+                        nestedChild.id === activePage ||
+                        (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
+                        (nestedChild.id === 'inventory' && activePage === 'inventory')
+                      ))
+                      const nestedExpanded = hasNestedChildren && (expandedSuiteSubmenu === child.id || nestedActive)
+                      const childActive =
+                        child.id === activePage ||
+                        (child.id === 'settings' && activePage === 'controlCenter') ||
+                        (child.id === 'orders' && activePage === 'salesWorkspace') ||
+                        nestedActive
+
+                      return (
+                        <div className={`suite-subnav-group ${nestedExpanded ? 'expanded' : ''}`} key={child.id}>
+                          <button
+                            className={childActive ? 'active' : ''}
+                            type="button"
+                            onClick={() => {
+                              if (hasNestedChildren) {
+                                setExpandedSuiteSubmenu((current) => (current === child.id ? '' : child.id))
+                              } else {
+                                showPage(child.id)
+                              }
+                            }}
+                          >
+                            <ChildIcon size={16} />
+                            <span>{child.label}</span>
+                            {child.badge && <b className="new-badge">{child.badge}</b>}
+                            {hasNestedChildren && <ChevronDown className="suite-chevron" size={14} />}
+                          </button>
+                          {nestedExpanded && (
+                            <div className="suite-thirdnav">
+                              {nestedChildren.map((nestedChild) => {
+                                const NestedIcon = nestedChild.icon
+                                const active =
+                                  nestedChild.id === activePage ||
+                                  (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
+                                  (nestedChild.id === 'inventory' && activePage === 'inventory')
+
+                                return (
+                                  <button className={active ? 'active' : ''} type="button" key={nestedChild.id} onClick={() => showPage(nestedChild.id)}>
+                                    <NestedIcon size={15} />
+                                    <span>{nestedChild.label}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </nav>
         <div className="sidebar-account">
-          <div className="sidebar-user">
-            <strong>{user.name}</strong>
-            <span>{user.role}</span>
-          </div>
           <button className="logout-btn" type="button" onClick={logout}><LogOut size={18} /><span>Logout</span></button>
         </div>
       </aside>
 
-      <section className="module-panel">
-        <div className="app-title inbox-title workspace-topbar">
-          <div>
-            <small>{pageContext.section}</small>
-            <h1>{pageContext.title}</h1>
-            <span>{isSuperAdminUser ? `Platform Owner - ${user.name} / ${user.role}` : `${appSettings.companyName} - ${user.name} / ${user.role}`}</span>
-          </div>
-          <div className="workspace-topbar-actions">
-            {!isSuperAdminUser && canMonitor && (
-              <span className={`workspace-status ${whatsappHealth?.setupComplete ? 'ready' : 'attention'}`}>
-                {whatsappHealth?.setupComplete ? 'WhatsApp Ready' : 'Setup Attention'}
-              </span>
-            )}
-            <button type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={17} /> Refresh</button>
-          </div>
+      <header className="suite-topbar">
+        <div className="suite-topbar-left">
+          <button className="suite-icon-button" type="button" aria-label="Navigation menu"><Menu size={19} /></button>
+          <span><Headphones size={17} /> Support</span>
         </div>
+        <div className="suite-topbar-right">
+          {!isSuperAdminUser && canMonitor && (
+            <span className={`workspace-status ${whatsappHealth?.setupComplete ? 'ready' : 'attention'}`}>
+              {whatsappHealth?.setupComplete ? 'WhatsApp Ready' : 'Setup Attention'}
+            </span>
+          )}
+          <button className="suite-refresh" type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={16} /></button>
+          <div className="suite-avatar">{initials(user.name)}</div>
+          <div className="suite-account-copy">
+            <strong>{user.name}</strong>
+            <small>{user.role}</small>
+          </div>
+          <ChevronDown size={16} />
+        </div>
+      </header>
+
+      <section className="module-panel">
         {loadError && <div className="load-error">{loadError}</div>}
         {platformError && <div className="load-error">{platformError}</div>}
         {!isSuperAdminUser && user.role === 'admin' && whatsappOnboarding && !whatsappOnboarding.connected && activePage !== 'connectWhatsApp' && (
@@ -2160,6 +2521,50 @@ async function saveCustomization(event) {
           </>
         )}
 
+        {!isSuperAdminUser && activePage === 'sendSingle' && (
+          <SingleMessagePage
+            contacts={conversations}
+            selected={selected}
+            selectedId={selected?.id || ''}
+            onSelectContact={setSelectedId}
+            templates={templates}
+            draft={draft}
+            setDraft={setDraft}
+            templateName={templateName}
+            setTemplateName={setTemplateName}
+            onSend={sendMessage}
+            sendError={sendError}
+            sending={sendingMessage}
+          />
+        )}
+        {!isSuperAdminUser && activePage === 'sendBulk' && (
+          <BulkMessagePage templates={templates} contacts={conversations} />
+        )}
+        {!isSuperAdminUser && activePage === 'sendCanned' && (
+          <CannedMessagePage
+            contacts={conversations}
+            selected={selected}
+            selectedId={selected?.id || ''}
+            onSelectContact={setSelectedId}
+            templates={templates}
+            templateName={templateName}
+            setTemplateName={setTemplateName}
+            setDraft={setDraft}
+            onSend={sendMessage}
+            sendError={sendError}
+            sending={sendingMessage}
+          />
+        )}
+        {!isSuperAdminUser && activePage === 'contactsList' && (
+          <ContactsListPage
+            contacts={conversations}
+            onOpenChat={(contactId) => {
+              setSelectedId(contactId)
+              showPage('inbox')
+            }}
+          />
+        )}
+        {!isSuperAdminUser && featureGate && <FeatureGatePage title={featureGate.title} text={featureGate.text} />}
         {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && (
           <section className="workspace-page">
@@ -2245,7 +2650,7 @@ async function saveCustomization(event) {
             auditEvents={auditEvents}
           />
         )}
-        {!isSuperAdminUser && !chatPages && activePage !== 'dashboard' && activePage !== 'inventory' && activePage !== 'bot' && activePage !== 'salesWorkspace' && activePage !== 'users' && activePage !== 'connectWhatsApp' && activePage !== 'controlCenter' && (
+        {!isSuperAdminUser && !chatPages && !featureGate && !['sendSingle', 'sendBulk', 'sendCanned', 'contactsList', 'dashboard', 'inventory', 'bot', 'salesWorkspace', 'users', 'connectWhatsApp', 'controlCenter'].includes(activePage) && (
   <EmptyState
     title="Page not available"
     text="Select a valid page from the sidebar."
@@ -2993,6 +3398,335 @@ function WorkspaceTabs({ tabs, activeTab, onChangeTab }) {
         )
       })}
     </nav>
+  )
+}
+
+function MessagePreview({ selected, body, emptyText = 'Select content to see preview' }) {
+  return (
+    <aside className="suite-preview-card">
+      <h3>Message Preview</h3>
+      <div className="suite-preview-phone">
+        {body ? (
+          <>
+            <small>Today</small>
+            <p>{body}</p>
+            <time>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+          </>
+        ) : (
+          <div className="suite-preview-empty">
+            <MessageCircle size={45} />
+            <span>{emptyText}</span>
+          </div>
+        )}
+      </div>
+      {selected && <small className="suite-preview-contact">To: {selected.name || selected.phone} ({selected.phone})</small>}
+    </aside>
+  )
+}
+
+function SingleMessagePage({
+  contacts,
+  selected,
+  selectedId,
+  onSelectContact,
+  templates,
+  draft,
+  setDraft,
+  templateName,
+  setTemplateName,
+  onSend,
+  sendError,
+  sending,
+}) {
+  const [messageType, setMessageType] = useState('text')
+  const [guideOpen, setGuideOpen] = useState(true)
+  const selectedTemplate = templates.find((template) => template.name === templateName)
+  const messageTypes = ['template', 'text', 'media', 'interactive', 'payment', 'catalog', 'location']
+  const supportedType = ['template', 'text'].includes(messageType)
+  const previewBody = messageType === 'template' ? selectedTemplate?.body : messageType === 'text' ? draft : ''
+
+  function switchType(type) {
+    setMessageType(type)
+    if (type === 'text') setTemplateName('')
+    if (type === 'template') setDraft('')
+  }
+
+  return (
+    <section className="suite-page">
+      <h2>Send Messages</h2>
+      <button className="suite-guide-toggle" type="button" onClick={() => setGuideOpen((open) => !open)}>
+        <ChevronDown size={17} />
+        How to use? Click to expand
+      </button>
+      {guideOpen && (
+        <div className="suite-guide">
+          <div>
+            <p>Send messages to tenant-authorised contacts in three ways:</p>
+            <ul>
+              <li><strong>Single Message</strong> - send a text reply inside the 24-hour window or an approved Meta template.</li>
+              <li><strong>Bulk Message</strong> - prepare opted-in template campaigns after consent-backed sending is enabled.</li>
+              <li><strong>Canned Message</strong> - quickly send an active approved template to one contact.</li>
+            </ul>
+            <p>Free-form text is blocked outside the WhatsApp customer service window.</p>
+          </div>
+          <div className="suite-guide-visual">
+            <MessageCircle size={42} />
+            <strong>WhatsApp Cloud API</strong>
+            <span>Policy-aware delivery</span>
+          </div>
+        </div>
+      )}
+      <div className="suite-compose-layout">
+        <form className="suite-send-form" onSubmit={onSend}>
+          <label>
+            Phone Number:
+            <select value={selectedId} onChange={(event) => onSelectContact(event.target.value)} required>
+              <option value="">Select tenant contact</option>
+              {contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>{contact.phone} - {contact.name || 'Customer'}</option>
+              ))}
+            </select>
+          </label>
+          <span className="suite-field-title">Message Type:</span>
+          <div className="suite-type-tabs">
+            {messageTypes.map((type) => (
+              <button className={messageType === type ? 'active' : ''} key={type} type="button" onClick={() => switchType(type)}>
+                {type[0].toUpperCase() + type.slice(1)}
+              </button>
+            ))}
+          </div>
+          {messageType === 'text' && (
+            <label>
+              Message:
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={selected?.reply_window_open ? 'Type your message' : 'Free-form text requires an open 24-hour window'}
+                disabled={!selected || !selected.reply_window_open || selected.opted_out}
+              />
+            </label>
+          )}
+          {messageType === 'template' && (
+            <label>
+              Approved Template:
+              <select value={templateName} onChange={(event) => setTemplateName(event.target.value)} disabled={!selected || selected.opted_out}>
+                <option value="">Select approved template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!supportedType && (
+            <div className="suite-policy-note">
+              {messageType} message sending is not connected in the current secure backend route. Use Text or Template.
+            </div>
+          )}
+          {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
+          {!selected?.opted_out && selected && messageType === 'text' && !selected.reply_window_open && (
+            <div className="suite-policy-note">24-hour window expired. Select Template to send an approved message.</div>
+          )}
+          {sendError && <div className="suite-policy-note danger">{sendError}</div>}
+          <button
+            className="suite-primary-button"
+            type="submit"
+            disabled={!selected || selected.opted_out || sending || !supportedType || (messageType === 'text' && !selected.reply_window_open) || (messageType === 'template' && !templateName)}
+          >
+            {sending ? 'Sending...' : 'Submit'}
+          </button>
+        </form>
+        <MessagePreview selected={selected} body={previewBody} />
+      </div>
+    </section>
+  )
+}
+
+function BulkMessagePage({ templates, contacts }) {
+  const [activeTab, setActiveTab] = useState('csv')
+  const [campaignName, setCampaignName] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [rows, setRows] = useState([])
+  const [schedule, setSchedule] = useState(false)
+  const [drip, setDrip] = useState(false)
+  const selectedTemplate = templates.find((template) => template.name === templateName)
+  const contactPhoneMap = new Map(contacts.map((contact) => [String(contact.phone || '').replace(/\D/g, ''), contact]))
+  const matchedRows = rows.map((row) => contactPhoneMap.get(String(row.phone || row.Phone || '').replace(/\D/g, ''))).filter(Boolean)
+  const blockedRows = matchedRows.filter((contact) => contact.opted_out)
+
+  async function uploadCsv(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setRows(parseCsv(await file.text()))
+  }
+
+  return (
+    <section className="suite-page">
+      <h2>Send Bulk Messages</h2>
+      <div className="suite-subtabs">
+        {[
+          ['csv', Upload, 'CSV Upload'],
+          ['manual', Boxes, 'Manual Grid'],
+          ['filters', Search, 'Contact Filters'],
+          ['retargeting', Megaphone, 'Re-Targeting'],
+        ].map(([id, Icon, label]) => (
+          <button className={activeTab === id ? 'active' : ''} key={id} type="button" onClick={() => setActiveTab(id)}>
+            <Icon size={17} />{label}
+          </button>
+        ))}
+      </div>
+      <div className="suite-compose-layout bulk-layout">
+        <div className="suite-send-form">
+          <div className="suite-guide-toggle static"><ChevronDown size={17} /> How to use CSV Upload?</div>
+          {activeTab !== 'csv' && (
+            <div className="suite-policy-note">
+              This selection screen is ready for the module layout; campaign processing is enabled only after consent-backed campaign APIs exist.
+            </div>
+          )}
+          <label>
+            <span className="required">*</span> Campaign Name
+            <input value={campaignName} onChange={(event) => setCampaignName(event.target.value)} placeholder="Campaign Name" />
+          </label>
+          <label>
+            <span className="required">*</span> Select Template
+            <select value={templateName} onChange={(event) => setTemplateName(event.target.value)}>
+              <option value="">Select an approved template</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
+              ))}
+            </select>
+          </label>
+          <div className="suite-inline-actions">
+            <button type="button" onClick={() => downloadCsv('bulk-message-template.csv', ['phone', 'name'], ['919876543210', 'Customer'])}>Download Sample CSV</button>
+            <label className="suite-file-button">
+              Upload CSV
+              <input type="file" accept=".csv,text/csv" onChange={uploadCsv} />
+            </label>
+          </div>
+          {!!rows.length && (
+            <div className="suite-validation">
+              <strong>{rows.length} CSV row(s) loaded</strong>
+              <span>{matchedRows.length} matched to tenant contacts; {blockedRows.length} blocked by opt-out.</span>
+            </div>
+          )}
+          <label className="suite-toggle"><input type="checkbox" checked={schedule} onChange={(event) => setSchedule(event.target.checked)} /> Schedule</label>
+          <label className="suite-toggle"><input type="checkbox" checked={drip} onChange={(event) => setDrip(event.target.checked)} /> Add Drip to this Campaign</label>
+          <div className="suite-policy-note">
+            Bulk sending is locked: marketing delivery requires recorded opt-in, approved templates, opt-out enforcement and a tenant-scoped campaign queue.
+          </div>
+          <button className="suite-primary-button" type="button" disabled>Submit</button>
+        </div>
+        <MessagePreview body={selectedTemplate?.body} emptyText="Select a template to preview campaign message" />
+      </div>
+    </section>
+  )
+}
+
+function CannedMessagePage({
+  contacts,
+  selected,
+  selectedId,
+  onSelectContact,
+  templates,
+  templateName,
+  setTemplateName,
+  setDraft,
+  onSend,
+  sendError,
+  sending,
+}) {
+  const [tab, setTab] = useState('single')
+  const selectedTemplate = templates.find((template) => template.name === templateName)
+
+  function chooseTemplate(event) {
+    setDraft('')
+    setTemplateName(event.target.value)
+  }
+
+  return (
+    <section className="suite-page">
+      <h2>Send Canned Messages</h2>
+      <div className="suite-subtabs">
+        {[
+          ['single', PhoneCall, 'Single Number'],
+          ['csv', Upload, 'CSV Upload'],
+          ['manual', Boxes, 'Manual Grid'],
+          ['filters', Search, 'Contact Filters'],
+        ].map(([id, Icon, label]) => (
+          <button className={tab === id ? 'active' : ''} key={id} type="button" onClick={() => setTab(id)}>
+            <Icon size={17} />{label}
+          </button>
+        ))}
+      </div>
+      <div className="suite-compose-layout bulk-layout">
+        <form className="suite-send-form" onSubmit={onSend}>
+          <div className="suite-guide-toggle static"><ChevronDown size={17} /> How to send canned messages?</div>
+          {tab !== 'single' && (
+            <div className="suite-policy-note">
+              Batch canned messages remain locked until marketing consent and campaign audit storage are implemented.
+            </div>
+          )}
+          <label>
+            <span className="required">*</span> Phone Number
+            <select value={selectedId} onChange={(event) => onSelectContact(event.target.value)} required disabled={tab !== 'single'}>
+              <option value="">Select tenant contact</option>
+              {contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>{contact.phone} - {contact.name || 'Customer'}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="required">*</span> Select Canned Message
+            <select value={templateName} onChange={chooseTemplate} disabled={tab !== 'single' || !selected || selected.opted_out}>
+              <option value="">Choose an approved canned message</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
+              ))}
+            </select>
+          </label>
+          {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
+          {sendError && <div className="suite-policy-note danger">{sendError}</div>}
+          <button className="suite-primary-button" type="submit" disabled={tab !== 'single' || !selected || !templateName || selected.opted_out || sending}>
+            {sending ? 'Sending...' : 'Send Message'}
+          </button>
+        </form>
+        <MessagePreview selected={selected} body={selectedTemplate?.body} emptyText="Select a canned message to see preview" />
+      </div>
+    </section>
+  )
+}
+
+function ContactsListPage({ contacts, onOpenChat }) {
+  return (
+    <section className="suite-page">
+      <h2>Contacts List</h2>
+      <div className="suite-table-card">
+        <div className="suite-table-head"><span>Contact</span><span>Phone</span><span>Label / Stage</span><span>Reply Window</span><span>Action</span></div>
+        {contacts.map((contact) => (
+          <div className="suite-table-row" key={contact.id}>
+            <strong>{contact.name || 'Customer'}</strong>
+            <span>{contact.phone}</span>
+            <span>{contact.label || '-'} / {contact.stage || '-'}</span>
+            <span>{contact.opted_out ? 'Blocked' : contact.reply_window_open ? 'Open' : 'Template only'}</span>
+            <button type="button" onClick={() => onOpenChat(contact.id)}>Open Chat</button>
+          </div>
+        ))}
+        {!contacts.length && <EmptyState title="No contacts" text="Contacts created by incoming WhatsApp conversations will appear here." />}
+      </div>
+    </section>
+  )
+}
+
+function FeatureGatePage({ title, text }) {
+  return (
+    <section className="suite-page">
+      <h2>{title}</h2>
+      <div className="suite-gate-card">
+        <Shield size={26} />
+        <h3>Module not enabled yet</h3>
+        <p>{text}</p>
+        <small>No unsafe or cross-tenant action has been exposed from this screen.</small>
+      </div>
+    </section>
   )
 }
 
