@@ -2229,22 +2229,32 @@ async function saveCustomization(event) {
     connectedAccounts: {
       title: 'Connected Accounts',
       text: 'WhatsApp account connection and phone mapping can be changed only by an Admin.',
+      actionLabel: user?.role === 'admin' ? 'Open Meta Setup' : 'Open Settings',
+      actionPage: user?.role === 'admin' ? 'connectWhatsApp' : 'settings',
     },
     campaignReports: {
       title: 'Campaign Reports',
       text: 'Campaign reports will be available after compliant opt-in campaign sending is enabled.',
+      actionLabel: 'Open Dashboard',
+      actionPage: 'dashboard',
     },
     callingReports: {
       title: 'Calling Reports',
       text: 'Calling activity is not recorded by the current WhatsApp Cloud API module.',
+      actionLabel: 'Open Voice Settings',
+      actionPage: 'settings',
     },
     chatbotReports: {
       title: 'Chatbot Executions',
       text: 'Execution reporting will activate after chatbot run logging is stored tenant-wise.',
+      actionLabel: 'Open Advanced Chatbot',
+      actionPage: 'bot',
     },
     paymentTransactions: {
       title: 'Payment Transactions',
       text: 'Orders currently store payment status only. No payment gateway transaction feed is connected.',
+      actionLabel: 'Open Orders',
+      actionPage: 'orders',
     },
     scheduledItems: {
       title: 'Scheduled Items',
@@ -2265,6 +2275,8 @@ async function saveCustomization(event) {
     analytics: {
       title: 'Analytics',
       text: 'Use Messages report for live conversation totals. Extended analytics needs reporting endpoints.',
+      actionLabel: 'Open Messages Report',
+      actionPage: 'dashboard',
     },
     creditCenter: {
       title: 'Credit Center',
@@ -2273,6 +2285,8 @@ async function saveCustomization(event) {
     subscriptionPlan: {
       title: 'Subscription Plan',
       text: 'Subscription billing is not connected to this workspace yet.',
+      actionLabel: 'Open Billing Details',
+      actionPage: 'settings',
     },
     whatsappCredits: {
       title: 'WhatsApp Credits',
@@ -2285,6 +2299,8 @@ async function saveCustomization(event) {
     basicChatbot: {
       title: 'Basic Chatbot',
       text: 'Use Advanced Chatbot for the current supported automation controls.',
+      actionLabel: 'Open Advanced Chatbot',
+      actionPage: 'bot',
     },
     drips: {
       title: 'Drips',
@@ -2297,14 +2313,20 @@ async function saveCustomization(event) {
     contactAddresses: {
       title: 'Contact Addresses',
       text: 'Address storage is not part of the current tenant-isolated contacts schema.',
+      actionLabel: 'Open Contacts List',
+      actionPage: 'contactsList',
     },
     catalogSettings: {
       title: 'Catalog Settings',
       text: 'Catalog sync requires a Meta Commerce catalog connection.',
+      actionLabel: 'Open Products / Items',
+      actionPage: 'inventory',
     },
     catalogManager: {
       title: 'Catalog Manager (Beta)',
       text: 'Use Products / Items for the current live inventory catalog.',
+      actionLabel: 'Open Products / Items',
+      actionPage: 'inventory',
     },
     flows: {
       title: 'Flows',
@@ -2313,6 +2335,8 @@ async function saveCustomization(event) {
     paymentConfigurations: {
       title: 'Payment Configurations',
       text: 'Payment providers are not configured; order payment status remains available in Catalog Orders.',
+      actionLabel: 'Open Orders',
+      actionPage: 'orders',
     },
     whatsappGroups: {
       title: 'WhatsApp Groups',
@@ -2321,6 +2345,8 @@ async function saveCustomization(event) {
     integrations: {
       title: 'Integrations',
       text: 'No external integration credentials are configured in this module.',
+      actionLabel: 'Open Settings',
+      actionPage: 'settings',
     },
     openaiIntegration: {
       title: 'ChatGPT / OpenAI',
@@ -2329,10 +2355,14 @@ async function saveCustomization(event) {
     googleSheets: {
       title: 'Google Sheets',
       text: 'Google Sheets sync is not connected to the backend.',
+      actionLabel: 'Open Profile Integrations',
+      actionPage: 'settings',
     },
     developer: {
       title: 'Developer',
       text: 'Webhook monitoring is available through Settings for authorised users.',
+      actionLabel: 'Open Webhooks',
+      actionPage: 'webhooks',
     },
     apiKeys: {
       title: 'API Keys',
@@ -2345,10 +2375,14 @@ async function saveCustomization(event) {
     cloneItems: {
       title: 'Clone Items',
       text: 'Use Products / Items import for controlled tenant inventory creation.',
+      actionLabel: 'Open Products / Items',
+      actionPage: 'inventory',
     },
     chatLink: {
       title: 'WhatsApp Chat Link',
       text: 'Link generation needs the connected business phone configuration.',
+      actionLabel: 'Open WhatsApp Settings',
+      actionPage: 'settings',
     },
     widget: {
       title: 'WhatsApp Widget',
@@ -2357,6 +2391,8 @@ async function saveCustomization(event) {
     templateMatchLogs: {
       title: 'Template Match Logs',
       text: 'Approved templates are visible in Templates; per-match logging is not stored yet.',
+      actionLabel: 'Open Templates',
+      actionPage: 'settings',
     },
   }[activePage]
   return (
@@ -2636,7 +2672,7 @@ async function saveCustomization(event) {
             }}
           />
         )}
-        {!isSuperAdminUser && featureGate && <FeatureGatePage title={featureGate.title} text={featureGate.text} />}
+        {!isSuperAdminUser && featureGate && <FeatureGatePage title={featureGate.title} text={featureGate.text} actionLabel={featureGate.actionLabel} actionPage={featureGate.actionPage} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && (
           <section className="workspace-page">
@@ -2792,7 +2828,7 @@ async function saveCustomization(event) {
     <small>{message.type} - {message.status === 'queued-local' ? 'Local demo only' : message.status}</small>
   </div>
 ))}
-              {!messages.length && <div className="empty-chat">Select a customer conversation</div>}
+              {!messages.length && <div className="empty-chat"><strong>Select a conversation</strong><span>Customer messages, reply-window status, and profile details will appear here.</span></div>}
             </div>
 <form className="composer" onSubmit={sendMessage}>
   {selected?.opted_out && (
@@ -3046,8 +3082,8 @@ function ConversationList({ conversations, selectedId, onSelect, onReset }) {
     <div className="conversation-list">
       {!conversations.length && (
         <div className="empty-list">
-          <strong>No chats in this filter</strong>
-          <span>Inbox ko All chats par reset karo, ya Settings me Local Inbound Test se customer message capture karke check karo.</span>
+          <strong>No conversations found</strong>
+          <span>Clear the current filters or capture a test inbound message from Settings to verify the inbox flow.</span>
           <button type="button" onClick={onReset}>Show all chats</button>
         </div>
       )}
@@ -3799,15 +3835,20 @@ function ContactsListPage({ contacts, onOpenChat }) {
   )
 }
 
-function FeatureGatePage({ title, text }) {
+function FeatureGatePage({ title, text, actionLabel, actionPage, onOpenPage }) {
   return (
     <section className="suite-page">
       <h2>{title}</h2>
       <div className="suite-gate-card">
         <Shield size={26} />
-        <h3>Module not enabled yet</h3>
+        <h3>Setup required before production use</h3>
         <p>{text}</p>
-        <small>No unsafe or cross-tenant action has been exposed from this screen.</small>
+        <small>This screen stays locked until tenant data, role access, audit logging, and WhatsApp policy checks exist for the full flow.</small>
+        {actionLabel && actionPage && (
+          <button type="button" onClick={() => onOpenPage(actionPage)}>
+            <ArrowRight size={16} /> {actionLabel}
+          </button>
+        )}
       </div>
     </section>
   )
