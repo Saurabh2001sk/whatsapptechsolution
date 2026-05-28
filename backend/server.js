@@ -215,6 +215,11 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
 // =========================================================
 
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
+const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DEFAULT_VOICE_WEEKLY_HOURS = WEEK_DAYS.reduce((acc, day) => {
+  acc[day] = { enabled: true, slots: [{ start: '00:00', end: '23:59' }] };
+  return acc;
+}, {});
 
 const DEFAULT_APP_SETTINGS = {
   appName: 'WhatsApp Sales CRM',
@@ -240,6 +245,29 @@ const DEFAULT_APP_SETTINGS = {
   customerQuoteTemplateLanguage: 'en',
   orderAcknowledgementTemplateName: 'order_acknowledgement',
   orderAcknowledgementTemplateLanguage: 'en',
+  ftpAccessEnabled: false,
+  twoFactorEnabled: false,
+  wabaMmLiteEnabled: false,
+  wabaHealthyRetryEnabled: false,
+  wabaConversionEventsEnabled: false,
+  billingBusinessName: '',
+  billingGstNumber: '',
+  billingPanNumber: '',
+  billingCountry: 'India',
+  billingState: '',
+  billingCity: '',
+  billingAddress: '',
+  billingPinCode: '',
+  billingEmail: '',
+  billingContactNumber: '',
+  voiceCallsEnabled: false,
+  voiceCallbackEnabled: false,
+  voiceDisplayCallButtons: true,
+  voiceCallHoursMode: 'specific',
+  voiceTimeZone: 'Asia/Kolkata (GMT+05:30)',
+  voiceWeeklyHours: DEFAULT_VOICE_WEEKLY_HOURS,
+  voiceUnavailableHours: [],
+  inboxAutoAssign: false,
 };
 
 // =========================================================
@@ -423,6 +451,36 @@ function cleanList(value, fallback) {
     : String(value || '').split(',').map((item) => item.trim());
   const clean = [...new Set(list.filter(Boolean))];
   return clean.length ? clean : fallback;
+}
+
+function cleanVoiceWeeklyHours(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return WEEK_DAYS.reduce((acc, day) => {
+    const dayValue = source[day] && typeof source[day] === 'object' ? source[day] : DEFAULT_VOICE_WEEKLY_HOURS[day];
+    const slots = Array.isArray(dayValue.slots) && dayValue.slots.length
+      ? dayValue.slots.slice(0, 4).map((slot) => ({
+        start: String(slot?.start || '00:00').slice(0, 5),
+        end: String(slot?.end || '23:59').slice(0, 5),
+      }))
+      : [{ start: '00:00', end: '23:59' }];
+
+    acc[day] = {
+      enabled: dayValue.enabled !== false,
+      slots,
+    };
+    return acc;
+  }, {});
+}
+
+function cleanUnavailableHours(value) {
+  return Array.isArray(value)
+    ? value.slice(0, 40).map((entry) => ({
+      date: String(entry?.date || '').slice(0, 10),
+      start: String(entry?.start || '00:00').slice(0, 5),
+      end: String(entry?.end || '23:59').slice(0, 5),
+      reason: String(entry?.reason || '').trim().slice(0, 100),
+    })).filter((entry) => entry.date)
+    : [];
 }
 
 function toFiniteNumber(value, fallback = 0) {
@@ -743,10 +801,33 @@ function normalizeAppSettings(input = {}) {
     quoteApprovalManagerPhone: String(input.quoteApprovalManagerPhone || '').replace(/\D/g, '').slice(0, 15),
     quoteApprovalTemplateName: String(input.quoteApprovalTemplateName || DEFAULT_APP_SETTINGS.quoteApprovalTemplateName).trim().toLowerCase().slice(0, 80),
     quoteApprovalTemplateLanguage: String(input.quoteApprovalTemplateLanguage || DEFAULT_APP_SETTINGS.quoteApprovalTemplateLanguage).trim().slice(0, 12),
-        customerQuoteTemplateName: String(input.customerQuoteTemplateName || DEFAULT_APP_SETTINGS.customerQuoteTemplateName).trim().toLowerCase().slice(0, 80),
+    customerQuoteTemplateName: String(input.customerQuoteTemplateName || DEFAULT_APP_SETTINGS.customerQuoteTemplateName).trim().toLowerCase().slice(0, 80),
     customerQuoteTemplateLanguage: String(input.customerQuoteTemplateLanguage || DEFAULT_APP_SETTINGS.customerQuoteTemplateLanguage).trim().slice(0, 12),
     orderAcknowledgementTemplateName: String(input.orderAcknowledgementTemplateName || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateName).trim().toLowerCase().slice(0, 80),
     orderAcknowledgementTemplateLanguage: String(input.orderAcknowledgementTemplateLanguage || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateLanguage).trim().slice(0, 12),
+    ftpAccessEnabled: Boolean(input.ftpAccessEnabled),
+    twoFactorEnabled: Boolean(input.twoFactorEnabled),
+    wabaMmLiteEnabled: Boolean(input.wabaMmLiteEnabled),
+    wabaHealthyRetryEnabled: Boolean(input.wabaHealthyRetryEnabled),
+    wabaConversionEventsEnabled: Boolean(input.wabaConversionEventsEnabled),
+    billingBusinessName: String(input.billingBusinessName || '').trim().slice(0, 140),
+    billingGstNumber: String(input.billingGstNumber || '').trim().toUpperCase().slice(0, 20),
+    billingPanNumber: String(input.billingPanNumber || '').trim().toUpperCase().slice(0, 10),
+    billingCountry: String(input.billingCountry || 'India').trim().slice(0, 80),
+    billingState: String(input.billingState || '').trim().slice(0, 80),
+    billingCity: String(input.billingCity || '').trim().slice(0, 80),
+    billingAddress: String(input.billingAddress || '').trim().slice(0, 200),
+    billingPinCode: String(input.billingPinCode || '').replace(/\D/g, '').slice(0, 6),
+    billingEmail: String(input.billingEmail || '').trim().toLowerCase().slice(0, 140),
+    billingContactNumber: String(input.billingContactNumber || '').replace(/\D/g, '').slice(0, 10),
+    voiceCallsEnabled: Boolean(input.voiceCallsEnabled),
+    voiceCallbackEnabled: Boolean(input.voiceCallbackEnabled),
+    voiceDisplayCallButtons: input.voiceDisplayCallButtons === undefined ? DEFAULT_APP_SETTINGS.voiceDisplayCallButtons : Boolean(input.voiceDisplayCallButtons),
+    voiceCallHoursMode: input.voiceCallHoursMode === 'all' ? 'all' : 'specific',
+    voiceTimeZone: String(input.voiceTimeZone || DEFAULT_APP_SETTINGS.voiceTimeZone).trim().slice(0, 80),
+    voiceWeeklyHours: cleanVoiceWeeklyHours(input.voiceWeeklyHours),
+    voiceUnavailableHours: cleanUnavailableHours(input.voiceUnavailableHours),
+    inboxAutoAssign: Boolean(input.inboxAutoAssign),
   };
 }
 

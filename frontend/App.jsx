@@ -14,10 +14,14 @@ import {
   CreditCard,
   LayoutDashboard,
   Headphones,
+  HelpCircle,
+  Info,
   Link2,
   Menu,
   Megaphone,
   PhoneCall,
+  Plus,
+  Save,
   ShoppingCart,
   Sparkles,
   Bell,
@@ -170,8 +174,57 @@ const defaultAppSettings = {
   customerQuoteTemplateLanguage: 'en',
   orderAcknowledgementTemplateName: 'order_acknowledgement',
   orderAcknowledgementTemplateLanguage: 'en',
-  orderAcknowledgementTemplateName: 'order_acknowledgement',
-  orderAcknowledgementTemplateLanguage: 'en',
+  ftpAccessEnabled: false,
+  twoFactorEnabled: false,
+  wabaMmLiteEnabled: false,
+  wabaHealthyRetryEnabled: false,
+  wabaConversionEventsEnabled: false,
+  billingBusinessName: '',
+  billingGstNumber: '',
+  billingPanNumber: '',
+  billingCountry: 'India',
+  billingState: '',
+  billingCity: '',
+  billingAddress: '',
+  billingPinCode: '',
+  billingEmail: '',
+  billingContactNumber: '',
+  voiceCallsEnabled: false,
+  voiceCallbackEnabled: false,
+  voiceDisplayCallButtons: true,
+  voiceCallHoursMode: 'specific',
+  voiceTimeZone: 'Asia/Kolkata (GMT+05:30)',
+  voiceWeeklyHours: null,
+  voiceUnavailableHours: [],
+  inboxAutoAssign: false,
+}
+
+const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const DEFAULT_VOICE_WEEKLY_HOURS = WEEK_DAYS.reduce((acc, day) => ({
+  ...acc,
+  [day]: { enabled: true, slots: [{ start: '00:00', end: '23:59' }] },
+}), {})
+const DEFAULT_BILLING_FIELDS = {
+  billingBusinessName: '',
+  billingGstNumber: '',
+  billingPanNumber: '',
+  billingCountry: 'India',
+  billingState: '',
+  billingCity: '',
+  billingAddress: '',
+  billingPinCode: '',
+  billingEmail: '',
+  billingContactNumber: '',
+}
+
+function buildAppSettingsPayload(form) {
+  return {
+    ...form,
+    labels: fromCsv(form.labelsText),
+    stages: fromCsv(form.stagesText),
+    handoffKeywords: fromCsv(form.handoffKeywordsText),
+    inventoryFields: fromCsv(form.inventoryFieldsText),
+  }
 }
 
 function toCsv(value) {
@@ -807,6 +860,7 @@ const [authChecking, setAuthChecking] = useState(true)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [profileOpen, setProfileOpen] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [appSettings, setAppSettings] = useState(defaultAppSettings)
   const [customForm, setCustomForm] = useState({
     ...defaultAppSettings,
@@ -2048,23 +2102,14 @@ async function toggleTemplate(template) {
   }
 }
 
-async function saveCustomization(event) {
-  event.preventDefault()
-
+async function saveSettingsPayload(form, successMessage = 'Settings saved') {
   if (!canMonitor) {
     notify('Manager/Admin access required', 'error')
-    return
+    return false
   }
 
   setSettingsSaved('')
-
-  const payload = {
-    ...customForm,
-    labels: fromCsv(customForm.labelsText),
-    stages: fromCsv(customForm.stagesText),
-    handoffKeywords: fromCsv(customForm.handoffKeywordsText),
-    inventoryFields: fromCsv(customForm.inventoryFieldsText),
-  }
+  const payload = buildAppSettingsPayload(form)
 
   try {
     const res = await api.put('/api/app-settings', payload)
@@ -2078,12 +2123,19 @@ async function saveCustomization(event) {
       handoffKeywordsText: toCsv(nextSettings.handoffKeywords),
       inventoryFieldsText: toCsv(nextSettings.inventoryFields),
     })
-    setSettingsSaved('Customization saved')
-    notify('Customization saved')
+    setSettingsSaved(successMessage)
+    notify(successMessage)
     await loadAll()
+    return true
   } catch (err) {
-    notify(apiErrorMessage(err, 'Customization save failed'), 'error')
+    notify(apiErrorMessage(err, 'Settings save failed'), 'error')
+    return false
   }
+}
+
+async function saveCustomization(event) {
+  event.preventDefault()
+  await saveSettingsPayload(customForm, 'Customization saved')
 }
 
   async function sendTestMessage(event) {
@@ -2446,12 +2498,32 @@ async function saveCustomization(event) {
             </span>
           )}
           <button className="suite-refresh" type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={16} /></button>
-          <div className="suite-avatar">{initials(user.name)}</div>
-          <div className="suite-account-copy">
-            <strong>{user.name}</strong>
-            <small>{user.role}</small>
+          <div className="suite-account-menu">
+            <button className="suite-account-trigger" type="button" onClick={() => setAccountMenuOpen((current) => !current)}>
+              <span className="suite-avatar">{initials(user.name)}</span>
+              <span className="suite-account-copy">
+                <strong>{user.name}</strong>
+                <small>{user.role}</small>
+              </span>
+              <ChevronDown size={16} />
+            </button>
+            {accountMenuOpen && (
+              <div className="suite-account-dropdown">
+                {!isSuperAdminUser && canMonitor && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false)
+                      showPage('settings')
+                    }}
+                  >
+                    <UserRound size={17} /> Profile
+                  </button>
+                )}
+                <button type="button" onClick={logout}><LogOut size={17} /> Logout</button>
+              </div>
+            )}
           </div>
-          <ChevronDown size={16} />
         </div>
       </header>
 
@@ -2623,6 +2695,17 @@ async function saveCustomization(event) {
             setCustomForm={setCustomForm}
             onSaveCustomization={saveCustomization}
             settingsSaved={settingsSaved}
+            onSaveSettings={saveSettingsPayload}
+            currentUser={user}
+            users={users}
+            newUser={newUser}
+            setNewUser={setNewUser}
+            editingUserId={editingUserId}
+            onCreateUser={createUser}
+            onEditUser={editUser}
+            onCancelUserEdit={cancelUserEdit}
+            onToggleUser={toggleUser}
+            onDeleteUser={deleteUser}
             templates={managedTemplates}
             templateForm={templateForm}
             setTemplateForm={setTemplateForm}
@@ -4484,277 +4567,546 @@ function KnowledgeBaseManager() {
   )
 }
 
-function SettingsPage({ status, whatsappConfig, testMessage, setTestMessage, testResult, onTest, onMapPhone, simulator, setSimulator, onSimulate, customForm, setCustomForm, onSaveCustomization, settingsSaved, templates, templateForm, setTemplateForm, editingTemplateId, onSaveTemplate, onEditTemplate, onToggleTemplate, onCancelTemplateEdit, onSyncTemplates, templateSyncing, userRole, isProduction }) {
-      const warnings = status?.warnings || []
+function SettingsPage({
+  status,
+  whatsappConfig,
+  testMessage,
+  setTestMessage,
+  testResult,
+  onTest,
+  onMapPhone,
+  simulator,
+  setSimulator,
+  onSimulate,
+  customForm,
+  setCustomForm,
+  onSaveCustomization,
+  onSaveSettings,
+  settingsSaved,
+  templates,
+  templateForm,
+  setTemplateForm,
+  editingTemplateId,
+  onSaveTemplate,
+  onEditTemplate,
+  onToggleTemplate,
+  onCancelTemplateEdit,
+  onSyncTemplates,
+  templateSyncing,
+  userRole,
+  isProduction,
+  currentUser,
+  users = [],
+  newUser,
+  setNewUser,
+  editingUserId,
+  onCreateUser,
+  onEditUser,
+  onCancelUserEdit,
+  onToggleUser,
+  onDeleteUser,
+}) {
+  const warnings = status?.warnings || []
+  const [activeSettingsTab, setActiveSettingsTab] = useState('profile')
+  const [activePeopleTab, setActivePeopleTab] = useState('agents')
+  const [agentFormOpen, setAgentFormOpen] = useState(false)
+  const [googleMessage, setGoogleMessage] = useState('')
+  const [voiceHelpOpen, setVoiceHelpOpen] = useState(false)
+  const activeCount = users.filter((item) => item.active).length
+  const voiceWeeklyHours = normalizeVoiceWeeklyHours(customForm.voiceWeeklyHours)
+  const unavailableHours = Array.isArray(customForm.voiceUnavailableHours) ? customForm.voiceUnavailableHours : []
+
+  const settingsTabs = [
+    { id: 'profile', label: 'Profile' },
+    { id: 'agents', label: 'Agents and Permissions' },
+    { id: 'waba', label: 'WABA Settings' },
+    { id: 'billing', label: 'Billing & GST Details' },
+    { id: 'voice', label: 'Voice Call Settings' },
+    { id: 'inbox', label: 'Inbox Settings' },
+  ]
+
+  function patchForm(patch) {
+    setCustomForm({ ...customForm, ...patch })
+  }
+
+  async function savePatch(patch, message) {
+    const nextForm = { ...customForm, ...patch }
+    setCustomForm(nextForm)
+    await onSaveSettings(nextForm, message)
+  }
+
+  function openAgentForm() {
+    if (userRole !== 'admin') return
+    if (onCancelUserEdit) onCancelUserEdit()
+    setAgentFormOpen(true)
+  }
+
+  async function submitAgent(event) {
+    if (!onCreateUser) return
+    const saved = await onCreateUser(event)
+    if (saved) setAgentFormOpen(false)
+  }
+
+  function editAgent(userItem) {
+    if (!onEditUser) return
+    onEditUser(userItem)
+    setAgentFormOpen(true)
+  }
+
+  function updateVoiceDay(day, patch) {
+    patchForm({
+      voiceWeeklyHours: {
+        ...voiceWeeklyHours,
+        [day]: { ...voiceWeeklyHours[day], ...patch },
+      },
+    })
+  }
+
+  function updateVoiceSlot(day, slotIndex, field, value) {
+    const slots = voiceWeeklyHours[day].slots.map((slot, index) => (
+      index === slotIndex ? { ...slot, [field]: value } : slot
+    ))
+    updateVoiceDay(day, { slots })
+  }
+
+  function addVoiceSlot(day) {
+    const slots = [...voiceWeeklyHours[day].slots, { start: '09:00', end: '18:00' }]
+    updateVoiceDay(day, { slots })
+  }
+
+  function removeVoiceSlot(day, slotIndex) {
+    const slots = voiceWeeklyHours[day].slots.filter((slot, index) => index !== slotIndex)
+    updateVoiceDay(day, { slots: slots.length ? slots : [{ start: '00:00', end: '23:59' }] })
+  }
+
+  function addUnavailableHours() {
+    patchForm({
+      voiceUnavailableHours: [
+        ...unavailableHours,
+        { date: new Date().toISOString().slice(0, 10), start: '00:00', end: '23:59', reason: '' },
+      ],
+    })
+  }
+
+  function updateUnavailableHours(index, field, value) {
+    patchForm({
+      voiceUnavailableHours: unavailableHours.map((entry, itemIndex) => (
+        itemIndex === index ? { ...entry, [field]: value } : entry
+      )),
+    })
+  }
+
+  function removeUnavailableHours(index) {
+    patchForm({
+      voiceUnavailableHours: unavailableHours.filter((entry, itemIndex) => itemIndex !== index),
+    })
+  }
+
+  async function saveVoiceSettings(event) {
+    event.preventDefault()
+    await onSaveSettings({ ...customForm, voiceWeeklyHours }, 'Voice call settings saved')
+  }
+
+  async function deleteBillingProfile() {
+    if (!window.confirm('Delete billing profile details for this company?')) return
+    await savePatch(DEFAULT_BILLING_FIELDS, 'Billing profile deleted')
+  }
 
   return (
+    <div className="settings-reference-shell">
+      <nav className="settings-reference-tabs" aria-label="Settings pages">
+        {settingsTabs.map((tab) => (
+          <button key={tab.id} className={activeSettingsTab === tab.id ? 'active' : ''} type="button" onClick={() => setActiveSettingsTab(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {activeSettingsTab === 'profile' && (
+        <div className="settings-profile-grid">
+          <section className="settings-card">
+            <div className="settings-card-title"><UserRound size={22} /><h3>User Information</h3></div>
+            <div className="settings-info-row"><strong>Username:</strong><span>{currentUser?.name || currentUser?.email || '-'}</span></div>
+            <div className="settings-info-row"><strong>FTP Access:</strong><SwitchControl checked={Boolean(customForm.ftpAccessEnabled)} label={customForm.ftpAccessEnabled ? 'ON' : 'OFF'} onChange={(checked) => savePatch({ ftpAccessEnabled: checked }, 'Profile setting saved')} /></div>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-title"><b className="google-mark">G</b><h3>Google Integration</h3></div>
+            <div className="settings-info-row">
+              <strong>Status:</strong>
+              <span className="connection-pill warn"><Link2 size={15} /> Not Connected</span>
+            </div>
+            <p className="settings-muted">Connect your Google account to enable Sheets integration and other Google services.</p>
+            <button className="settings-outline-button" type="button" onClick={() => setGoogleMessage('Google OAuth backend route is not configured yet. No token was requested or exposed.')}>
+              <b className="google-color">G</b> Connect with Google
+            </button>
+            {googleMessage && <small className="settings-safe-note">{googleMessage}</small>}
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-title"><Shield size={22} /><h3>Two-Factor Authentication</h3></div>
+            <div className="settings-info-row">
+              <div>
+                <strong>Status:</strong>
+                <p className="settings-muted">Add an extra layer of security to your account by enabling two-factor authentication.</p>
+              </div>
+              <SwitchControl checked={Boolean(customForm.twoFactorEnabled)} label={customForm.twoFactorEnabled ? 'Enabled' : 'Disabled'} onChange={(checked) => savePatch({ twoFactorEnabled: checked }, 'Profile setting saved')} />
+            </div>
+          </section>
+
+          <form className="settings-card settings-customization-card" onSubmit={onSaveCustomization}>
+            <div className="settings-card-title"><Settings size={22} /><h3>Business Customization</h3></div>
+            <div className="settings-form-grid compact">
+              <label>App Name<input value={customForm.appName} onChange={(e) => patchForm({ appName: e.target.value })} /></label>
+              <label>Company Name<input value={customForm.companyName} onChange={(e) => patchForm({ companyName: e.target.value })} /></label>
+              <label>Industry<input value={customForm.industry} onChange={(e) => patchForm({ industry: e.target.value })} /></label>
+              <label>Theme Color<input type="color" value={customForm.primaryColor} onChange={(e) => patchForm({ primaryColor: e.target.value })} /></label>
+              <label>Currency<input value={customForm.currency} onChange={(e) => patchForm({ currency: e.target.value })} /></label>
+              <label>Quotation Prefix<input value={customForm.quotationPrefix} onChange={(e) => patchForm({ quotationPrefix: e.target.value })} /></label>
+              <label>Order Prefix<input value={customForm.orderPrefix} onChange={(e) => patchForm({ orderPrefix: e.target.value })} /></label>
+              <label className="wide">Labels<textarea value={customForm.labelsText} onChange={(e) => patchForm({ labelsText: e.target.value })} /></label>
+              <label className="wide">Sales Stages<textarea value={customForm.stagesText} onChange={(e) => patchForm({ stagesText: e.target.value })} /></label>
+              <label className="wide">Bot Greeting<textarea value={customForm.botGreeting} onChange={(e) => patchForm({ botGreeting: e.target.value })} /></label>
+              <label className="wide">Handoff Keywords<textarea value={customForm.handoffKeywordsText} onChange={(e) => patchForm({ handoffKeywordsText: e.target.value })} /></label>
+              <label className="wide">Inventory Fields<textarea value={customForm.inventoryFieldsText} onChange={(e) => patchForm({ inventoryFieldsText: e.target.value })} /></label>
+            </div>
+            <label className="settings-switch-row">
+              <SwitchControl checked={Boolean(customForm.botEnabled)} onChange={(checked) => patchForm({ botEnabled: checked })} />
+              Enable Auto Bot
+            </label>
+            <div className="approval-settings-box">
+              <strong>Quotation Approval Workflow</strong>
+              <small>Customer quotation will go to manager first. Customer will receive it only after manager approval.</small>
+              <label className="settings-switch-row">
+                <SwitchControl checked={Boolean(customForm.quoteApprovalEnabled)} onChange={(checked) => patchForm({ quoteApprovalEnabled: checked })} />
+                Enable Manager Approval Before Customer Quote
+              </label>
+              <div className="settings-form-grid compact">
+                <label>Manager Name<input value={customForm.quoteApprovalManagerName || ''} onChange={(e) => patchForm({ quoteApprovalManagerName: e.target.value })} placeholder="Example: Sales Manager" /></label>
+                <label>Manager WhatsApp Number<input value={customForm.quoteApprovalManagerPhone || ''} onChange={(e) => patchForm({ quoteApprovalManagerPhone: e.target.value.replace(/\D/g, '') })} placeholder="Example: 919876543210" /></label>
+                <label>Manager Approval Template Name<input value={customForm.quoteApprovalTemplateName || ''} onChange={(e) => patchForm({ quoteApprovalTemplateName: e.target.value })} placeholder="quote_manager_approval_request" /></label>
+                <label>Manager Approval Template Language<input value={customForm.quoteApprovalTemplateLanguage || 'en'} onChange={(e) => patchForm({ quoteApprovalTemplateLanguage: e.target.value })} placeholder="en" /></label>
+                <label>Customer Quote Template Name<input value={customForm.customerQuoteTemplateName || ''} onChange={(e) => patchForm({ customerQuoteTemplateName: e.target.value })} placeholder="quote_customer_approval_request" /></label>
+                <label>Customer Quote Template Language<input value={customForm.customerQuoteTemplateLanguage || 'en'} onChange={(e) => patchForm({ customerQuoteTemplateLanguage: e.target.value })} placeholder="en" /></label>
+                <label>Order Acknowledgement Template Name<input value={customForm.orderAcknowledgementTemplateName || ''} onChange={(e) => patchForm({ orderAcknowledgementTemplateName: e.target.value })} placeholder="order_acknowledgement" /></label>
+                <label>Order Acknowledgement Template Language<input value={customForm.orderAcknowledgementTemplateLanguage || 'en'} onChange={(e) => patchForm({ orderAcknowledgementTemplateLanguage: e.target.value })} placeholder="en" /></label>
+              </div>
+            </div>
+            <button className="settings-primary-button" type="submit"><Save size={16} /> Save Customization</button>
+            {settingsSaved && <small className="success-text">{settingsSaved}</small>}
+          </form>
+        </div>
+      )}
+
+      {activeSettingsTab === 'agents' && (
+        <section className="settings-card settings-agents-card">
+          <nav className="settings-subtabs" aria-label="Agents sections">
+            <button className={activePeopleTab === 'agents' ? 'active' : ''} type="button" onClick={() => setActivePeopleTab('agents')}>Agents Management</button>
+            <button className={activePeopleTab === 'teams' ? 'active' : ''} type="button" onClick={() => setActivePeopleTab('teams')}>Teams Management</button>
+            <button className={activePeopleTab === 'roles' ? 'active' : ''} type="button" onClick={() => setActivePeopleTab('roles')}>Role Permissions</button>
+          </nav>
+
+          {activePeopleTab === 'agents' && (
+            <>
+              <div className="settings-table-toolbar">
+                <span>{users.length} agents, {activeCount} active</span>
+                {userRole === 'admin' && <button className="settings-primary-button" type="button" onClick={openAgentForm}><Plus size={18} /> Create Agent</button>}
+              </div>
+              {agentFormOpen && (
+                <form className="settings-agent-form" onSubmit={submitAgent}>
+                  <label>Name<input placeholder="Full name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} /></label>
+                  <label>Email<input placeholder="name@company.com" value={newUser.email} disabled={Boolean(editingUserId)} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} /></label>
+                  <label>Password<input placeholder={editingUserId ? 'Leave blank to keep old password' : 'Temporary password'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
+                  <label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></label>
+                  <div className="settings-form-actions">
+                    <button className="settings-primary-button" type="submit">{editingUserId ? 'Update Agent' : 'Save Agent'}</button>
+                    <button className="settings-outline-button" type="button" onClick={() => { if (onCancelUserEdit) onCancelUserEdit(); setAgentFormOpen(false) }}>Cancel</button>
+                  </div>
+                </form>
+              )}
+              <div className="settings-agent-table">
+                <div className="settings-agent-head"><span>Name</span><span>Username</span><span>Email</span><span>Role</span><span>Actions</span></div>
+                {!users.length && <EmptyState title="No data" text="Create an agent to give this tenant access." />}
+                {users.map((item) => (
+                  <div className="settings-agent-row" key={item.id}>
+                    <strong>{item.name}</strong>
+                    <span>{item.email?.split('@')[0] || '-'}</span>
+                    <span>{item.email}</span>
+                    <b className={`role-badge role-${item.role}`}>{item.role}</b>
+                    <div className="settings-row-actions">
+                      {userRole === 'admin' ? (
+                        <>
+                          <button type="button" onClick={() => editAgent(item)}><Pencil size={14} /> Edit</button>
+                          <button type="button" onClick={() => onToggleUser(item)}>{item.active ? 'Deactivate' : 'Activate'}</button>
+                          <button className="danger" type="button" onClick={() => onDeleteUser(item)}><Trash2 size={14} /> Delete</button>
+                        </>
+                      ) : <span>Admin only</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {activePeopleTab === 'teams' && (
+            <div className="settings-empty-panel">
+              <Users size={34} />
+              <strong>No teams configured</strong>
+              <span>Create agents first. Team routing can be added safely after a tenant-scoped teams table exists.</span>
+              {userRole === 'admin' && <button className="settings-outline-button" type="button" onClick={() => { setActivePeopleTab('agents'); openAgentForm() }}><Plus size={16} /> Create Agent</button>}
+            </div>
+          )}
+
+          {activePeopleTab === 'roles' && (
+            <div className="settings-role-grid">
+              {[
+                ['Admin', 'Full settings, users, WhatsApp setup and audit access'],
+                ['Manager', 'Inbox monitoring, templates, settings review and reports'],
+                ['Sales', 'Assigned inbox conversations and sales workflow actions'],
+              ].map(([role, detail]) => (
+                <div key={role}><strong>{role}</strong><span>{detail}</span></div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeSettingsTab === 'waba' && (
         <div className="settings-stack">
-      <section className="table-module">
-        <div className="module-title"><Settings size={18} /><h3>Business Customization</h3></div>
-        <form className="custom-form" onSubmit={onSaveCustomization}>
-          <label>App Name<input value={customForm.appName} onChange={(e) => setCustomForm({ ...customForm, appName: e.target.value })} /></label>
-          <label>Company Name<input value={customForm.companyName} onChange={(e) => setCustomForm({ ...customForm, companyName: e.target.value })} /></label>
-          <label>Industry<input value={customForm.industry} onChange={(e) => setCustomForm({ ...customForm, industry: e.target.value })} /></label>
-          <label>Theme Color<input type="color" value={customForm.primaryColor} onChange={(e) => setCustomForm({ ...customForm, primaryColor: e.target.value })} /></label>
-          <label>Currency<input value={customForm.currency} onChange={(e) => setCustomForm({ ...customForm, currency: e.target.value })} /></label>
-          <label>Quotation Prefix<input value={customForm.quotationPrefix} onChange={(e) => setCustomForm({ ...customForm, quotationPrefix: e.target.value })} /></label>
-          <label>Order Prefix<input value={customForm.orderPrefix} onChange={(e) => setCustomForm({ ...customForm, orderPrefix: e.target.value })} /></label>
-          <label>Labels<textarea value={customForm.labelsText} onChange={(e) => setCustomForm({ ...customForm, labelsText: e.target.value })} /></label>
-          <label>Sales Stages<textarea value={customForm.stagesText} onChange={(e) => setCustomForm({ ...customForm, stagesText: e.target.value })} /></label>
-          <label>Bot Greeting<textarea value={customForm.botGreeting} onChange={(e) => setCustomForm({ ...customForm, botGreeting: e.target.value })} /></label>
-          <label>Handoff Keywords<textarea value={customForm.handoffKeywordsText} onChange={(e) => setCustomForm({ ...customForm, handoffKeywordsText: e.target.value })} /></label>
-          <label>Inventory Fields<textarea value={customForm.inventoryFieldsText} onChange={(e) => setCustomForm({ ...customForm, inventoryFieldsText: e.target.value })} /></label>
+          <SettingToggleCard title="Marketing Messages Lite (MM Lite Status)" checked={Boolean(customForm.wabaMmLiteEnabled)} onChange={(checked) => savePatch({ wabaMmLiteEnabled: checked }, 'WABA setting saved')} />
+          <SettingToggleCard title="Healthy Ecosystem Message Retry" checked={Boolean(customForm.wabaHealthyRetryEnabled)} onChange={(checked) => savePatch({ wabaHealthyRetryEnabled: checked }, 'WABA setting saved')} />
+          <SettingToggleCard title="Whatsapp conversion events push to Meta" checked={Boolean(customForm.wabaConversionEventsEnabled)} onChange={(checked) => savePatch({ wabaConversionEventsEnabled: checked }, 'WABA setting saved')} />
 
-          <label className="toggle-row"><input type="checkbox" checked={Boolean(customForm.botEnabled)} onChange={(e) => setCustomForm({ ...customForm, botEnabled: e.target.checked })} /> Enable Auto Bot</label>
+          <section className="settings-card">
+            <div className="settings-card-title"><Settings size={22} /><h3>WhatsApp Setup</h3></div>
+            <div className="setup-grid">
+              <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
+              <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
+              <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
+              <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
+              <span className={whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn'}>App secret</span>
+              <span className={whatsappConfig?.testNumbersSet || status?.whatsappTestNumbersSet ? 'ok' : 'warn'}>Test numbers</span>
+            </div>
+            {whatsappConfig?.phoneNumberMappedTenantSlug && <p className="setup-copy">Incoming messages map to tenant: {whatsappConfig.phoneNumberMappedTenantSlug}</p>}
+            {userRole === 'admin' && whatsappConfig?.phoneNumberIdSet && !whatsappConfig?.phoneNumberMappedToCurrentTenant && (
+              <div className="inline-actions">
+                <span className="setup-copy">Phone number ID is not mapped to this company.</span>
+                <button type="button" onClick={onMapPhone}>Map Phone To This Company</button>
+              </div>
+            )}
+            {warnings.length > 0 && <div className="warning-list">{warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}
+            <p className="setup-copy">Webhook: {whatsappConfig?.callbackUrl || '-'}</p>
+            {userRole === 'admin' ? (
+              <>
+                <form className="dual-form" onSubmit={onTest}>
+                  <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
+                  <input placeholder="Test message inside 24-hour window only" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
+                  <button type="submit">Send Test</button>
+                </form>
+                <small className="setup-copy">Free-form test messages are allowed only inside the customer&apos;s 24-hour WhatsApp reply window.</small>
+                {testResult && <small>{testResult}</small>}
+              </>
+            ) : <p className="setup-copy">WhatsApp test message is admin-only.</p>}
+            {!isProduction && (
+              <>
+                <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
+                <form className="sim-form" onSubmit={onSimulate}>
+                  <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
+                  <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
+                  <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
+                  <button type="submit">Capture Message</button>
+                </form>
+              </>
+            )}
+          </section>
 
-          <div className="approval-settings-box">
-            <strong>Quotation Approval Workflow</strong>
-            <small>Customer quotation will go to manager first. Customer will receive it only after manager approval.</small>
+          <KnowledgeBaseManager />
 
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={Boolean(customForm.quoteApprovalEnabled)}
-                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalEnabled: e.target.checked })}
-              />
-              Enable Manager Approval Before Customer Quote
-            </label>
+          <section className="settings-card">
+            <div className="module-title template-sync-head">
+              <div><MessageCircle size={18} /><h3>Approved WhatsApp Templates</h3></div>
+              <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>{templateSyncing ? 'Syncing...' : 'Sync from Meta'}</button>
+            </div>
+            <small className="setup-copy">Add only templates that are already approved in Meta WhatsApp Manager. This does not create templates inside Meta.</small>
+            <form className="custom-form" onSubmit={onSaveTemplate}>
+              <label>Template Name<input placeholder="quotation_followup" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} /></label>
+              <label>Language<input placeholder="en_US" value={templateForm.language} onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })} /></label>
+              <label>Body Preview<textarea placeholder="Your quotation is ready. Please confirm." value={templateForm.body} onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })} /></label>
+              <label className="settings-switch-row"><SwitchControl checked={Boolean(templateForm.active)} onChange={(checked) => setTemplateForm({ ...templateForm, active: checked })} /> Active</label>
+              <div className="user-form-actions">
+                <button className="user-action-primary" type="submit">{editingTemplateId ? 'Update Template' : 'Save Template'}</button>
+                {editingTemplateId && <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>Cancel</button>}
+              </div>
+            </form>
+            {!templates.length && <EmptyState title="No templates" text="Add approved Meta templates for expired 24-hour conversations." />}
+            {!!templates.length && (
+              <div className="user-table">
+                <div className="user-table-head template-table-head"><span>Name</span><span>Language</span><span>Meta Status</span><span>Category</span><span>Active</span><span>Body</span><span>Actions</span></div>
+                {templates.map((template) => (
+                  <div className="user-row" key={template.id}>
+                    <div className="user-name-cell"><strong>{template.name}</strong><small>ID: {String(template.id).slice(0, 8)}</small></div>
+                    <span>{template.language}</span>
+                    <i className={`meta-status-pill ${template.meta_status || 'manual'}`}>{template.meta_status || 'manual'}</i>
+                    <span>{template.category || '-'}</span>
+                    <i className={template.active ? 'status-active' : 'status-inactive'}>{template.active ? 'Active' : 'Inactive'}</i>
+                    <span>{template.body}</span>
+                    <div className="user-actions">
+                      <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>Edit</button>
+                      <button className={template.active ? 'user-action-pause' : 'user-action-enable'} type="button" onClick={() => onToggleTemplate(template)}>{template.active ? 'Deactivate' : 'Activate'}</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
 
-            <label>
-              Manager Name
-              <input
-                value={customForm.quoteApprovalManagerName || ''}
-                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalManagerName: e.target.value })}
-                placeholder="Example: Sales Manager"
-              />
-            </label>
-
-            <label>
-              Manager WhatsApp Number
-              <input
-                value={customForm.quoteApprovalManagerPhone || ''}
-                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalManagerPhone: e.target.value.replace(/\D/g, '') })}
-                placeholder="Example: 919876543210"
-              />
-            </label>
-
-            <label>
-              Manager Approval Template Name
-              <input
-                value={customForm.quoteApprovalTemplateName || ''}
-                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalTemplateName: e.target.value })}
-                placeholder="quote_manager_approval_request"
-              />
-            </label>
-
-            <label>
-              Manager Approval Template Language
-              <input
-                value={customForm.quoteApprovalTemplateLanguage || 'en'}
-                onChange={(e) => setCustomForm({ ...customForm, quoteApprovalTemplateLanguage: e.target.value })}
-                placeholder="en"
-              />
-            </label>
-
-            <label>
-              Customer Quote Template Name
-              <input
-                value={customForm.customerQuoteTemplateName || ''}
-                onChange={(e) => setCustomForm({ ...customForm, customerQuoteTemplateName: e.target.value })}
-                placeholder="quote_customer_approval_request"
-              />
-            </label>
-
-            <label>
-              Customer Quote Template Language
-              <input
-                value={customForm.customerQuoteTemplateLanguage || 'en'}
-                onChange={(e) => setCustomForm({ ...customForm, customerQuoteTemplateLanguage: e.target.value })}
-                placeholder="en"
-              />
-            </label>
-                        <label>
-              Order Acknowledgement Template Name
-              <input
-                value={customForm.orderAcknowledgementTemplateName || ''}
-                onChange={(e) => setCustomForm({ ...customForm, orderAcknowledgementTemplateName: e.target.value })}
-                placeholder="order_acknowledgement"
-              />
-            </label>
-
-            <label>
-              Order Acknowledgement Template Language
-              <input
-                value={customForm.orderAcknowledgementTemplateLanguage || 'en'}
-                onChange={(e) => setCustomForm({ ...customForm, orderAcknowledgementTemplateLanguage: e.target.value })}
-                placeholder="en"
-              />
-            </label>
+      {activeSettingsTab === 'billing' && (
+        <form className="settings-card billing-form" onSubmit={(event) => { event.preventDefault(); onSaveSettings(customForm, 'Billing profile saved') }}>
+          <div className="settings-card-title split"><div><CreditCard size={22} /><h3>Billing & GST Details / Business Information</h3></div><button className="settings-danger-outline" type="button" onClick={deleteBillingProfile}><Trash2 size={17} /> Delete Profile</button></div>
+          <div className="settings-form-grid">
+            <label><span className="required">*</span> Business Name<input required placeholder="Enter your business name" value={customForm.billingBusinessName || ''} onChange={(e) => patchForm({ billingBusinessName: e.target.value })} /></label>
+            <label>GST Number<input placeholder="Enter GST number (optional)" value={customForm.billingGstNumber || ''} onChange={(e) => patchForm({ billingGstNumber: e.target.value.toUpperCase() })} /></label>
+            <label>PAN Number<input placeholder="ENTER PAN NUMBER (OPTIONAL)" value={customForm.billingPanNumber || ''} onChange={(e) => patchForm({ billingPanNumber: e.target.value.toUpperCase() })} /></label>
+            <label><span className="required">*</span> Country<select required value={customForm.billingCountry || 'India'} onChange={(e) => patchForm({ billingCountry: e.target.value })}><option value="India">India</option></select></label>
           </div>
-
-          <button type="submit">Save Customization</button>
+          <div className="settings-section-divider"><Building2 size={21} /><strong>Billing Address</strong></div>
+          <div className="settings-form-grid">
+            <label><span className="required">*</span> State<input required placeholder="Select State" value={customForm.billingState || ''} onChange={(e) => patchForm({ billingState: e.target.value })} /></label>
+            <label>City<input placeholder="Enter city name" value={customForm.billingCity || ''} onChange={(e) => patchForm({ billingCity: e.target.value })} /></label>
+            <label className="wide"><span className="required">*</span> Billing Address<textarea required maxLength={200} placeholder="Enter complete billing address" value={customForm.billingAddress || ''} onChange={(e) => patchForm({ billingAddress: e.target.value })} /><small>{String(customForm.billingAddress || '').length} / 200</small></label>
+            <label><span className="required">*</span> Pin Code<input required inputMode="numeric" maxLength={6} placeholder="Enter 6-digit pin code" value={customForm.billingPinCode || ''} onChange={(e) => patchForm({ billingPinCode: e.target.value.replace(/\D/g, '').slice(0, 6) })} /></label>
+            <label><span className="required">*</span> Email<input required type="email" placeholder="Enter email address" value={customForm.billingEmail || ''} onChange={(e) => patchForm({ billingEmail: e.target.value })} /></label>
+            <label><span className="required">*</span> Contact Number<input required inputMode="numeric" maxLength={10} placeholder="Enter 10-digit contact number" value={customForm.billingContactNumber || ''} onChange={(e) => patchForm({ billingContactNumber: e.target.value.replace(/\D/g, '').slice(0, 10) })} /></label>
+          </div>
+          <div className="settings-form-actions bottom">
+            <button className="settings-outline-button" type="button" onClick={() => patchForm(DEFAULT_BILLING_FIELDS)}>Reset</button>
+            <button className="settings-primary-button" type="submit"><Save size={17} /> Save Profile</button>
+          </div>
           {settingsSaved && <small className="success-text">{settingsSaved}</small>}
         </form>
-      </section>
+      )}
 
-      <KnowledgeBaseManager />
-
-      <section className="table-module">
-        <div className="module-title"><Settings size={18} /><h3>WhatsApp Setup</h3></div>
-<div className="setup-grid">
-  <span className={whatsappConfig?.accessTokenSet ? 'ok' : 'warn'}>Access token</span>
-  <span className={whatsappConfig?.phoneNumberIdSet ? 'ok' : 'warn'}>Phone number ID</span>
-  <span className={whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn'}>Phone mapped</span>
-  <span className={whatsappConfig?.verifyTokenSet ? 'ok' : 'warn'}>Verify token</span>
-  <span className={whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn'}>App secret</span>
-  <span className={whatsappConfig?.testNumbersSet || status?.whatsappTestNumbersSet ? 'ok' : 'warn'}>Test numbers</span>
-</div>
-        {whatsappConfig?.phoneNumberMappedTenantSlug && (
-          <p className="setup-copy">Incoming messages map to tenant: {whatsappConfig.phoneNumberMappedTenantSlug}</p>
-        )}
-{userRole === 'admin' && whatsappConfig?.phoneNumberIdSet && !whatsappConfig?.phoneNumberMappedToCurrentTenant && (
-  <div className="inline-actions">
-    <span className="setup-copy">Phone number ID is not mapped to this company.</span>
-    <button type="button" onClick={onMapPhone}>Map Phone To This Company</button>
-  </div>
-)}
-
-        {warnings.length > 0 && (
-          <div className="warning-list">
-            {warnings.map((warning) => <span key={warning}>{warning}</span>)}
-          </div>
-        )}
-        <p className="setup-copy">Webhook: {whatsappConfig?.callbackUrl || '-'}</p>
-        {userRole === 'admin' ? (
-  <>
-    <form className="dual-form" onSubmit={onTest}>
-      <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
-      <input placeholder="Test message inside 24-hour window only" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
-      <button type="submit">Send Test</button>
-    </form>
-    <small className="setup-copy">Free-form test messages are allowed only inside the customer&apos;s 24-hour WhatsApp reply window.</small>
-    {testResult && <small>{testResult}</small>}
-  </>
-) : (
-  <p className="setup-copy">WhatsApp test message is admin-only.</p>
-)}
-        {!isProduction && (
-          <>
-            <div className="module-title"><MessageCircle size={18} /><h3>Local Inbound Test</h3></div>
-            <form className="sim-form" onSubmit={onSimulate}>
-              <input placeholder="Customer number" value={simulator.phone} onChange={(e) => setSimulator({ ...simulator, phone: e.target.value })} />
-              <input placeholder="Customer name" value={simulator.name} onChange={(e) => setSimulator({ ...simulator, name: e.target.value })} />
-              <textarea placeholder="Customer WhatsApp message" value={simulator.message} onChange={(e) => setSimulator({ ...simulator, message: e.target.value })} />
-              <button type="submit">Capture Message</button>
-            </form>
-          </>
-        )}
-      </section>
-            <section className="table-module">
-        <div className="module-title template-sync-head">
-          <div>
-            <MessageCircle size={18} />
-            <h3>Approved WhatsApp Templates</h3>
-          </div>
-          <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
-            {templateSyncing ? 'Syncing...' : 'Sync from Meta'}
-          </button>
-        </div>
-        <small className="setup-copy">
-          Add only templates that are already approved in Meta WhatsApp Manager. This does not create templates inside Meta.
-        </small>
-
-        <form className="custom-form" onSubmit={onSaveTemplate}>
-          <label>
-            Template Name
-            <input
-              placeholder="quotation_followup"
-              value={templateForm.name}
-              onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
-            />
-          </label>
-
-          <label>
-            Language
-            <input
-              placeholder="en_US"
-              value={templateForm.language}
-              onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })}
-            />
-          </label>
-
-          <label>
-            Body Preview
-            <textarea
-              placeholder="Your quotation is ready. Please confirm."
-              value={templateForm.body}
-              onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
-            />
-          </label>
-
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={Boolean(templateForm.active)}
-              onChange={(e) => setTemplateForm({ ...templateForm, active: e.target.checked })}
-            />
-            Active
-          </label>
-
-          <div className="user-form-actions">
-            <button className="user-action-primary" type="submit">
-              {editingTemplateId ? 'Update Template' : 'Save Template'}
-            </button>
-            {editingTemplateId && (
-              <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>
-                Cancel
-              </button>
-            )}
-          </div>
-        </form>
-
-        {!templates.length && <EmptyState title="No templates" text="Add approved Meta templates for expired 24-hour conversations." />}
-
-        {!!templates.length && (
-          <div className="user-table">
-            <div className="user-table-head template-table-head">
-              <span>Name</span>
-              <span>Language</span>
-              <span>Meta Status</span>
-              <span>Category</span>
-              <span>Active</span>
-              <span>Body</span>
-              <span>Actions</span>
+      {activeSettingsTab === 'voice' && (
+        <form className="voice-settings-form" onSubmit={saveVoiceSettings}>
+          <section className="settings-card">
+            <div className="settings-card-title split">
+              <div><PhoneCall size={22} /><h3>Voice Call Settings</h3></div>
+              <div className="settings-form-actions">
+                <button className="settings-outline-button" type="button" onClick={() => setVoiceHelpOpen((current) => !current)}><HelpCircle size={17} /> How it Works</button>
+                <button className="settings-outline-button" type="button" onClick={() => setActiveSettingsTab('agents')}><Users size={17} /> Manage Agents</button>
+              </div>
             </div>
+            {voiceHelpOpen && <div className="settings-safe-note">These controls store tenant voice preferences only. WhatsApp calling availability depends on Meta account eligibility and approved product access.</div>}
+            <VoiceToggleRow icon={PhoneCall} title="Allow voice calls" text="Make and receive calls with this phone number." checked={Boolean(customForm.voiceCallsEnabled)} onChange={(checked) => patchForm({ voiceCallsEnabled: checked })} />
+            <VoiceToggleRow icon={Headphones} title="Allow people to request a callback for missed calls" text="If you're unable to answer a call, let people request a call back." checked={Boolean(customForm.voiceCallbackEnabled)} onChange={(checked) => patchForm({ voiceCallbackEnabled: checked })} />
+            <VoiceToggleRow icon={Info} title="Display call buttons" text="People could still call this number from a message containing a call button." checked={customForm.voiceDisplayCallButtons !== false} onChange={(checked) => patchForm({ voiceDisplayCallButtons: checked })} />
+          </section>
 
-            {templates.map((template) => (
-              <div className="user-row" key={template.id}>
-                <div className="user-name-cell">
-                  <strong>{template.name}</strong>
-                  <small>ID: {String(template.id).slice(0, 8)}</small>
-                </div>
-                <span>{template.language}</span>
-                <i className={`meta-status-pill ${template.meta_status || 'manual'}`}>
-                  {template.meta_status || 'manual'}
-                </i>
-                <span>{template.category || '-'}</span>
-                <i className={template.active ? 'status-active' : 'status-inactive'}>
-                  {template.active ? 'Active' : 'Inactive'}
-                </i>
-                <span>{template.body}</span>
-                <div className="user-actions">
-                  <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>
-                    Edit
-                  </button>
-                  <button className={template.active ? 'user-action-pause' : 'user-action-enable'} type="button" onClick={() => onToggleTemplate(template)}>
-                    {template.active ? 'Deactivate' : 'Activate'}
-                  </button>
-                </div>
+          <section className="settings-card">
+            <div className="settings-card-title"><Clock3 size={22} /><h3>Available call hours</h3></div>
+            <p className="settings-muted">Set regular calling hours for your business. If you don&apos;t set your call hours, people will always be able to call you.</p>
+            <div className="settings-radio-row">
+              <label><input type="radio" checked={(customForm.voiceCallHoursMode || 'specific') === 'all'} onChange={() => patchForm({ voiceCallHoursMode: 'all' })} /> All time</label>
+              <label><input type="radio" checked={(customForm.voiceCallHoursMode || 'specific') === 'specific'} onChange={() => patchForm({ voiceCallHoursMode: 'specific' })} /> Specific time</label>
+            </div>
+            <label className="timezone-field">Time zone<select value={customForm.voiceTimeZone || 'Asia/Kolkata (GMT+05:30)'} onChange={(e) => patchForm({ voiceTimeZone: e.target.value })}><option>Asia/Kolkata (GMT+05:30)</option><option>UTC (GMT+00:00)</option></select></label>
+            {(customForm.voiceCallHoursMode || 'specific') === 'specific' && (
+              <div className="voice-hours-grid">
+                {WEEK_DAYS.map((day) => (
+                  <div className="voice-day-row" key={day}>
+                    <SwitchControl checked={voiceWeeklyHours[day].enabled} onChange={(checked) => updateVoiceDay(day, { enabled: checked })} />
+                    <strong>{day}</strong>
+                    <div className="voice-slots">
+                      {voiceWeeklyHours[day].slots.map((slot, slotIndex) => (
+                        <div className="voice-slot-row" key={`${day}-${slotIndex}`}>
+                          <span>Slot {slotIndex + 1}</span>
+                          <input type="time" value={slot.start} onChange={(e) => updateVoiceSlot(day, slotIndex, 'start', e.target.value)} />
+                          <span>to</span>
+                          <input type="time" value={slot.end} onChange={(e) => updateVoiceSlot(day, slotIndex, 'end', e.target.value)} />
+                          <button type="button" aria-label={`Add ${day} slot`} onClick={() => addVoiceSlot(day)}><Plus size={18} /></button>
+                          {voiceWeeklyHours[day].slots.length > 1 && <button type="button" aria-label={`Remove ${day} slot`} onClick={() => removeVoiceSlot(day, slotIndex)}><X size={18} /></button>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="settings-section-divider"><CalendarClock size={21} /><strong>Holiday list / Unavailable call hours</strong></div>
+            <p className="settings-muted">Set custom times, such as holidays or special events, when your business is unable to receive calls.</p>
+            {!unavailableHours.length && <div className="settings-no-entries">No entries</div>}
+            {unavailableHours.map((entry, index) => (
+              <div className="unavailable-row" key={`${entry.date}-${index}`}>
+                <input type="date" value={entry.date || ''} onChange={(e) => updateUnavailableHours(index, 'date', e.target.value)} />
+                <input type="time" value={entry.start || '00:00'} onChange={(e) => updateUnavailableHours(index, 'start', e.target.value)} />
+                <input type="time" value={entry.end || '23:59'} onChange={(e) => updateUnavailableHours(index, 'end', e.target.value)} />
+                <input placeholder="Reason" value={entry.reason || ''} onChange={(e) => updateUnavailableHours(index, 'reason', e.target.value)} />
+                <button type="button" onClick={() => removeUnavailableHours(index)}><Trash2 size={16} /></button>
               </div>
             ))}
-          </div>
-        )}
-      </section>
+            <button className="settings-outline-button add-unavailable" type="button" onClick={addUnavailableHours}><Plus size={17} /> Add unavailable hours</button>
+          </section>
+          <button className="settings-primary-button centered" type="submit">Save</button>
+          {settingsSaved && <small className="success-text centered-text">{settingsSaved}</small>}
+        </form>
+      )}
+
+      {activeSettingsTab === 'inbox' && (
+        <section className="settings-card inbox-settings-card">
+          <div className="settings-card-title"><Inbox size={22} /><h3>Default Chat Assignment</h3></div>
+          <label className="settings-switch-row large">
+            <SwitchControl checked={Boolean(customForm.inboxAutoAssign)} onChange={(checked) => patchForm({ inboxAutoAssign: checked })} />
+            Auto-assign new chats
+          </label>
+          <button className="settings-primary-button centered" type="button" onClick={() => onSaveSettings(customForm, 'Inbox settings saved')}>Save</button>
+          {settingsSaved && <small className="success-text centered-text">{settingsSaved}</small>}
+        </section>
+      )}
+    </div>
+  )
+}
+
+function normalizeVoiceWeeklyHours(input) {
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
+  return WEEK_DAYS.reduce((acc, day) => {
+    const dayValue = source[day] && typeof source[day] === 'object' ? source[day] : DEFAULT_VOICE_WEEKLY_HOURS[day]
+    const slots = Array.isArray(dayValue.slots) && dayValue.slots.length
+      ? dayValue.slots.map((slot) => ({
+        start: String(slot.start || '00:00').slice(0, 5),
+        end: String(slot.end || '23:59').slice(0, 5),
+      }))
+      : [{ start: '00:00', end: '23:59' }]
+    acc[day] = { enabled: dayValue.enabled !== false, slots }
+    return acc
+  }, {})
+}
+
+function SwitchControl({ checked, label, onChange }) {
+  return (
+    <button className={`settings-switch ${checked ? 'on' : ''}`} type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}>
+      <span />
+      {label && <b>{label}</b>}
+    </button>
+  )
+}
+
+function SettingToggleCard({ title, checked, onChange }) {
+  return (
+    <section className="settings-card setting-toggle-card">
+      <div className="settings-card-title"><h3>{title}</h3><Info size={18} /></div>
+      <SwitchControl checked={checked} label={checked ? 'ON' : 'OFF'} onChange={onChange} />
+    </section>
+  )
+}
+
+function VoiceToggleRow({ icon: Icon, title, text, checked, onChange }) {
+  return (
+    <div className="voice-toggle-row">
+      <span><Icon size={22} /></span>
+      <div><strong>{title}</strong><small>{text}</small></div>
+      <SwitchControl checked={checked} onChange={onChange} />
     </div>
   )
 }
