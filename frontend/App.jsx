@@ -84,6 +84,243 @@ function clearStoredSession() {
   delete api.defaults.headers.common.Authorization
 }
 
+const LEGAL_EFFECTIVE_DATE = '29 May 2026'
+const LEGAL_SUPPORT_EMAIL = 'saurabh@blueoceansteels.com'
+const LEGAL_WEBSITE_URL = 'https://bos-whatsapp-frontend.onrender.com/'
+const LEGAL_COMPANY_NAME = 'BLUE OCEAN STEELS LLP'
+
+const legalPages = {
+  '/privacy-policy': {
+    title: 'Privacy Policy',
+    intro: `${LEGAL_COMPANY_NAME} operates this WhatsApp CRM and automation platform to help businesses connect their official Meta Business and WhatsApp Business accounts using Meta’s official login and Embedded Signup flow.`,
+    sections: [
+      {
+        title: 'Information We Collect',
+        body: 'When a business user connects their Meta or WhatsApp Business account, we may collect and store the following information after the user grants permission:',
+        bullets: [
+          'Meta Business Portfolio ID',
+          'WhatsApp Business Account ID',
+          'WhatsApp phone number ID',
+          'Connected business name and account details',
+          'Message template information',
+          'WhatsApp messaging metadata required to provide the service',
+          'Access tokens or authorization data required to operate the connected account',
+          'User account details required for login, support, billing, and security',
+        ],
+      },
+      {
+        title: 'Password Safety',
+        body: 'We do not ask users to share their Facebook password, Meta password, or WhatsApp password with us.',
+      },
+      {
+        title: 'How We Use Information',
+        body: 'We use this information only to:',
+        bullets: [
+          'Connect the user’s own or authorized Meta Business and WhatsApp Business assets',
+          'Send and receive WhatsApp messages according to WhatsApp Business Platform rules',
+          'Manage WhatsApp templates, phone numbers, and account settings where permission is granted',
+          'Display CRM, inbox, reporting, and automation features inside the platform',
+          'Maintain security, audit logs, and tenant isolation',
+          'Provide support and troubleshoot connection issues',
+        ],
+      },
+      {
+        title: 'WhatsApp Messaging Compliance',
+        body: 'Users are responsible for sending messages only to customers who have provided proper opt-in where required. Marketing, utility, and authentication messages must follow WhatsApp Business Platform rules. Approved templates must be used where required. The platform must not be used for spam, misleading messages, prohibited content, or unauthorized messaging.',
+      },
+      {
+        title: 'Data Storage and Security',
+        body: 'Access tokens and sensitive authorization data are stored only on our backend systems. We do not store App Secrets, client secrets, or system tokens in frontend code. We use reasonable technical and organizational security measures including HTTPS, backend-only token handling, role-based access controls, and tenant isolation to protect connected business data.',
+      },
+      {
+        title: 'Tenant Isolation',
+        body: 'Each customer’s Meta Business account, WhatsApp Business Account, phone number, contacts, messages, templates, and tokens are stored and processed separately. One customer’s WhatsApp data is not used for another customer.',
+      },
+      {
+        title: 'Data Sharing',
+        body: 'We do not sell user data. We only share data when required to provide the service, comply with law, protect security, or integrate with Meta/WhatsApp services authorized by the user.',
+      },
+      {
+        title: 'Data Retention',
+        body: 'We retain data only as long as necessary to provide the service, comply with legal obligations, resolve disputes, maintain security, or support customer requests. Users may request deletion of their data as described in our Data Deletion page.',
+      },
+      {
+        title: 'Disconnecting Meta or WhatsApp Access',
+        body: 'Users may disconnect their Meta or WhatsApp Business connection from our platform where available. Users may also revoke app access from Meta Business settings or Facebook settings.',
+      },
+      {
+        title: 'Data Deletion Requests',
+        body: `Users can request deletion of their account data by contacting us at ${LEGAL_SUPPORT_EMAIL}. Please include your business name, registered email address, and connected WhatsApp Business Account details so we can verify and process the request.`,
+      },
+    ],
+  },
+  '/terms': {
+    title: 'Terms of Service',
+    intro: `These Terms of Service govern the use of the ${LEGAL_COMPANY_NAME} WhatsApp CRM and automation platform. By using this platform, you agree to these terms.`,
+    sections: [
+      {
+        title: 'Service Description',
+        body: 'Our platform helps authorized business users connect their official Meta Business and WhatsApp Business accounts using Meta’s official login and Embedded Signup flow. The platform may provide CRM, inbox, message sending, automation, reporting, template management, and WhatsApp Business account connection features.',
+      },
+      {
+        title: 'User Responsibilities',
+        body: 'You agree that:',
+        bullets: [
+          'You will only connect Meta Business, WhatsApp Business Account, and phone numbers that you own or are authorized to use.',
+          'You will provide truthful business information.',
+          'You will not use fake business details, fake websites, or unauthorized assets.',
+          'You will comply with Meta Platform Terms, WhatsApp Business Platform rules, and applicable laws.',
+          'You will not use the platform for spam, fraud, harassment, misleading messages, prohibited goods or services, or unauthorized messaging.',
+          'You will obtain proper customer opt-in where required before sending WhatsApp messages.',
+          'You will use approved templates where required by WhatsApp rules.',
+        ],
+      },
+      {
+        title: 'Meta and WhatsApp Connection',
+        body: 'When you connect your Meta or WhatsApp Business account, you knowingly grant permissions through Meta’s official authorization flow. We access only the assets and permissions authorized by you. You may disconnect or revoke access where supported by the platform or through Meta/Facebook settings.',
+      },
+      {
+        title: 'Messaging Rules',
+        body: 'You are responsible for the content and timing of messages sent through your connected WhatsApp Business account. Marketing, utility, and authentication messages must comply with WhatsApp rules. Free-form customer service messages may be limited by WhatsApp’s customer service window.',
+      },
+      {
+        title: 'Account Security',
+        body: 'You are responsible for maintaining the security of your platform account and ensuring that only authorized team members access your business data.',
+      },
+      {
+        title: 'Data and Privacy',
+        body: 'Our collection, use, storage, and deletion of data are described in our Privacy Policy and Data Deletion page.',
+      },
+      {
+        title: 'Service Limitations',
+        body: 'Meta, Facebook, and WhatsApp may review, restrict, suspend, or limit access to business assets, phone numbers, templates, messaging limits, or API permissions. We do not control Meta’s approval, App Review, business verification, quality rating, messaging limits, or enforcement decisions.',
+      },
+      {
+        title: 'Prohibited Use',
+        body: 'You must not use the platform to:',
+        bullets: [
+          'Send spam or unsolicited messages',
+          'Mislead customers',
+          'Violate WhatsApp Business Platform rules',
+          'Use another client’s WABA, phone number, data, or tokens',
+          'Bypass Meta App Review, business verification, access verification, or permission approval',
+          'Use unofficial or private Meta APIs',
+          'Scrape Meta, Facebook, or WhatsApp pages',
+          'Share or expose app secrets, tokens, or credentials',
+        ],
+      },
+      {
+        title: 'Termination',
+        body: 'We may suspend or terminate access if a user violates these terms, creates security risk, violates Meta or WhatsApp policies, or uses the service unlawfully.',
+      },
+    ],
+  },
+  '/data-deletion': {
+    title: 'Data Deletion Instructions',
+    intro: `If you have connected your Meta Business or WhatsApp Business account to the ${LEGAL_COMPANY_NAME} WhatsApp CRM platform, you may request deletion of your data.`,
+    sections: [
+      {
+        title: 'How to Request Data Deletion',
+        body: `To request deletion, email us at ${LEGAL_SUPPORT_EMAIL}.`,
+        bullets: [
+          'Your full name',
+          'Your business name',
+          'Your registered email address',
+          'Your Meta Business Portfolio ID, if known',
+          'Your WhatsApp Business Account ID, if known',
+          'Your WhatsApp phone number ID, if known',
+          'A clear request such as: “Please delete my connected Meta/WhatsApp data.”',
+        ],
+      },
+      {
+        title: 'What We Delete',
+        body: 'After verifying your request, we will delete or anonymize data associated with your account where legally and technically possible, including:',
+        bullets: [
+          'Connected Meta Business account details',
+          'WhatsApp Business Account ID',
+          'WhatsApp phone number ID',
+          'Stored access tokens or authorization data',
+          'CRM connection records',
+          'Stored message logs, templates, or contact data where applicable and not legally required to retain',
+        ],
+      },
+      {
+        title: 'Disconnecting Access',
+        body: 'You may also disconnect or revoke access from Meta/Facebook settings. Revoking access may stop future data access but may not automatically delete previously stored data from our systems. To delete stored data, please submit a deletion request using the email above.',
+      },
+      {
+        title: 'Processing Time',
+        body: 'We will process verified deletion requests within a reasonable time, unless retention is required for legal, security, fraud prevention, billing, dispute resolution, or compliance purposes.',
+      },
+    ],
+  },
+}
+
+function PublicLegalPage({ path, appSettings }) {
+  const page = legalPages[path] || legalPages['/privacy-policy']
+  const platformName = appSettings.appName || 'BOS WhatsApp CRM'
+
+  return (
+    <main className="public-site legal-site">
+      <header className="public-header">
+        <a className="public-brand" href="/" aria-label={`${platformName} home`}>
+          <span><MessageCircle size={26} /></span>
+          <div>
+            <strong>{platformName}</strong>
+            <small>Business Automation Platform</small>
+          </div>
+        </a>
+        <nav className="public-nav">
+          <a href="/privacy-policy">Privacy Policy</a>
+          <a href="/terms">Terms</a>
+          <a href="/data-deletion">Data Deletion</a>
+        </nav>
+        <div className="public-actions">
+          <a className="public-ghost" href="/">Back to Home</a>
+        </div>
+      </header>
+
+      <section className="legal-hero">
+        <span className="hero-kicker"><Shield size={15} /> Legal & Compliance</span>
+        <h1>{page.title}</h1>
+        <p><strong>Effective Date:</strong> {LEGAL_EFFECTIVE_DATE}</p>
+        <p>{page.intro}</p>
+      </section>
+
+      <section className="legal-content">
+        {page.sections.map((section) => (
+          <article className="legal-card" key={section.title}>
+            <h2>{section.title}</h2>
+            {section.body && <p>{section.body}</p>}
+            {section.bullets && (
+              <ul>
+                {section.bullets.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            )}
+          </article>
+        ))}
+
+        <article className="legal-card legal-contact-card">
+          <h2>Contact</h2>
+          <p>
+            {LEGAL_COMPANY_NAME}<br />
+            Email: <a href={`mailto:${LEGAL_SUPPORT_EMAIL}`}>{LEGAL_SUPPORT_EMAIL}</a><br />
+            Website: <a href={LEGAL_WEBSITE_URL}>{LEGAL_WEBSITE_URL}</a>
+          </p>
+        </article>
+      </section>
+
+      <footer className="public-footer">
+        <div className="public-brand">
+          <span><MessageCircle size={23} /></span>
+          <strong>{platformName}</strong>
+        </div>
+        <p>WhatsApp Business operations with tenant-aware security and policy controls.</p>
+      </footer>
+    </main>
+  )
+}
+
 function PublicWebsite({ onAuthenticate, appSettings }) {
   const [mode, setMode] = useState('')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
@@ -189,12 +426,15 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
             <small>Business Automation Platform</small>
           </div>
         </a>
-        <nav className="public-nav">
-          <a href="#home">Home</a>
-          <a href="#capabilities">Features</a>
-          <a href="#workflow">How it works</a>
-          <a href="#security">Security</a>
-        </nav>
+<nav className="public-nav">
+  <a href="#home">Home</a>
+  <a href="#capabilities">Features</a>
+  <a href="#workflow">How it works</a>
+  <a href="#security">Security</a>
+  <a href="/privacy-policy">Privacy</a>
+  <a href="/terms">Terms</a>
+  <a href="/data-deletion">Data Deletion</a>
+</nav>
         <div className="public-actions">
           <button className="public-ghost" type="button" onClick={() => openAccess('login')}>Login</button>
           <button className="public-primary" type="button" onClick={() => openAccess('register')}>Register</button>
@@ -1322,6 +1562,12 @@ const interval = window.setInterval(() => {
   return () => window.clearInterval(interval)
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [user?.id, selectedId])
+
+const publicLegalPath = window.location.pathname.replace(/\/$/, '') || '/'
+
+if (legalPages[publicLegalPath]) {
+  return <PublicLegalPage path={publicLegalPath} appSettings={appSettings} />
+}
 
 if (authChecking) {
   return (

@@ -54,7 +54,9 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const requestUrl = error.config?.url || ''
-    const isSessionExpired = status === 401 && !requestUrl.includes('/api/auth/login')
+    const isSessionExpired = status === 401
+      && !requestUrl.includes('/api/auth/login')
+      && !error.config?.silentError
 
     if (!error.config?.silentError && !isSessionExpired) {
       window.dispatchEvent(new CustomEvent('bos-api-error', {
@@ -70,5 +72,4 @@ api.interceptors.response.use(
     return Promise.reject(error)
   },
 )
-
 

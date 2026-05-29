@@ -364,3 +364,429 @@
     border-radius: 8px;
   }
 }
+
+/* Responsive professional workspace visibility pass */
+.suite-shell,
+.suite-shell.workspace-mode {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.suite-shell {
+  grid-template-columns: clamp(220px, 17vw, 264px) minmax(330px, 29vw, 420px) minmax(0, 1fr);
+}
+
+.suite-shell.workspace-mode {
+  grid-template-columns: clamp(220px, 17vw, 264px) minmax(0, 1fr);
+}
+
+.suite-shell .workspace-sidebar {
+  min-width: 0;
+  scrollbar-gutter: stable;
+}
+
+.suite-shell .sidebar-navigation {
+  min-width: 0;
+  align-content: start;
+}
+
+.suite-shell .nav-group button,
+.suite-shell .suite-nav-item > button,
+.suite-shell .suite-subnav button,
+.suite-shell .suite-thirdnav button {
+  width: 100%;
+  min-width: 0;
+  border-radius: 8px;
+  line-height: 1.25;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.suite-shell .nav-group button svg,
+.suite-shell .suite-nav-item > button svg,
+.suite-shell .suite-subnav button svg,
+.suite-shell .suite-thirdnav button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.suite-shell .nav-group button span,
+.suite-shell .suite-nav-item > button span,
+.suite-shell .suite-subnav button span,
+.suite-shell .suite-thirdnav button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suite-shell .suite-nav-item > button:hover,
+.suite-shell .suite-nav-item > button.active,
+.suite-shell .suite-subnav button.active,
+.suite-shell .suite-subnav button:hover,
+.suite-shell .suite-thirdnav button.active,
+.suite-shell .suite-thirdnav button:hover {
+  box-shadow: inset 3px 0 0 #0f6fff;
+}
+
+.suite-topbar {
+  min-width: 0;
+}
+
+.suite-topbar-left,
+.suite-topbar-right,
+.suite-account-trigger {
+  min-width: 0;
+}
+
+.suite-topbar-left span,
+.suite-account-copy strong,
+.suite-account-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suite-shell .module-panel,
+.workspace-page,
+.suite-page {
+  min-width: 0;
+  scrollbar-gutter: stable;
+}
+
+.workspace-page,
+.suite-page {
+  padding: clamp(14px, 1.6vw, 24px);
+}
+
+.workspace-page .workspace-head,
+.workspace-head-structured,
+.table-module,
+.settings-card,
+.suite-compose-layout,
+.suite-table-card,
+.dashboard-launchpad,
+.whatsapp-health-card {
+  max-width: 100%;
+}
+
+.table-module,
+.user-table,
+.settings-agent-table,
+.suite-table-card {
+  overflow-x: auto;
+}
+
+.user-table-head,
+.user-row,
+.settings-agent-head,
+.settings-agent-row,
+.suite-table-head,
+.suite-table-row {
+  min-width: 760px;
+}
+
+.workspace-tabs,
+.settings-reference-tabs,
+.settings-subtabs,
+.suite-subtabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.workspace-tabs button,
+.settings-reference-tabs button,
+.settings-subtabs button,
+.suite-subtabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.settings-card-title,
+.settings-form-actions,
+.user-form-actions,
+.suite-inline-actions,
+.inline-actions,
+.doc-actions,
+.inventory-toolbar,
+.launchpad-actions {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.settings-card-title.split {
+  gap: 12px;
+}
+
+.settings-card-title.split > div {
+  min-width: 240px;
+}
+
+.settings-primary-button,
+.settings-outline-button,
+.settings-danger-outline,
+.suite-primary-button,
+.suite-inline-actions button,
+.suite-file-button,
+.user-actions button,
+.user-form-actions button,
+.workspace-alert button,
+.suite-shell .composer button {
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.suite-shell .chat-shell {
+  min-width: 0;
+  min-height: 0;
+}
+
+.suite-shell .chat-header {
+  grid-template-columns: 48px minmax(0, 1fr) minmax(160px, max-content) max-content 42px;
+}
+
+.suite-shell .chat-title-block,
+.suite-shell .reply-window-badge-wrap {
+  min-width: 0;
+}
+
+.suite-shell .message-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.suite-shell .composer {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px) 56px;
+}
+
+@media (max-width: 1360px) {
+  .suite-shell {
+    grid-template-columns: 232px 365px minmax(0, 1fr);
+  }
+
+  .suite-shell.workspace-mode {
+    grid-template-columns: 232px minmax(0, 1fr);
+  }
+
+  .suite-shell .suite-nav-item > button,
+  .suite-shell .suite-subnav button,
+  .suite-shell .suite-thirdnav button {
+    font-size: 13px;
+  }
+
+  .suite-shell .chat-header {
+    grid-template-columns: 44px minmax(0, 1fr) minmax(130px, max-content) 38px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .suite-shell {
+    grid-template-columns: 212px 330px minmax(0, 1fr);
+  }
+
+  .suite-shell.workspace-mode {
+    grid-template-columns: 212px minmax(0, 1fr);
+  }
+
+  .suite-topbar {
+    padding-right: 12px;
+  }
+
+  .suite-account-copy,
+  .workspace-status {
+    display: none;
+  }
+
+  .suite-shell .chat-header {
+    min-height: auto;
+    grid-template-columns: 42px minmax(0, 1fr) 38px;
+    grid-auto-rows: auto;
+  }
+
+  .suite-shell .reply-window-badge-wrap,
+  .suite-shell .status-pill {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .suite-shell .composer {
+    grid-template-columns: minmax(0, 1fr) 52px;
+  }
+
+  .suite-shell .composer select {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+
+  .settings-profile-grid,
+  .suite-compose-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .suite-shell,
+  .suite-shell.workspace-mode {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
+  }
+
+  .suite-topbar {
+    order: 1;
+    min-height: 60px;
+    padding: 8px 12px;
+    position: sticky;
+    top: 0;
+    z-index: 25;
+  }
+
+  .suite-shell .workspace-sidebar {
+    order: 2;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid #dde3e8;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .suite-shell .sidebar-navigation {
+    display: flex;
+    gap: 8px;
+    min-width: max-content;
+  }
+
+  .suite-shell .nav-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .suite-shell .nav-group-label,
+  .suite-shell .suite-subnav,
+  .suite-shell .suite-thirdnav,
+  .suite-shell .sidebar-account {
+    display: none;
+  }
+
+  .suite-shell .nav-group button,
+  .suite-shell .suite-nav-item > button {
+    min-width: 132px;
+    min-height: 40px;
+    padding: 0 11px;
+    grid-template-columns: 18px minmax(0, 1fr) 14px;
+  }
+
+  .suite-shell .module-panel {
+    order: 3;
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .suite-shell .chat-shell {
+    order: 4;
+    min-height: min(640px, calc(100dvh - 92px));
+    margin: 0 12px 14px;
+  }
+
+  .suite-shell:not(.workspace-mode) .filter-toolbar,
+  .suite-shell:not(.workspace-mode) .conversation-list {
+    margin-left: 12px;
+    margin-right: 12px;
+    border-radius: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .suite-topbar-left span {
+    max-width: 44vw;
+  }
+
+  .suite-topbar-right {
+    gap: 8px;
+  }
+
+  .suite-refresh,
+  .suite-icon-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .suite-account-trigger {
+    padding: 2px;
+  }
+
+  .suite-avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+
+  .workspace-page,
+  .suite-page {
+    padding: 10px;
+  }
+
+  .workspace-head-structured,
+  .workspace-page .workspace-head,
+  .settings-card-title {
+    padding: 14px;
+  }
+
+  .settings-card > * {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .settings-card-title {
+    min-height: auto;
+  }
+
+  .settings-card-title.split > div {
+    min-width: 0;
+  }
+
+  .workspace-alert {
+    grid-template-columns: 1fr;
+  }
+
+  .suite-shell .workspace-alert button {
+    grid-column: auto;
+    width: 100%;
+  }
+
+  .settings-primary-button,
+  .settings-outline-button,
+  .settings-danger-outline,
+  .suite-primary-button,
+  .suite-inline-actions button,
+  .suite-file-button,
+  .user-actions button,
+  .user-form-actions button,
+  .inline-actions button,
+  .doc-actions button,
+  .inventory-toolbar button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .suite-shell .chat-header {
+    padding: 10px 12px;
+  }
+
+  .suite-shell .composer {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .suite-shell .composer select {
+    order: 0;
+  }
+}
