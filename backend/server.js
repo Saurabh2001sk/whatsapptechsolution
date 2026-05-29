@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', 'private', 'backend.env') });
 
 const axios = require('axios');
 const bcrypt = require('bcrypt');
@@ -9,13 +9,45 @@ const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const { query, healthCheck, closePool } = require('./db');
+const asyncHandler = require('./asyncHandler');
+const rateLimit = require('./rateLimit');
+const { createAuthService } = require('./auth.service');
+const { createTenantService } = require('./tenant.service');
+const { createAuditService } = require('./audit.service');
+const {
+  maskValue,
+  maskEmail,
+  maskId,
+  hasRealValue,
+  toFiniteNumber,
+  isStrongPassword,
+  strongPasswordError,
+  normalizeUserText,
+  isReplyWindowOpen,
+  isOptOutMessage,
+  encryptSecret,
+  decryptSecret,
+  getCookie,
+  safeMetaError,
+  safeErrorLog,
+  cleanList,
+  WEEK_DAYS,
+  DEFAULT_VOICE_WEEKLY_HOURS,
+  cleanVoiceWeeklyHours,
+  cleanUnavailableHours,
+} = require('./common');
+const { registerCoreRoutes } = require('./core.routes');
+const { registerWhatsAppRoutes } = require('./whatsapp.routes');
+const { registerCrmRoutes } = require('./crm.routes');
+const { registerSalesRoutes } = require('./sales.routes');
+const { registerCampaignRoutes } = require('./campaign.routes');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
   process.exit(1);
 }
 
-const mediaRoot = path.join(__dirname, 'uploads', 'whatsapp-media');
+const mediaRoot = path.join(__dirname, '..', 'private');
 if (!fs.existsSync(mediaRoot)) fs.mkdirSync(mediaRoot, { recursive: true });
 
 const app = express();
@@ -39,52 +71,47 @@ if (isProduction) {
 
 const jwtSecret = rawJwtSecret || 'dev-only-local-secret';
 
+const {
+  signUser,
+  publicUser,
+  setAuthCookie,
+  clearAuthCookie,
+  requireAuth,
+  isSuperAdmin,
+  canMonitor,
+  requireSuperAdmin,
+} = createAuthService({
+  jwt,
+  jwtSecret,
+  isProduction,
+  query,
+  getCookie,
+});
+
+const {
+  normalizeTenantSlug,
+  publicTenant,
+  countActiveTenantAdmins,
+  getDemoTenantId,
+  ensureDefaultWhatsAppAccountMapping,
+  getEnvWhatsAppAccountStatus,
+  getTenantIdForWebhookValue,
+} = createTenantService({
+  query,
+  isProduction,
+  hasRealValue,
+});
+
+const {
+  recordAudit,
+  recordAssignmentHistory,
+} = createAuditService({
+  query,
+});
+
 const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
-
-const apiRateBuckets = new Map();
-
-function getClientKey(req, bucketName) {
-  return `${bucketName}:${req.ip || 'unknown'}`;
-}
-
-function rateLimit({ bucketName, maxRequests, windowMs }) {
-  return (req, res, next) => {
-    const key = getClientKey(req, bucketName);
-    const now = Date.now();
-    const bucket = apiRateBuckets.get(key) || {
-      count: 0,
-      resetAt: now + windowMs,
-    };
-
-    if (bucket.resetAt <= now) {
-      bucket.count = 0;
-      bucket.resetAt = now + windowMs;
-    }
-
-    bucket.count += 1;
-    apiRateBuckets.set(key, bucket);
-
-    if (bucket.count > maxRequests) {
-      return res.status(429).json({
-        error: 'Too many requests. Please try again later.',
-      });
-    }
-
-    return next();
-  };
-}
-
-setInterval(() => {
-  const now = Date.now();
-
-  for (const [key, bucket] of apiRateBuckets.entries()) {
-    if (bucket.resetAt <= now) {
-      apiRateBuckets.delete(key);
-    }
-  }
-}, 5 * 60 * 1000).unref();
 
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
@@ -215,11 +242,6 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
 // =========================================================
 
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
-const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const DEFAULT_VOICE_WEEKLY_HOURS = WEEK_DAYS.reduce((acc, day) => {
-  acc[day] = { enabled: true, slots: [{ start: '00:00', end: '23:59' }] };
-  return acc;
-}, {});
 
 const DEFAULT_APP_SETTINGS = {
   appName: 'WhatsApp Sales CRM',
@@ -274,95 +296,12 @@ const DEFAULT_APP_SETTINGS = {
 // HELPERS
 // =========================================================
 
-function asyncHandler(fn) {
-  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-}
-
-function signUser(user) {
-  return jwt.sign(
-    { id: user.id, tenantId: user.tenant_id, name: user.name, email: user.email, role: user.role },
-    jwtSecret,
-    { expiresIn: '12h' },
-  );
-}
-
-function publicUser(user) {
-  return { id: user.id, tenantId: user.tenant_id, name: user.name, email: user.email, role: user.role, active: user.active };
-}
-
-function hasRealValue(value) {
-  return Boolean(value && !value.startsWith('your-') && !value.startsWith('change-'));
-}
-
 function isWhatsAppConfigured() {
   return hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
 function shouldAllowLocalMessageQueue() {
   return !isProduction;
-}
-
-function maskValue(value) {
-  if (!value) return '';
-  if (value.length <= 8) return '********';
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
-}
-
-function getTokenEncryptionKey() {
-  const key = String(process.env.META_TOKEN_ENCRYPTION_KEY || '').trim();
-
-  if (!/^[a-f0-9]{64}$/i.test(key)) {
-    throw new Error('META_TOKEN_ENCRYPTION_KEY must be a 64-character hex string');
-  }
-
-  return Buffer.from(key, 'hex');
-}
-
-function encryptSecret(value) {
-  const plainText = String(value || '');
-
-  if (!plainText) {
-    return {
-      encrypted: null,
-      iv: null,
-      tag: null,
-    };
-  }
-
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', getTokenEncryptionKey(), iv);
-
-  const encrypted = Buffer.concat([
-    cipher.update(plainText, 'utf8'),
-    cipher.final(),
-  ]);
-
-  const tag = cipher.getAuthTag();
-
-  return {
-    encrypted: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
-  };
-}
-
-function decryptSecret({ encrypted, iv, tag }) {
-  if (!encrypted || !iv || !tag) return '';
-
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    getTokenEncryptionKey(),
-    Buffer.from(iv, 'base64'),
-  );
-
-  decipher.setAuthTag(Buffer.from(tag, 'base64'));
-
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encrypted, 'base64')),
-    decipher.final(),
-  ]);
-
-  return decrypted.toString('utf8');
 }
 
 function getLoginAttemptKey(req, email) {
@@ -403,91 +342,6 @@ function clearLoginAttempts(req, email) {
   loginAttempts.delete(getLoginAttemptKey(req, email));
 }
 
-function getCookie(req, name) {
-  const cookies = String(req.headers.cookie || '')
-    .split(';')
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  for (const cookie of cookies) {
-    const separatorIndex = cookie.indexOf('=');
-    if (separatorIndex === -1) continue;
-
-    const key = cookie.slice(0, separatorIndex);
-    const value = cookie.slice(separatorIndex + 1);
-
-    if (key === name) return decodeURIComponent(value);
-  }
-
-  return '';
-}
-
-function authCookieOptions() {
-  return {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
-    maxAge: 12 * 60 * 60 * 1000,
-    path: '/',
-  };
-}
-
-function setAuthCookie(res, user) {
-  res.cookie('bosAuthToken', signUser(user), authCookieOptions());
-}
-
-function clearAuthCookie(res) {
-  res.clearCookie('bosAuthToken', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
-    path: '/',
-  });
-}
-
-function cleanList(value, fallback) {
-  const list = Array.isArray(value)
-    ? value
-    : String(value || '').split(',').map((item) => item.trim());
-  const clean = [...new Set(list.filter(Boolean))];
-  return clean.length ? clean : fallback;
-}
-
-function cleanVoiceWeeklyHours(value) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return WEEK_DAYS.reduce((acc, day) => {
-    const dayValue = source[day] && typeof source[day] === 'object' ? source[day] : DEFAULT_VOICE_WEEKLY_HOURS[day];
-    const slots = Array.isArray(dayValue.slots) && dayValue.slots.length
-      ? dayValue.slots.slice(0, 4).map((slot) => ({
-        start: String(slot?.start || '00:00').slice(0, 5),
-        end: String(slot?.end || '23:59').slice(0, 5),
-      }))
-      : [{ start: '00:00', end: '23:59' }];
-
-    acc[day] = {
-      enabled: dayValue.enabled !== false,
-      slots,
-    };
-    return acc;
-  }, {});
-}
-
-function cleanUnavailableHours(value) {
-  return Array.isArray(value)
-    ? value.slice(0, 40).map((entry) => ({
-      date: String(entry?.date || '').slice(0, 10),
-      start: String(entry?.start || '00:00').slice(0, 5),
-      end: String(entry?.end || '23:59').slice(0, 5),
-      reason: String(entry?.reason || '').trim().slice(0, 100),
-    })).filter((entry) => entry.date)
-    : [];
-}
-
-function toFiniteNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
 function validateRuntimeConfig() {
   const warnings = [];
 
@@ -516,262 +370,6 @@ function validateRuntimeConfig() {
   }
 
   return warnings;
-}
-
-// =========================================================
-// AUTH
-// =========================================================
-
-async function requireAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ')
-    ? header.slice(7)
-    : getCookie(req, 'bosAuthToken');
-
-  if (!token) {
-    return res.status(401).json({ error: 'Login required' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, jwtSecret);
-
-    if (!decoded.id || !decoded.tenantId) {
-      return res.status(401).json({ error: 'Invalid login session' });
-    }
-
-    const result = await query(
-      `SELECT
-         users.id,
-         users.tenant_id,
-         users.name,
-         users.email,
-         users.role,
-         users.active,
-         tenants.status AS tenant_status
-       FROM users
-       JOIN tenants ON tenants.id = users.tenant_id
-       WHERE users.id = $1
-         AND users.tenant_id = $2
-       LIMIT 1`,
-      [decoded.id, decoded.tenantId],
-    );
-
-    const user = result.rows[0];
-
-    if (!user || !user.active || user.tenant_status !== 'active') {
-      return res.status(401).json({ error: 'User or company is inactive' });
-    }
-
-    req.user = {
-      id: user.id,
-      tenantId: user.tenant_id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    };
-
-    return next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
-
-function isSuperAdmin(user) {
-  return user?.role === 'super_admin';
-}
-
-function canMonitor(user) {
-  return isSuperAdmin(user) || user.role === 'admin' || user.role === 'manager';
-}
-
-function requireSuperAdmin(req, res, next) {
-  if (!isSuperAdmin(req.user)) {
-    return res.status(403).json({ error: 'Super admin only' });
-  }
-
-  return next();
-}
-
-function normalizeTenantSlug(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-}
-
-function publicTenant(tenant) {
-  return {
-    id: tenant.id,
-    name: tenant.name,
-    slug: tenant.slug,
-    industry: tenant.industry,
-    status: tenant.status,
-    plan: tenant.plan,
-    logoUrl: tenant.logo_url || '',
-    businessPhone: tenant.business_phone || '',
-    businessEmail: tenant.business_email || '',
-    metaBusinessId: tenant.meta_business_id || '',
-    onboardingStatus: tenant.onboarding_status || 'pending',
-    createdAt: tenant.created_at,
-    updatedAt: tenant.updated_at,
-  };
-}
-
-async function countActiveTenantAdmins(tenantId, excludeUserId = null) {
-  const params = [tenantId];
-  let excludeSql = '';
-
-  if (excludeUserId) {
-    params.push(excludeUserId);
-    excludeSql = `AND id <> $${params.length}`;
-  }
-
-  const result = await query(
-    `SELECT COUNT(*)::int AS count
-     FROM users
-     WHERE tenant_id = $1
-       AND role = 'admin'
-       AND active = true
-       ${excludeSql}`,
-    params,
-  );
-
-  return result.rows[0]?.count || 0;
-}
-
-// =========================================================
-// TENANT
-// =========================================================
-
-let _demoTenantId = null;
-
-async function getDemoTenantId() {
-  if (_demoTenantId) return _demoTenantId;
-
-  const result = await query(
-    `INSERT INTO tenants (name, slug, industry, status, plan)
-     VALUES ('Demo Company', 'demo', 'General', 'active', 'starter')
-     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`,
-  );
-
-  _demoTenantId = result.rows[0].id;
-  return _demoTenantId;
-}
-
-async function ensureDefaultWhatsAppAccountMapping(displayPhoneNumber = null) {
-  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
-
-  if (!hasRealValue(phoneNumberId)) {
-    return null;
-  }
-
-  const tenantId = await getDemoTenantId();
-  const result = await query(
-    `INSERT INTO whatsapp_accounts (tenant_id, phone_number_id, display_phone_number, active)
-     VALUES ($1, $2, $3, true)
-     ON CONFLICT (phone_number_id)
-     DO UPDATE SET display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
-                   active = true
-     RETURNING tenant_id`,
-    [tenantId, phoneNumberId, displayPhoneNumber || null],
-  );
-
-  return result.rows[0]?.tenant_id || null;
-}
-
-async function getEnvWhatsAppAccountStatus(tenantId = null) {
-  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
-
-  if (!hasRealValue(phoneNumberId)) {
-    return {
-      phoneNumberMapped: false,
-      phoneNumberMappedToCurrentTenant: false,
-      phoneNumberMappedTenantSlug: null,
-    };
-  }
-
-  const result = await query(
-    `SELECT whatsapp_accounts.tenant_id, whatsapp_accounts.active, tenants.slug
-     FROM whatsapp_accounts
-     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
-     WHERE whatsapp_accounts.phone_number_id = $1
-     LIMIT 1`,
-    [phoneNumberId],
-  );
-
-  const account = result.rows[0];
-
-  return {
-    phoneNumberMapped: Boolean(account?.active),
-    phoneNumberMappedToCurrentTenant: Boolean(account?.active && tenantId && account.tenant_id === tenantId),
-    phoneNumberMappedTenantSlug: account?.slug || null,
-  };
-}
-
-async function getTenantIdForWebhookValue(value = {}) {
-  const phoneNumberId = String(value?.metadata?.phone_number_id || '').trim();
-
-  if (!phoneNumberId) {
-    return null;
-  }
-
-  const mapped = await query(
-    `SELECT tenants.id
-     FROM whatsapp_accounts
-     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
-     WHERE whatsapp_accounts.phone_number_id = $1
-       AND whatsapp_accounts.active = true
-       AND tenants.status = 'active'
-     LIMIT 1`,
-    [phoneNumberId],
-  );
-
-  if (mapped.rows[0]?.id) {
-    return mapped.rows[0].id;
-  }
-
-  if (phoneNumberId === String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim()) {
-    return ensureDefaultWhatsAppAccountMapping(value?.metadata?.display_phone_number || null);
-  }
-
-  return null;
-}
-
-// =========================================================
-// AUDIT / ASSIGNMENT
-// =========================================================
-
-async function recordAudit({ tenantId, actorUserId, action, entityType, entityId, metadata = {} }) {
-  if (!action || !entityType || !tenantId) return null;
-  const result = await query(
-    `INSERT INTO audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [tenantId, actorUserId || null, action, entityType, entityId || null, metadata],
-  );
-  return result.rows[0];
-}
-
-async function recordAssignmentHistory({ tenantId, contactId, fromUserId, toUserId, changedBy, reason }) {
-  if (!contactId || !tenantId || fromUserId === toUserId) return null;
-  const result = await query(
-    `INSERT INTO assignment_history (tenant_id, contact_id, from_user_id, to_user_id, changed_by, reason)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [tenantId, contactId, fromUserId || null, toUserId || null, changedBy || null, reason || null],
-  );
-  await recordAudit({
-    tenantId,
-    actorUserId: changedBy,
-    action: 'contact.assigned',
-    entityType: 'contact',
-    entityId: contactId,
-    metadata: { fromUserId: fromUserId || null, toUserId: toUserId || null, reason: reason || '' },
-  });
-  return result.rows[0];
 }
 
 // =========================================================
@@ -1031,49 +629,6 @@ function verifyMetaWebhookSignature(req) {
   return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 }
 
-function isReplyWindowOpen(contact) {
-  if (!contact?.last_inbound_at) return false;
-  return Date.now() - new Date(contact.last_inbound_at).getTime() <= 24 * 60 * 60 * 1000;
-}
-
-function normalizeUserText(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-}
-
-function isOptOutMessage(value = '') {
-  const text = normalizeUserText(value);
-
-  if (!text) return false;
-
-  const exactKeywords = new Set([
-    'stop',
-    'unsubscribe',
-    'do not message',
-    'dont message',
-    "don't message",
-    'do not send',
-    'dont send',
-    "don't send",
-    'remove me',
-    'opt out',
-    'block',
-    'band karo',
-    'mat bhejo',
-    'message mat bhejo',
-    'msg mat bhejo',
-  ]);
-
-  if (exactKeywords.has(text)) return true;
-
-  return /\b(stop|unsubscribe|opt\s*out)\b/i.test(text)
-    || /do\s*not\s*(message|send)/i.test(text)
-    || /don'?t\s*(message|send)/i.test(text)
-    || /(band\s*karo|mat\s*bhejo|message\s*mat\s*bhejo|msg\s*mat\s*bhejo)/i.test(text);
-}
-
 function categorizeMessage(text) {
   const body = (text || '').toLowerCase();
   if (/(dispatch|tracking|delivery|transport|lr|courier)/.test(body)) return 'Dispatch Query';
@@ -1208,7 +763,91 @@ function buildBotReplyText({ settings, text, products = [] }) {
   return `${settings.botGreeting}\n\n${detailRequest}`;
 }
 
-async function buildBotReply({ tenantId, settings, text }) {
+function extractBusinessReferences(text = '') {
+  const matches = String(text || '').match(/\b(?:SO-WA|QT-WA|SO|QT|INV|ORDER)[-/]?[A-Z0-9-]{2,}\b/gi) || [];
+  return [...new Set(matches.map((item) => item.trim().toUpperCase()).filter(Boolean))].slice(0, 5);
+}
+
+async function buildOrderStatusReply({ tenantId, contactId, settings, text }) {
+  const intent = getBotIntent(text);
+  const normalized = normalizeUserText(text);
+  const looksLikeStatusQuestion = intent === 'dispatch'
+    || intent === 'payment'
+    || normalized.includes('order status')
+    || normalized.includes('track order')
+    || normalized.includes('dispatch status')
+    || normalized.includes('payment status');
+
+  if (!looksLikeStatusQuestion || !tenantId || !contactId) return null;
+
+  const references = extractBusinessReferences(text);
+  const company = settings.companyName || settings.appName || 'our business';
+
+  if (!references.length) {
+    return `Please share your order number or quotation number. ${company} team can then confirm payment and dispatch status.`;
+  }
+
+  const orderResult = await query(
+    `SELECT
+       sales_orders.order_no,
+       sales_orders.status,
+       sales_orders.payment_status,
+       sales_orders.dispatch_status,
+       sales_orders.amount,
+       sales_orders.updated_at
+     FROM sales_orders
+     WHERE sales_orders.tenant_id = $1
+       AND sales_orders.contact_id = $2
+       AND UPPER(sales_orders.order_no) = ANY($3::text[])
+     ORDER BY sales_orders.updated_at DESC
+     LIMIT 1`,
+    [tenantId, contactId, references],
+  );
+
+  const order = orderResult.rows[0];
+
+  if (order) {
+    return `Order ${order.order_no} status:\nOrder: ${order.status}\nPayment: ${order.payment_status}\nDispatch: ${order.dispatch_status}\nAmount: ${settings.currency || 'INR'} ${Number(order.amount || 0).toFixed(2)}\n\nFor invoice, transport receipt, or urgent changes, our team will verify and respond.`;
+  }
+
+  const quoteResult = await query(
+    `SELECT
+       quotations.quote_no,
+       quotations.status,
+       quotations.amount,
+       quotations.valid_until,
+       quotations.updated_at
+     FROM quotations
+     WHERE quotations.tenant_id = $1
+       AND quotations.contact_id = $2
+       AND UPPER(quotations.quote_no) = ANY($3::text[])
+     ORDER BY quotations.updated_at DESC
+     LIMIT 1`,
+    [tenantId, contactId, references],
+  );
+
+  const quote = quoteResult.rows[0];
+
+  if (quote) {
+    const validUntil = quote.valid_until ? new Date(quote.valid_until).toLocaleDateString('en-IN') : '-';
+    return `Quotation ${quote.quote_no} status:\nStatus: ${quote.status}\nAmount: ${settings.currency || 'INR'} ${Number(quote.amount || 0).toFixed(2)}\nValid until: ${validUntil}\n\nReply confirm if you want our team to continue order processing.`;
+  }
+
+  return `I could not find this order/quotation for your WhatsApp number. Please recheck the number or share registered company/mobile details for team verification.`;
+}
+
+async function buildBotReply({ tenantId, settings, text, contact }) {
+  const orderStatusReply = await buildOrderStatusReply({
+    tenantId,
+    contactId: contact?.id,
+    settings,
+    text,
+  });
+
+  if (orderStatusReply) {
+    return orderStatusReply.slice(0, 1000);
+  }
+
   const knowledgeMatches = await findKnowledgeMatches(tenantId, text);
   const knowledgeReply = buildKnowledgeReply({ settings, text, knowledgeMatches });
 
@@ -1681,18 +1320,23 @@ async function validateTemplateRetryAllowed(tenantId, templateName, language = '
   }
 
   const result = await query(
-    `SELECT id, name, language, active
+    `SELECT id, name, language, active, meta_status
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND name = $2
        AND language = $3
        AND active = true
+       AND ($4::boolean = false OR meta_status = 'approved')
      LIMIT 1`,
-    [tenantId, cleanTemplateName, cleanLanguage],
+    [tenantId, cleanTemplateName, cleanLanguage, isProduction],
   );
 
   if (!result.rows[0]) {
-    const error = new Error('Template is not active for this company. Sync/add the approved Meta template before retrying.');
+    const error = new Error(
+      isProduction
+        ? 'Template is not approved by Meta for this company. Sync approved templates from Meta before retrying.'
+        : 'Template is not active for this company. Sync/add the approved Meta template before retrying.',
+    );
     error.statusCode = 400;
     throw error;
   }
@@ -1833,11 +1477,11 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = 
       const fileSize = metaRes.data?.file_size || null;
 
       if (!downloadUrl) {
-        console.warn('WA media download URL missing:', {
-          mediaId,
-          mimeType,
-          fileSize,
-        });
+console.warn('WA media download URL missing:', {
+  mediaId: maskId(mediaId),
+  mimeType,
+  fileSize,
+});
 
         return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
       }
@@ -1859,12 +1503,12 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = 
 
       const mediaUrl = `/media/whatsapp/${fileName}`;
 
-      console.log('WA media downloaded:', {
-        mediaId,
-        mediaUrl,
-        mimeType,
-        fileSize,
-      });
+     console.log('WA media downloaded:', {
+  mediaId: maskId(mediaId),
+  mediaUrl: isProduction ? '[protected-media-url]' : mediaUrl,
+  mimeType,
+  fileSize,
+});
 
       return {
         mediaUrl,
@@ -1875,15 +1519,12 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = 
     } catch (error) {
       lastError = error;
 
-      console.error('WA media download attempt failed:', {
-        attempt,
-        maxAttempts,
-        mediaId,
-        status: error.response?.status || null,
-        code: error.code || null,
-        metaError: error.response?.data?.error?.message || error.response?.data || null,
-        message: error.message,
-      });
+console.error('WA media download attempt failed:', {
+  attempt,
+  maxAttempts,
+  mediaId: maskId(mediaId),
+  ...safeMetaError(error),
+});
 
       if (!isRetryableWhatsAppError(error) || attempt >= maxAttempts) {
         break;
@@ -1893,10 +1534,10 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = 
     }
   }
 
-  console.error('WA media download failed:', {
-    mediaId,
-    message: lastError?.message || 'Unknown media download error',
-  });
+console.error('WA media download failed:', {
+  mediaId: maskId(mediaId),
+  ...safeMetaError(lastError),
+});
 
   return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
 }
@@ -2084,7 +1725,7 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       auditAction = 'bot.quote_request_captured';
     }
   } else {
-    replyText = await buildBotReply({ tenantId, settings, text });
+    replyText = await buildBotReply({ tenantId, settings, text, contact });
   }
 
   if (!replyText) return null;
@@ -2099,8 +1740,7 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
     console.error('Bot auto-reply failed:', {
       tenantId,
       contactId: contact.id,
-      status: error.response?.status || null,
-      message: error.response?.data?.error?.message || error.message,
+      ...safeMetaError(error),
     });
 
     await recordAudit({
@@ -2186,7 +1826,7 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
     try {
       downloadedMedia = await downloadWhatsAppMedia(normalized.mediaId, normalized.mimeType, tenantId);
     } catch (error) {
-      console.error('WhatsApp media download failed:', error.response?.data || error.message);
+      console.error('WhatsApp media download failed:', safeMetaError(error));
     }
   }
 
@@ -2232,10 +1872,10 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
       tenantId,
       contactId: contact.id,
       messageId: saved?.id || null,
-      waMessageId,
+      waMessageId: maskId(waMessageId),
       type: normalized.type,
-      mediaId: normalized.mediaId,
-      mediaUrl: downloadedMedia.mediaUrl,
+      mediaId: maskId(normalized.mediaId),
+      mediaUrl: isProduction ? '[protected-media-url]' : downloadedMedia.mediaUrl,
       mimeType: downloadedMedia.mimeType || normalized.mimeType,
       fileSize: downloadedMedia.fileSize,
     });
@@ -2402,6 +2042,10 @@ async function getWhatsAppSendConfig(tenantId) {
       phoneNumberId: account.phone_number_id,
       accessToken,
     };
+  }
+
+  if (isProduction) {
+    return null;
   }
 
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -2623,15 +2267,10 @@ async function postWhatsAppMessage(config, payload, meta = {}) {
     } catch (error) {
       lastError = error;
 
-      const status = error.response?.status || null;
-      const metaError = error.response?.data?.error?.message || error.response?.data || null;
-
       console.error('WhatsApp send attempt failed:', {
         attempt,
         maxAttempts,
-        status,
-        code: error.code || null,
-        message: metaError || error.message,
+        ...safeMetaError(error),
         tenantId: meta.tenantId || null,
         type: meta.type || null,
       });
@@ -2837,18 +2476,22 @@ async function sendOrderAcknowledgementToCustomer({ tenantId, userId, order, quo
   }
 
   const templateResult = await query(
-    `SELECT id, name, language, active
+    `SELECT id, name, language, active, meta_status
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND name = $2
        AND language = $3
        AND active = true
+       AND ($4::boolean = false OR meta_status = 'approved')
      LIMIT 1`,
-    [tenantId, templateName, templateLanguage],
+    [tenantId, templateName, templateLanguage, isProduction],
   );
 
   if (!templateResult.rows[0]) {
-    return { sent: false, reason: 'template_not_active' };
+    return {
+      sent: false,
+      reason: isProduction ? 'template_not_meta_approved' : 'template_not_active',
+    };
   }
 
   const customerName = contact.company || contact.name || contact.phone || 'Customer';
@@ -2977,8 +2620,7 @@ async function sendManagerApprovalSystemReply({ tenantId, contactId, contact, te
       contactId,
       quoteId,
       action,
-      status: error.response?.status || null,
-      message: error.response?.data?.error?.message || error.message,
+      ...safeMetaError(error),
     });
     return null;
   }
@@ -3252,8 +2894,7 @@ async function sendCustomerQuoteSystemReply({ tenantId, contactId, contact, text
       contactId,
       quoteId,
       action,
-      status: error.response?.status || null,
-      message: error.response?.data?.error?.message || error.message,
+      ...safeMetaError(error),
     });
     return null;
   }
@@ -3449,8 +3090,8 @@ async function ensurePlatformSuperAdmin() {
     throw new Error('SUPER_ADMIN_EMAIL must be a valid email');
   }
 
-  if (password.length < 12) {
-    throw new Error('SUPER_ADMIN_PASSWORD must be at least 12 characters');
+  if (!isStrongPassword(password)) {
+    throw new Error(`SUPER_ADMIN_PASSWORD ${strongPasswordError()}`);
   }
 
   const tenantResult = await query(
@@ -3507,4550 +3148,167 @@ async function ensurePlatformSuperAdmin() {
 
 const serverStartedAt = new Date();
 
-app.get('/health', (req, res) => {
-  res.json({
-    ok: true,
-    service: 'bos-whatsapp-backend',
-    uptimeSeconds: Math.round(process.uptime()),
-    startedAt: serverStartedAt.toISOString(),
-    timestamp: new Date().toISOString(),
-  });
-});
-
-app.get('/ready', asyncHandler(async (req, res) => {
-  const db = await healthCheck();
-
-  const ready = Boolean(
-    db.ok
-    && hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
-    && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN)
-    && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)
-    && (!isProduction || hasRealValue(process.env.WHATSAPP_APP_SECRET))
-  );
-
-  return res.status(ready ? 200 : 503).json({
-    ok: ready,
-    service: 'bos-whatsapp-backend',
-    databaseReady: Boolean(db.ok),
-    timestamp: new Date().toISOString(),
-  });
-}));
-
-app.get('/api/test-db', asyncHandler(async (req, res) => {
-  if (isProduction) {
-    return res.status(404).json({ error: 'Not found' });
-  }
-
-  try {
-    const result = await query('SELECT now() AS server_time');
-    return res.json({
-      ok: true,
-      mode: 'postgres',
-      message: 'PostgreSQL connection working hai.',
-      serverTime: result.rows[0].server_time,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      mode: 'postgres',
-      message: 'PostgreSQL connect nahi ho raha.',
-      error: error.message,
-    });
-  }
-}));
-
-app.get('/api/public/app-settings', asyncHandler(async (req, res) => {
-  const tenantId = await getDemoTenantId();
-  const settings = await getAppSettings(tenantId);
-  res.json({ appName: settings.appName, companyName: settings.companyName, industry: settings.industry, primaryColor: settings.primaryColor });
-}));
-
-// =========================================================
-// ROUTES — AUTH
-// =========================================================
-
-app.post('/api/auth/login', rateLimit({
-  bucketName: 'login',
-  maxRequests: 20,
-  windowMs: 15 * 60 * 1000,
-}), asyncHandler(async (req, res) => {
-  const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
-
-  if (!cleanEmail || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
-  }
-
-    if (isLoginLocked(req, cleanEmail)) {
-    return res.status(429).json({ error: 'Too many failed login attempts. Please try again later.' });
-  }
-
-  const result = await query(
-    `SELECT
-       users.id,
-       users.tenant_id,
-       users.name,
-       users.email,
-       users.password_hash,
-       users.role,
-       users.active,
-       tenants.status AS tenant_status
-     FROM users
-     JOIN tenants ON tenants.id = users.tenant_id
-     WHERE lower(users.email) = $1
-     LIMIT 1`,
-    [cleanEmail],
-  );
-
-  const user = result.rows[0];
-
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    recordFailedLogin(req, cleanEmail);
-    return res.status(401).json({ error: 'Invalid login' });
-  }
-
-  clearLoginAttempts(req, cleanEmail);
-
-  if (!user.active) {
-    return res.status(403).json({ error: 'User is inactive' });
-  }
-
-  if (user.tenant_status !== 'active') {
-    return res.status(403).json({ error: 'Company account is inactive' });
-  }
-
-  setAuthCookie(res, user);
-
-  return res.json({
-    user: publicUser(user),
-  });
-}));
-
-app.post('/api/auth/register', rateLimit({
-  bucketName: 'register',
-  maxRequests: 5,
-  windowMs: 60 * 60 * 1000,
-}), asyncHandler(async (req, res) => {
-  const companyName = String(req.body?.companyName || '').trim();
-  const industry = String(req.body?.industry || 'General Sales').trim() || 'General Sales';
-  const adminName = String(req.body?.adminName || '').trim();
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
-  const acceptedPolicy = req.body?.acceptedPolicy === true;
-
-  if (companyName.length < 2 || companyName.length > 120) {
-    return res.status(400).json({ error: 'Business name must be between 2 and 120 characters' });
-  }
-
-  if (industry.length > 80) {
-    return res.status(400).json({ error: 'Industry must be 80 characters or fewer' });
-  }
-
-  if (adminName.length < 2 || adminName.length > 100) {
-    return res.status(400).json({ error: 'Your name must be between 2 and 100 characters' });
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ error: 'Valid work email required' });
-  }
-
-  if (
-    password.length < 12
-    || password.length > 128
-    || !/[a-z]/.test(password)
-    || !/[A-Z]/.test(password)
-    || !/[0-9]/.test(password)
-    || !/[^a-zA-Z0-9]/.test(password)
-  ) {
-    return res.status(400).json({
-      error: 'Password must be 12-128 characters with uppercase, lowercase, number and symbol',
-    });
-  }
-
-  if (!acceptedPolicy) {
-    return res.status(400).json({ error: 'Accept the platform and WhatsApp policy requirements to continue' });
-  }
-
-  const slugPrefix = normalizeTenantSlug(companyName).slice(0, 45) || 'business';
-  const tenantSlug = `${slugPrefix}-${crypto.randomBytes(4).toString('hex')}`;
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  try {
-    const result = await query(
-      `WITH created_tenant AS (
-         INSERT INTO tenants
-           (name, slug, industry, status, plan, business_email, onboarding_status, updated_at)
-         VALUES
-           ($1, $2, $3, 'active', 'starter', $4, 'admin_created', now())
-         RETURNING id
-       ),
-       created_user AS (
-         INSERT INTO users (tenant_id, name, email, password_hash, role, active)
-         SELECT id, $5, $4, $6, 'admin', true
-         FROM created_tenant
-         RETURNING id, tenant_id, name, email, role, active
-       ),
-       created_settings AS (
-         INSERT INTO app_settings (tenant_id, key, value, updated_at)
-         SELECT id, 'customization',
-                jsonb_build_object('companyName', $1, 'industry', $3),
-                now()
-         FROM created_tenant
-       ),
-       created_audit AS (
-         INSERT INTO audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
-         SELECT tenant_id, id, 'account.registered', 'tenant', tenant_id,
-                jsonb_build_object('onboardingStatus', 'admin_created', 'plan', 'starter')
-         FROM created_user
-       )
-       SELECT id, tenant_id, name, email, role, active
-       FROM created_user`,
-      [companyName, tenantSlug, industry, email, adminName, passwordHash],
-    );
-
-    const user = result.rows[0];
-
-    setAuthCookie(res, user);
-
-    return res.status(201).json({
-      user: publicUser(user),
-      nextStep: 'connect_whatsapp',
-    });
-  } catch (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'An account with this email already exists' });
-    }
-
-    throw error;
-  }
-}));
-
-app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
-
-app.post('/api/auth/logout', (req, res) => {
-  clearAuthCookie(res);
-  res.json({ ok: true });
-});
-
-// =========================================================
-// ROUTES — PLATFORM / SUPER ADMIN
-// =========================================================
-
-app.get('/api/platform/tenants', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
-  const result = await query(
-    `SELECT
-       tenants.id,
-       tenants.name,
-       tenants.slug,
-       tenants.industry,
-       tenants.status,
-       tenants.plan,
-       tenants.logo_url,
-       tenants.business_phone,
-       tenants.business_email,
-       tenants.meta_business_id,
-       tenants.onboarding_status,
-       tenants.created_at,
-       tenants.updated_at,
-       COUNT(users.id)::int AS user_count,
-       COUNT(users.id) FILTER (WHERE users.active = true)::int AS active_user_count
-     FROM tenants
-     LEFT JOIN users ON users.tenant_id = tenants.id
-     GROUP BY tenants.id
-     ORDER BY tenants.created_at DESC`,
-  );
-
-  res.json(result.rows.map((tenant) => ({
-    ...publicTenant(tenant),
-    userCount: tenant.user_count,
-    activeUserCount: tenant.active_user_count,
-  })));
-}));
-
-app.post('/api/platform/tenants', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
-  const cleanName = String(req.body?.name || '').trim();
-  const cleanIndustry = String(req.body?.industry || 'General').trim() || 'General';
-  const cleanPlan = String(req.body?.plan || 'starter').trim().toLowerCase() || 'starter';
-  const cleanStatus = String(req.body?.status || 'active').trim().toLowerCase() || 'active';
-  const cleanSlug = normalizeTenantSlug(req.body?.slug || cleanName);
-
-  const businessPhone = String(req.body?.businessPhone || '').trim();
-  const businessEmail = String(req.body?.businessEmail || '').trim().toLowerCase();
-  const logoUrl = String(req.body?.logoUrl || '').trim();
-  const metaBusinessId = String(req.body?.metaBusinessId || '').trim();
-
-  if (!cleanName || !cleanSlug) {
-    return res.status(400).json({ error: 'Client company name and slug are required' });
-  }
-
-  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
-    return res.status(400).json({ error: 'Invalid tenant status' });
-  }
-
-  if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
-    return res.status(400).json({ error: 'Valid business email required' });
-  }
-
-  const result = await query(
-    `INSERT INTO tenants
-       (name, slug, industry, status, plan, logo_url, business_phone, business_email, meta_business_id, onboarding_status, updated_at)
-     VALUES
-       ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'tenant_created', now())
-     RETURNING *`,
-    [
-      cleanName,
-      cleanSlug,
-      cleanIndustry,
-      cleanStatus,
-      cleanPlan,
-      logoUrl || null,
-      businessPhone || null,
-      businessEmail || null,
-      metaBusinessId || null,
-    ],
-  );
-
-  const tenant = result.rows[0];
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'platform.tenant_created',
-    entityType: 'tenant',
-    entityId: tenant.id,
-    metadata: {
-      tenantId: tenant.id,
-      slug: tenant.slug,
-      name: tenant.name,
-      plan: tenant.plan,
-      status: tenant.status,
-    },
-  });
-
-  res.status(201).json(publicTenant(tenant));
-}));
-
-app.patch('/api/platform/tenants/:tenantId', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
-  const tenantId = req.params.tenantId;
-
-  const existingResult = await query(
-    `SELECT *
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const existingTenant = existingResult.rows[0];
-
-  if (!existingTenant) {
-    return res.status(404).json({ error: 'Client company not found' });
-  }
-
-  if (existingTenant.slug === 'platform') {
-    return res.status(400).json({ error: 'Platform tenant cannot be edited from this route' });
-  }
-
-  const cleanName = req.body?.name !== undefined ? String(req.body.name || '').trim() : existingTenant.name;
-  const cleanIndustry = req.body?.industry !== undefined ? String(req.body.industry || '').trim() : existingTenant.industry;
-  const cleanStatus = req.body?.status !== undefined ? String(req.body.status || '').trim().toLowerCase() : existingTenant.status;
-  const cleanPlan = req.body?.plan !== undefined ? String(req.body.plan || '').trim().toLowerCase() : existingTenant.plan;
-
-  const businessPhone = req.body?.businessPhone !== undefined ? String(req.body.businessPhone || '').trim() : existingTenant.business_phone;
-  const businessEmail = req.body?.businessEmail !== undefined ? String(req.body.businessEmail || '').trim().toLowerCase() : existingTenant.business_email;
-  const logoUrl = req.body?.logoUrl !== undefined ? String(req.body.logoUrl || '').trim() : existingTenant.logo_url;
-  const metaBusinessId = req.body?.metaBusinessId !== undefined ? String(req.body.metaBusinessId || '').trim() : existingTenant.meta_business_id;
-  const onboardingStatus = req.body?.onboardingStatus !== undefined ? String(req.body.onboardingStatus || '').trim() : existingTenant.onboarding_status;
-
-  if (!cleanName) {
-    return res.status(400).json({ error: 'Client company name is required' });
-  }
-
-  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
-    return res.status(400).json({ error: 'Invalid tenant status' });
-  }
-
-  if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
-    return res.status(400).json({ error: 'Valid business email required' });
-  }
-
-  const result = await query(
-    `UPDATE tenants
-     SET name = $2,
-         industry = $3,
-         status = $4,
-         plan = $5,
-         business_phone = $6,
-         business_email = $7,
-         logo_url = $8,
-         meta_business_id = $9,
-         onboarding_status = $10,
-         updated_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [
-      tenantId,
-      cleanName,
-      cleanIndustry || 'General',
-      cleanStatus,
-      cleanPlan || 'starter',
-      businessPhone || null,
-      businessEmail || null,
-      logoUrl || null,
-      metaBusinessId || null,
-      onboardingStatus || 'pending',
-    ],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'platform.tenant_updated',
-    entityType: 'tenant',
-    entityId: tenantId,
-    metadata: {
-      tenantId,
-      status: cleanStatus,
-      plan: cleanPlan,
-      onboardingStatus,
-    },
-  });
-
-  res.json(publicTenant(result.rows[0]));
-}));
-
-app.post('/api/platform/tenants/:tenantId/remove-access', requireAuth, requireSuperAdmin, rateLimit({
-  bucketName: 'platform-remove-client-access',
-  maxRequests: 20,
-  windowMs: 15 * 60 * 1000,
-}), asyncHandler(async (req, res) => {
-  const tenantId = req.params.tenantId;
-
-  const tenantResult = await query(
-    `SELECT id, slug, name, status
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const tenant = tenantResult.rows[0];
-
-  if (!tenant) {
-    return res.status(404).json({ error: 'Client company not found' });
-  }
-
-  if (tenant.slug === 'platform') {
-    return res.status(400).json({ error: 'Platform tenant access cannot be removed from this route' });
-  }
-
-  const updatedTenantResult = await query(
-    `UPDATE tenants
-     SET status = 'suspended',
-         onboarding_status = 'access_removed',
-         updated_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [tenantId],
-  );
-
-  await query(
-    `UPDATE users
-     SET active = false
-     WHERE tenant_id = $1`,
-    [tenantId],
-  );
-
-  await query(
-    `UPDATE whatsapp_accounts
-     SET active = false,
-         updated_at = now()
-     WHERE tenant_id = $1`,
-    [tenantId],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'platform.client_access_removed',
-    entityType: 'tenant',
-    entityId: tenantId,
-    metadata: {
-      clientTenantId: tenantId,
-      clientTenantName: tenant.name,
-      previousStatus: tenant.status,
-      newStatus: 'suspended',
-      usersDeactivated: true,
-      whatsappAccountsDeactivated: true,
-      reason: 'Super admin removed client access',
-    },
-  });
-
-  res.json({
-    ok: true,
-    tenant: publicTenant(updatedTenantResult.rows[0]),
-  });
-}));
-
-app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
-  const tenantId = req.params.tenantId;
-
-  const cleanName = String(req.body?.name || '').trim();
-  const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
-  const cleanPassword = String(req.body?.password || '');
-
-  if (!cleanName || !cleanEmail || !cleanPassword) {
-    return res.status(400).json({ error: 'Admin name, email and password are required' });
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-    return res.status(400).json({ error: 'Valid admin email required' });
-  }
-
-  if (cleanPassword.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-
-  const tenantResult = await query(
-    `SELECT id, slug, status
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const tenant = tenantResult.rows[0];
-
-  if (!tenant) {
-    return res.status(404).json({ error: 'Client company not found' });
-  }
-
-  if (tenant.slug === 'platform') {
-    return res.status(400).json({ error: 'Use platform super admin setup for platform users' });
-  }
-
-  const existingUser = await query(
-    `SELECT id
-     FROM users
-     WHERE lower(email) = $1
-     LIMIT 1`,
-    [cleanEmail],
-  );
-
-  if (existingUser.rows[0]) {
-    return res.status(409).json({ error: 'User with this email already exists' });
-  }
-
-  const hash = await bcrypt.hash(cleanPassword, 10);
-
-  const result = await query(
-    `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
-     VALUES ($1, $2, $3, $4, 'admin', true)
-     RETURNING id, tenant_id, name, email, role, active`,
-    [tenantId, cleanName, cleanEmail, hash],
-  );
-
-  await query(
-    `UPDATE tenants
-     SET onboarding_status = 'admin_created',
-         updated_at = now()
-     WHERE id = $1`,
-    [tenantId],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'platform.client_admin_created',
-    entityType: 'user',
-    entityId: result.rows[0].id,
-    metadata: {
-      tenantId,
-      email: cleanEmail,
-      role: 'admin',
-    },
-  });
-
-  res.status(201).json(publicUser(result.rows[0]));
-}));
-
-app.post('/api/platform/tenants/:tenantId/enter-crm', requireAuth, requireSuperAdmin, rateLimit({
-  bucketName: 'platform-enter-client-crm',
-  maxRequests: 20,
-  windowMs: 15 * 60 * 1000,
-}), asyncHandler(async (req, res) => {
-  const tenantId = req.params.tenantId;
-
-  const tenantResult = await query(
-    `SELECT id, slug, name, status
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const tenant = tenantResult.rows[0];
-
-  if (!tenant) {
-    return res.status(404).json({ error: 'Client company not found' });
-  }
-
-  if (tenant.slug === 'platform') {
-    return res.status(400).json({ error: 'Platform tenant cannot be opened as client CRM' });
-  }
-
-  if (tenant.status !== 'active') {
-    return res.status(400).json({ error: 'Client company is not active' });
-  }
-
-  const adminResult = await query(
-    `SELECT id, tenant_id, name, email, role, active
-     FROM users
-     WHERE tenant_id = $1
-       AND role = 'admin'
-       AND active = true
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const clientAdmin = adminResult.rows[0];
-
-  if (!clientAdmin) {
-    return res.status(400).json({
-      error: 'No active client admin found. Create first client admin before opening CRM.',
-    });
-  }
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'platform.enter_client_crm',
-    entityType: 'tenant',
-    entityId: tenant.id,
-    metadata: {
-      clientTenantId: tenant.id,
-      clientTenantName: tenant.name,
-      clientAdminUserId: clientAdmin.id,
-      clientAdminEmail: clientAdmin.email,
-      reason: 'Super admin entered client CRM for setup/testing/video verification',
-    },
-  });
-
-  setAuthCookie(res, clientAdmin);
-
-  res.json({
-    user: publicUser(clientAdmin),
-    supportMode: true,
-    tenant: publicTenant(tenant),
-  });
-}));
-
-app.get('/api/platform/tenants/:tenantId/status', requireAuth, requireSuperAdmin, asyncHandler(async (req, res) => {
-  const tenantId = req.params.tenantId;
-
-  const tenantResult = await query(
-    `SELECT *
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const tenant = tenantResult.rows[0];
-
-  if (!tenant) {
-    return res.status(404).json({ error: 'Client company not found' });
-  }
-
-  const usersResult = await query(
-    `SELECT role, active, COUNT(*)::int AS count
-     FROM users
-     WHERE tenant_id = $1
-     GROUP BY role, active
-     ORDER BY role, active DESC`,
-    [tenantId],
-  );
-
-  const whatsappResult = await query(
-    `SELECT id, phone_number_id, display_phone_number, waba_id, active, created_at
-     FROM whatsapp_accounts
-     WHERE tenant_id = $1
-     ORDER BY created_at DESC`,
-    [tenantId],
-  );
-
-  const contactResult = await query(
-    `SELECT COUNT(*)::int AS count
-     FROM contacts
-     WHERE tenant_id = $1`,
-    [tenantId],
-  );
-
-  const messageResult = await query(
-    `SELECT COUNT(*)::int AS count
-     FROM messages
-     WHERE tenant_id = $1`,
-    [tenantId],
-  );
-
-  res.json({
-    tenant: publicTenant(tenant),
-    users: usersResult.rows,
-    whatsappAccounts: whatsappResult.rows.map((account) => ({
-      id: account.id,
-      phoneNumberId: maskValue(account.phone_number_id || ''),
-      displayPhoneNumber: account.display_phone_number || '',
-      wabaId: maskValue(account.waba_id || ''),
-      active: account.active,
-      createdAt: account.created_at,
-    })),
-    totals: {
-      contacts: contactResult.rows[0]?.count || 0,
-      messages: messageResult.rows[0]?.count || 0,
-    },
-  });
-}));
-
-// =========================================================
-// ROUTES — SETTINGS
-// =========================================================
-
-app.get('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
-  res.json(await getAppSettings(req.user.tenantId));
-}));
-
-app.put('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  res.json(await saveAppSettings(req.user.tenantId, req.body || {}));
-}));
-
-// =========================================================
-// ROUTES — KNOWLEDGE BASE
-// =========================================================
-
-app.get('/api/knowledge-base', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-
-  const result = await query(
-    `SELECT id, title, category, content, keywords, active, created_at, updated_at
-     FROM knowledge_base
-     WHERE tenant_id = $1
-     ORDER BY active DESC, updated_at DESC
-     LIMIT 200`,
-    [req.user.tenantId],
-  );
-
-  res.json(result.rows);
-}));
-
-app.post('/api/knowledge-base', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-
-  const item = normalizeKnowledgeBaseItem(req.body || {});
-
-  if (!item.title || !item.content) {
-    return res.status(400).json({ error: 'Knowledge title and content required' });
-  }
-
-  const result = await query(
-    `INSERT INTO knowledge_base (tenant_id, title, category, content, keywords, active, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-     RETURNING id, title, category, content, keywords, active, created_at, updated_at`,
-    [req.user.tenantId, item.title, item.category, item.content, item.keywords, item.active, req.user.id],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'knowledge.created',
-    entityType: 'knowledge_base',
-    entityId: result.rows[0].id,
-    metadata: { title: item.title, category: item.category },
-  });
-
-  res.status(201).json(result.rows[0]);
-}));
-
-app.patch('/api/knowledge-base/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-
-  const existingResult = await query(
-    `SELECT id
-     FROM knowledge_base
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  if (!existingResult.rows[0]) {
-    return res.status(404).json({ error: 'Knowledge item not found' });
-  }
-
-  const item = normalizeKnowledgeBaseItem(req.body || {});
-
-  if (!item.title || !item.content) {
-    return res.status(400).json({ error: 'Knowledge title and content required' });
-  }
-
-  const result = await query(
-    `UPDATE knowledge_base
-     SET title = $3,
-         category = $4,
-         content = $5,
-         keywords = $6,
-         active = $7,
-         updated_by = $8,
-         updated_at = now()
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING id, title, category, content, keywords, active, created_at, updated_at`,
-    [req.params.id, req.user.tenantId, item.title, item.category, item.content, item.keywords, item.active, req.user.id],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'knowledge.updated',
-    entityType: 'knowledge_base',
-    entityId: result.rows[0].id,
-    metadata: { title: item.title, category: item.category, active: item.active },
-  });
-
-  res.json(result.rows[0]);
-}));
-
-app.delete('/api/knowledge-base/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-
-  const result = await query(
-    `UPDATE knowledge_base
-     SET active = false,
-         updated_by = $3,
-         updated_at = now()
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING id, title, category, active`,
-    [req.params.id, req.user.tenantId, req.user.id],
-  );
-
-  if (!result.rows[0]) {
-    return res.status(404).json({ error: 'Knowledge item not found' });
-  }
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'knowledge.deactivated',
-    entityType: 'knowledge_base',
-    entityId: result.rows[0].id,
-    metadata: { title: result.rows[0].title, category: result.rows[0].category },
-  });
-
-  res.json({ ok: true, item: result.rows[0] });
-}));
-
-app.get('/api/settings/status', requireAuth, asyncHandler(async (req, res) => {
-  const settings = await getAppSettings(req.user.tenantId);
-  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
-  const warnings = [...validateRuntimeConfig()];
-
-  if (hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID) && !accountStatus.phoneNumberMapped) {
-    warnings.push('WHATSAPP_PHONE_NUMBER_ID is not mapped to an active tenant. Incoming webhooks will be ignored.');
-  }
-
-  res.json({
-    database: 'Connected through DATABASE_URL',
-    webhookSignatureRequired: isProduction,
-    webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-    webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    whatsappTokenSet: hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN),
-    phoneNumberIdSet: hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID),
-    whatsappTestNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
-    phoneNumberMapped: accountStatus.phoneNumberMapped,
-    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
-    phoneNumberMappedTenantSlug: canMonitor(req.user) ? accountStatus.phoneNumberMappedTenantSlug : null,
-    webhookUrl: '/webhook',
-    labels: settings.labels,
-    warnings,
-  });
-}));
-
-app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
-  const accessTokenSet = hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN);
-  const phoneNumberIdSet = hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
-  const callbackUrl = process.env.PUBLIC_BASE_URL
-    ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook`
-    : 'Set PUBLIC_BASE_URL to show full webhook URL';
-
-  res.json({
-    configured: accessTokenSet && phoneNumberIdSet,
-    accessTokenSet,
-    phoneNumberIdSet,
-    phoneNumberMapped: accountStatus.phoneNumberMapped,
-    phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
-    phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
-    verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    webhookSignatureRequired: isProduction,
-    testNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
-    callbackUrl,
-    webhookPath: '/webhook',
-  });
-}));
-
-app.get('/api/whatsapp/health', requireAuth, async (req, res) => {
-  try {
-    const tenantId = req.user?.tenantId;
-    const role = req.user?.role;
-
-    if (!tenantId) {
-      return res.status(401).json({ error: 'Tenant session missing' });
-    }
-
-    if (!['admin', 'manager'].includes(role)) {
-      return res.status(403).json({ error: 'Admin/manager access required' });
-    }
-
-    const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-    const webhookUrl = publicBaseUrl ? `${publicBaseUrl}/webhook` : '';
-
-    const envAccessTokenSet = Boolean(process.env.WHATSAPP_ACCESS_TOKEN);
-    const envPhoneNumberIdSet = Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID);
-    const verifyTokenSet = Boolean(process.env.WHATSAPP_VERIFY_TOKEN);
-    const appSecretSet = Boolean(process.env.WHATSAPP_APP_SECRET);
-
-    const accountResult = await query(
-      `
-      SELECT
-        id,
-        phone_number_id,
-        display_phone_number,
-        waba_id,
-        active,
-        token_type,
-        access_token_encrypted,
-        connected_at,
-        updated_at
-      FROM whatsapp_accounts
-      WHERE tenant_id = $1
-      ORDER BY active DESC, updated_at DESC, connected_at DESC NULLS LAST, created_at DESC
-      LIMIT 1
-      `,
-      [tenantId]
-    );
-
-    const account = accountResult.rows[0] || null;
-
-    const activityResult = await query(
-      `
-      SELECT
-        (
-          SELECT MAX(created_at)
-          FROM messages
-          WHERE tenant_id = $1
-            AND direction = 'inbound'
-        ) AS last_inbound_at,
-        GREATEST(
-          COALESCE((
-            SELECT MAX(created_at)
-            FROM messages
-            WHERE tenant_id = $1
-              AND direction = 'outbound'
-          ), '1970-01-01'::timestamptz),
-          COALESCE((
-            SELECT MAX(COALESCE(sent_at, created_at))
-            FROM outbound_messages
-            WHERE tenant_id = $1
-          ), '1970-01-01'::timestamptz)
-        ) AS last_outbound_at
-      `,
-      [tenantId]
-    );
-
-    const activity = activityResult.rows[0] || {};
-
-    const hasTenantToken = Boolean(account?.access_token_encrypted);
-    const hasTenantPhone = Boolean(account?.phone_number_id);
-    const connected = Boolean(account?.active && hasTenantPhone && (hasTenantToken || envAccessTokenSet));
-
-    const tokenMode = hasTenantToken
-      ? 'tenant_embedded_signup'
-      : envAccessTokenSet
-        ? 'env_fallback'
-        : 'not_configured';
-
-    const setupIssues = [];
-
-    if (!account) {
-      setupIssues.push('WhatsApp account is not mapped for this tenant.');
-    }
-
-    if (account && !account.active) {
-      setupIssues.push('Mapped WhatsApp account is inactive.');
-    }
-
-    if (!hasTenantPhone && !envPhoneNumberIdSet) {
-      setupIssues.push('Phone Number ID is missing.');
-    }
-
-    if (!hasTenantToken && !envAccessTokenSet) {
-      setupIssues.push('WhatsApp access token is missing.');
-    }
-
-    if (!verifyTokenSet) {
-      setupIssues.push('Webhook verify token is missing.');
-    }
-
-    if (!publicBaseUrl) {
-      setupIssues.push('PUBLIC_BASE_URL is missing, webhook URL cannot be generated.');
-    }
-
-    if (!appSecretSet) {
-      setupIssues.push('WHATSAPP_APP_SECRET is missing, webhook signature verification cannot be enabled.');
-    }
-
-    const setupComplete = connected && verifyTokenSet && Boolean(publicBaseUrl) && appSecretSet;
-
-    return res.json({
-      connected,
-      setupComplete,
-      tokenMode,
-      webhookUrl,
-      account: account
-        ? {
-            displayPhoneNumber: account.display_phone_number || '',
-            phoneNumberId: account.phone_number_id || '',
-            wabaId: account.waba_id || '',
-            active: Boolean(account.active),
-            connectedAt: account.connected_at || null,
-            updatedAt: account.updated_at || null,
-          }
-        : null,
-      activity: {
-        lastInboundAt: activity.last_inbound_at || null,
-        lastOutboundAt:
-          activity.last_outbound_at &&
-          String(activity.last_outbound_at) !== '1970-01-01T00:00:00.000Z'
-            ? activity.last_outbound_at
-            : null,
-      },
-      setupIssues,
-    });
-  } catch (error) {
-    console.error('WhatsApp health check failed:', {
-      message: error.message,
-      code: error.code || null,
-    });
-
-    return res.status(500).json({
-      error: 'WhatsApp health check failed',
-    });
-  }
-});
-
-app.get('/api/whatsapp/health', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const callbackUrl = process.env.PUBLIC_BASE_URL
-    ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook`
-    : '';
-
-  const accountResult = await query(
-    `SELECT
-       id,
-       phone_number_id,
-       display_phone_number,
-       waba_id,
-       active,
-       access_token_encrypted,
-       access_token_iv,
-       access_token_tag,
-       connected_at,
-       updated_at
-     FROM whatsapp_accounts
-     WHERE tenant_id = $1
-     ORDER BY active DESC, connected_at DESC NULLS LAST, created_at DESC
-     LIMIT 1`,
-    [req.user.tenantId],
-  );
-
-  const account = accountResult.rows[0] || null;
-
-  const hasTenantEncryptedToken = Boolean(
-    account?.access_token_encrypted &&
-    account?.access_token_iv &&
-    account?.access_token_tag,
-  );
-
-  const envTokenConfigured = isWhatsAppConfigured();
-  const tokenMode = hasTenantEncryptedToken
-    ? 'tenant_embedded_signup'
-    : envTokenConfigured
-      ? 'env_fallback'
-      : 'not_configured';
-
-  const [lastInbound, lastOutbound, webhookRecent, outboundRecent] = await Promise.all([
-    query(
-      `SELECT created_at
-       FROM messages
-       WHERE tenant_id = $1
-         AND direction = 'inbound'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT COALESCE(sent_at, updated_at, created_at) AS at
-       FROM outbound_messages
-       WHERE tenant_id = $1
-         AND status = 'sent'
-       ORDER BY COALESCE(sent_at, updated_at, created_at) DESC
-       LIMIT 1`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM webhook_events
-       WHERE tenant_id = $1
-         AND received_at >= now() - interval '24 hours'
-       GROUP BY status`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM outbound_messages
-       WHERE tenant_id = $1
-         AND created_at >= now() - interval '24 hours'
-       GROUP BY status`,
-      [req.user.tenantId],
-    ),
-  ]);
-
-  const connected = Boolean(
-    account?.active &&
-    account?.phone_number_id &&
-    (hasTenantEncryptedToken || envTokenConfigured),
-  );
-
-  const setupIssues = [];
-
-  if (!account?.phone_number_id && !hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)) {
-    setupIssues.push('No WhatsApp phone number is connected.');
-  }
-
-  if (!hasTenantEncryptedToken && !envTokenConfigured) {
-    setupIssues.push('No tenant token or environment fallback token is configured.');
-  }
-
-  if (!hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)) {
-    setupIssues.push('WHATSAPP_VERIFY_TOKEN is missing.');
-  }
-
-  if (isProduction && !hasRealValue(process.env.WHATSAPP_APP_SECRET)) {
-    setupIssues.push('WHATSAPP_APP_SECRET is missing. Production webhooks need signature verification.');
-  }
-
-  if (!callbackUrl) {
-    setupIssues.push('PUBLIC_BASE_URL is missing, so webhook callback URL cannot be shown.');
-  }
-
-  res.json({
-    connected,
-    setupComplete: connected && setupIssues.length === 0,
-    tokenMode,
-    webhookUrl: callbackUrl || 'Set PUBLIC_BASE_URL to show full webhook URL',
-    webhookPath: '/webhook',
-    signatureRequired: isProduction,
-    verifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-    appSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
-    account: account
-      ? {
-          id: account.id,
-          active: account.active,
-          phoneNumberId: maskValue(account.phone_number_id || ''),
-          displayPhoneNumber: account.display_phone_number || '',
-          wabaId: maskValue(account.waba_id || ''),
-          connectedAt: account.connected_at,
-          updatedAt: account.updated_at,
-          tokenStored: hasTenantEncryptedToken,
-        }
-      : null,
-    activity: {
-      lastInboundAt: lastInbound.rows[0]?.created_at || null,
-      lastOutboundAt: lastOutbound.rows[0]?.at || null,
-      webhookEvents24h: webhookRecent.rows,
-      outboundMessages24h: outboundRecent.rows,
-    },
-    setupIssues,
-    timestamp: new Date().toISOString(),
-  });
-}));
-
-app.get('/api/whatsapp/onboarding', requireAuth, asyncHandler(async (req, res) => {
-  const tenantResult = await query(
-    `SELECT id, name, slug, onboarding_status
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [req.user.tenantId],
-  );
-
-  const tenant = tenantResult.rows[0];
-
-  if (!tenant) {
-    return res.status(404).json({ error: 'Company not found' });
-  }
-
-  const accountResult = await query(
-    `SELECT
-       id,
-       phone_number_id,
-       display_phone_number,
-       waba_id,
-       active,
-       access_token_encrypted,
-       access_token_iv,
-       access_token_tag,
-       connected_at
-     FROM whatsapp_accounts
-     WHERE tenant_id = $1
-       AND active = true
-     ORDER BY connected_at DESC NULLS LAST, created_at DESC
-     LIMIT 1`,
-    [req.user.tenantId],
-  );
-
-  const account = accountResult.rows[0] || null;
-
-  const securelyConnected = Boolean(
-    account?.phone_number_id &&
-    account?.waba_id &&
-    account?.access_token_encrypted &&
-    account?.access_token_iv &&
-    account?.access_token_tag &&
-    account?.connected_at
-  );
-
-  res.json({
-    connected: securelyConnected,
-    connectionMode: securelyConnected ? 'embedded_signup' : 'not_connected',
-    metaAppId: process.env.META_APP_ID || '',
-    embeddedSignupConfigId: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || '',
-    tenant: {
-      id: tenant.id,
-      name: tenant.name,
-      slug: tenant.slug,
-      onboardingStatus: securelyConnected ? 'whatsapp_mapped' : tenant.onboarding_status || 'pending',
-    },
-    whatsappAccount: account
-      ? {
-          id: account.id,
-          phoneNumberId: maskValue(account.phone_number_id || ''),
-          displayPhoneNumber: account.display_phone_number || '',
-          wabaId: maskValue(account.waba_id || ''),
-          active: account.active,
-          connected: securelyConnected,
-          connectedAt: account.connected_at,
-        }
-      : null,
-  });
-}));
-
-app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
-  bucketName: 'embedded-signup-complete',
-  maxRequests: 10,
-  windowMs: 15 * 60 * 1000,
-}), asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const code = String(req.body?.code || '').trim();
-  const phoneNumberId = String(req.body?.phoneNumberId || '').trim();
-  const wabaId = String(req.body?.wabaId || '').trim();
-
-  if (!code || !phoneNumberId || !wabaId) {
-    return res.status(400).json({
-      error: 'Meta signup code, phone number ID and WABA ID are required',
-    });
-  }
-
-  if (!hasRealValue(process.env.META_APP_ID) || !hasRealValue(process.env.META_APP_SECRET)) {
-    return res.status(500).json({
-      error: 'Meta App ID/App Secret missing on backend',
-    });
-  }
-
-  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v24.0';
-
-  const tokenRes = await axios.get(
-    `https://graph.facebook.com/${apiVersion}/oauth/access_token`,
-    {
-      params: {
-        client_id: process.env.META_APP_ID,
-        client_secret: process.env.META_APP_SECRET,
-        code,
-      },
-      timeout: 15000,
-    },
-  );
-
-  const accessToken = tokenRes.data?.access_token;
-
-  if (!accessToken) {
-    return res.status(502).json({
-      error: 'Meta did not return access token',
-    });
-  }
-
-  let displayPhoneNumber = '';
-
-  try {
-    const phoneRes = await axios.get(
-      `https://graph.facebook.com/${apiVersion}/${phoneNumberId}`,
-      {
-        params: {
-          fields: 'id,display_phone_number,verified_name',
-        },
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        timeout: 15000,
-      },
-    );
-
-    if (String(phoneRes.data?.id || '') !== phoneNumberId) {
-      return res.status(400).json({
-        error: 'Meta signup phone verification failed. Connection was not saved.',
-      });
-    }
-
-    displayPhoneNumber = phoneRes.data?.display_phone_number || phoneRes.data?.verified_name || '';
-  } catch (error) {
-    console.error('Meta phone lookup failed:', {
-      tenantId: req.user.tenantId,
-      phoneNumberId: maskValue(phoneNumberId),
-      status: error.response?.status || null,
-      message: error.response?.data?.error?.message || error.message,
-    });
-
-    return res.status(400).json({
-      error: 'Unable to verify the WhatsApp phone number from Meta signup. Connection was not saved.',
-    });
-  }
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/${apiVersion}/${wabaId}/subscribed_apps`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        timeout: 15000,
-      },
-    );
-  } catch (error) {
-    console.error('Meta subscribed_apps failed:', {
-      tenantId: req.user.tenantId,
-      wabaId: maskValue(wabaId),
-      status: error.response?.status || null,
-      message: error.response?.data?.error?.message || error.message,
-    });
-
-    return res.status(400).json({
-      error: 'Unable to subscribe the WhatsApp business account to webhooks. Connection was not saved.',
-    });
-  }
-
-  const existing = await query(
-    `SELECT whatsapp_accounts.tenant_id, tenants.slug
-     FROM whatsapp_accounts
-     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
-     WHERE whatsapp_accounts.phone_number_id = $1
-     LIMIT 1`,
-    [phoneNumberId],
-  );
-
-  const existingAccount = existing.rows[0];
-
-  if (existingAccount && existingAccount.tenant_id !== req.user.tenantId) {
-    return res.status(409).json({
-      error: `This WhatsApp phone number is already connected to tenant: ${existingAccount.slug}`,
-    });
-  }
-
-  const encryptedToken = encryptSecret(accessToken);
-
-  const accountResult = await query(
-    `INSERT INTO whatsapp_accounts (
-       tenant_id,
-       phone_number_id,
-       display_phone_number,
-       waba_id,
-       access_token_encrypted,
-       access_token_iv,
-       access_token_tag,
-       token_type,
-       active,
-       connected_by,
-       connected_at,
-       updated_at
-     )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'business_integration_system_user',true,$8,now(),now())
-     ON CONFLICT (phone_number_id)
-     DO UPDATE SET
-       tenant_id = EXCLUDED.tenant_id,
-       display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
-       waba_id = EXCLUDED.waba_id,
-       access_token_encrypted = EXCLUDED.access_token_encrypted,
-       access_token_iv = EXCLUDED.access_token_iv,
-       access_token_tag = EXCLUDED.access_token_tag,
-       token_type = EXCLUDED.token_type,
-       active = true,
-       connected_by = EXCLUDED.connected_by,
-       connected_at = now(),
-       updated_at = now()
-     RETURNING id, phone_number_id, display_phone_number, waba_id, active, connected_at`,
-    [
-      req.user.tenantId,
-      phoneNumberId,
-      displayPhoneNumber || null,
-      wabaId,
-      encryptedToken.encrypted,
-      encryptedToken.iv,
-      encryptedToken.tag,
-      req.user.id,
-    ],
-  );
-
-  await query(
-    `UPDATE tenants
-     SET onboarding_status = 'whatsapp_mapped',
-         meta_business_id = COALESCE(NULLIF($2, ''), meta_business_id),
-         updated_at = now()
-     WHERE id = $1`,
-    [req.user.tenantId, wabaId],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'whatsapp.embedded_signup_connected',
-    entityType: 'whatsapp_account',
-    entityId: accountResult.rows[0].id,
-    metadata: {
-      phoneNumberId: maskValue(phoneNumberId),
-      wabaId: maskValue(wabaId),
-      displayPhoneNumber,
-    },
-  });
-
-  res.json({
-    ok: true,
-    account: {
-      id: accountResult.rows[0].id,
-      phoneNumberId: maskValue(accountResult.rows[0].phone_number_id || ''),
-      displayPhoneNumber: accountResult.rows[0].display_phone_number || '',
-      wabaId: maskValue(accountResult.rows[0].waba_id || ''),
-      active: accountResult.rows[0].active,
-      connectedAt: accountResult.rows[0].connected_at,
-    },
-  });
-}));
-
-app.post('/api/whatsapp/map-current-phone', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
-
-  if (!hasRealValue(phoneNumberId)) {
-    return res.status(400).json({
-      error: 'WHATSAPP_PHONE_NUMBER_ID is missing. Add it in backend environment variables first.',
-    });
-  }
-
-  const displayPhoneNumber = String(req.body?.displayPhoneNumber || '').trim() || null;
-
-  const existing = await query(
-    `SELECT whatsapp_accounts.tenant_id, tenants.slug
-     FROM whatsapp_accounts
-     JOIN tenants ON tenants.id = whatsapp_accounts.tenant_id
-     WHERE whatsapp_accounts.phone_number_id = $1
-     LIMIT 1`,
-    [phoneNumberId],
-  );
-
-  const existingAccount = existing.rows[0];
-
-  if (existingAccount && existingAccount.tenant_id !== req.user.tenantId) {
-    return res.status(409).json({
-      error: `This WhatsApp phone number is already mapped to tenant: ${existingAccount.slug}`,
-    });
-  }
-
-  const result = await query(
-    `INSERT INTO whatsapp_accounts (tenant_id, phone_number_id, display_phone_number, active)
-     VALUES ($1, $2, $3, true)
-     ON CONFLICT (phone_number_id)
-     DO UPDATE SET tenant_id = EXCLUDED.tenant_id,
-                   display_phone_number = COALESCE(EXCLUDED.display_phone_number, whatsapp_accounts.display_phone_number),
-                   active = true
-     RETURNING tenant_id, phone_number_id, display_phone_number, active`,
-    [req.user.tenantId, phoneNumberId, displayPhoneNumber],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'whatsapp.phone_mapped',
-    entityType: 'whatsapp_account',
-    entityId: null,
-    metadata: {
-      phoneNumberId: maskValue(phoneNumberId),
-      displayPhoneNumber,
-    },
-  });
-
-  res.json({
-    ok: true,
-    account: result.rows[0],
-  });
-}));
-
-// =========================================================
-// ROUTES — WEBHOOK
-// =========================================================
-
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
-
-  if (!hasRealValue(verifyToken)) {
-    return res.sendStatus(403);
-  }
-
-  if (mode === 'subscribe' && token === verifyToken) {
-    return res.status(200).send(challenge);
-  }
-
-  return res.sendStatus(403);
-});
-
-function stableJsonStringify(value) {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableJsonStringify(item)).join(',')}]`;
-  }
-
-  return `{${Object.keys(value).sort().map((key) => (
-    `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`
-  )).join(',')}}`;
-}
-
-function createPayloadHash(payload = {}) {
-  return crypto
-    .createHash('sha256')
-    .update(stableJsonStringify(payload))
-    .digest('hex');
-}
-
-function getWebhookPayloadSummary(payload = {}) {
-  let phoneNumberId = null;
-  let displayPhoneNumber = null;
-  let messagesCount = 0;
-  let statusesCount = 0;
-  let contactsCount = 0;
-
-  for (const entry of payload?.entry || []) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-
-      phoneNumberId = phoneNumberId || value?.metadata?.phone_number_id || null;
-      displayPhoneNumber = displayPhoneNumber || value?.metadata?.display_phone_number || null;
-      messagesCount += value?.messages?.length || 0;
-      statusesCount += value?.statuses?.length || 0;
-      contactsCount += value?.contacts?.length || 0;
-    }
-  }
-
-  return {
-    phoneNumberId,
-    displayPhoneNumber,
-    messagesCount,
-    statusesCount,
-    contactsCount,
-  };
-}
-
-async function createWebhookEvent(payload = {}) {
-  const summary = getWebhookPayloadSummary(payload);
-  let tenantId = null;
-
-  for (const entry of payload?.entry || []) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-      const mappedTenantId = await getTenantIdForWebhookValue(value);
-
-      if (mappedTenantId) {
-        tenantId = mappedTenantId;
-        break;
-      }
-    }
-
-    if (tenantId) break;
-  }
-
-  const eventHash = createPayloadHash(payload);
-
-  const result = await query(
-    `INSERT INTO webhook_events
-       (tenant_id, provider, phone_number_id, event_type, status, payload, event_hash)
-     VALUES ($1, 'meta_whatsapp', $2, $3, 'received', $4, $5)
-     ON CONFLICT (provider, event_hash) WHERE event_hash IS NOT NULL
-     DO UPDATE SET received_at = webhook_events.received_at
-     RETURNING id, tenant_id, status, received_at`,
-    [
-      tenantId,
-      summary.phoneNumberId,
-      summary.messagesCount > 0 ? 'message' : summary.statusesCount > 0 ? 'status' : 'webhook',
-      payload,
-      eventHash,
-    ],
-  );
-
-  return result.rows[0];
-}
-
-async function markWebhookEventProcessing(eventId, tenantId) {
-  if (!eventId) return;
-
-  await query(
-    `UPDATE webhook_events
-     SET status = 'processing',
-         attempts = attempts + 1,
-         processing_started_at = now(),
-         last_error = NULL
-     WHERE id = $1
-       AND tenant_id IS NOT DISTINCT FROM $2`,
-    [eventId, tenantId || null],
-  );
-}
-
-async function markWebhookEventProcessed(eventId, tenantId) {
-  if (!eventId) return;
-
-  await query(
-    `UPDATE webhook_events
-     SET status = 'processed',
-         processed_at = now(),
-         last_error = NULL
-     WHERE id = $1
-       AND tenant_id IS NOT DISTINCT FROM $2`,
-    [eventId, tenantId || null],
-  );
-}
-
-async function markWebhookEventFailed(eventId, tenantId, error) {
-  if (!eventId) return;
-
-  await query(
-    `UPDATE webhook_events
-     SET status = 'failed',
-         last_error = $3
-     WHERE id = $1
-       AND tenant_id IS NOT DISTINCT FROM $2`,
-    [
-      eventId,
-      tenantId || null,
-      String(error?.message || error || 'Webhook processing failed').slice(0, 2000),
-    ],
-  );
-}
-
-async function processWhatsAppWebhookPayload(payload) {
-  const entries = payload?.entry || [];
-
-  for (const entry of entries) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-
-      console.log('WA webhook change value:', {
-        phoneNumberId: value?.metadata?.phone_number_id || null,
-        displayPhoneNumber: value?.metadata?.display_phone_number || null,
-        contactsCount: value?.contacts?.length || 0,
-        messagesCount: value?.messages?.length || 0,
-        statusesCount: value?.statuses?.length || 0,
-      });
-
-      const tenantId = await getTenantIdForWebhookValue(value);
-
-      console.log('WA webhook tenant mapping:', {
-        phoneNumberId: value?.metadata?.phone_number_id || null,
-        tenantId,
-      });
-
-      if (!tenantId) {
-        console.warn('Webhook ignored: no active tenant mapped for phone_number_id', {
-          phoneNumberId: value?.metadata?.phone_number_id || null,
-        });
-        continue;
-      }
-
-      const contacts = value.contacts || [];
-      const messages = value.messages || [];
-      const statuses = value.statuses || [];
-
-      for (const status of statuses) {
-        await updateMessageStatus({
-          tenantId,
-          waMessageId: status.id,
-          status: status.status,
-          rawPayload: status,
-        });
-      }
-
-      for (const message of messages) {
-        const body = extractText(message);
-        const profile = contacts.find((item) => item.wa_id === message.from);
-
-        await processInboundMessage({
-          tenantId,
-          waId: message.from,
-          name: profile?.profile?.name,
-          body,
-          waMessageId: message.id,
-          rawPayload: message,
-        });
-      }
-    }
-  }
-}
-
-app.post('/webhook', asyncHandler(async (req, res) => {
-  console.log('WA webhook received:', {
-    object: req.body?.object || null,
-    entries: req.body?.entry?.length || 0,
-    hasSignature: Boolean(req.headers['x-hub-signature-256']),
-  });
-
-  if (!verifyMetaWebhookSignature(req)) {
-    console.warn('WA webhook rejected: invalid signature');
-    return res.status(403).json({ error: 'Invalid webhook signature' });
-  }
-
-  const payload = req.body;
-  const webhookEvent = await createWebhookEvent(payload);
-
-  res.sendStatus(200);
-
-  setImmediate(async () => {
-    try {
-      await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
-
-      await processWhatsAppWebhookPayload(payload);
-
-      await markWebhookEventProcessed(webhookEvent.id, webhookEvent.tenant_id);
-    } catch (error) {
-      console.error('WA webhook async processing failed:', {
-        webhookEventId: webhookEvent?.id || null,
-        message: error.message,
-        stack: error.stack,
-      });
-
-      await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
-    }
-  });
-}));
-
-app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
-  if (isProduction) {
-    return res.status(403).json({ error: 'Local inbound simulator is disabled in production' });
-  }
-
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const cleanPhone = String(req.body.phone || '').replace(/\D/g, '');
-  const body = String(req.body.message || '').trim();
-  if (cleanPhone.length < 11 || !body) {
-    return res.status(400).json({ error: 'Phone country code ke saath aur message required hai.' });
-  }
-  const result = await processInboundMessage({
-    tenantId: req.user.tenantId,
-    waId: cleanPhone,
-    name: req.body.name || cleanPhone,
-    body,
-    waMessageId: `local.${Date.now()}.${Math.random().toString(16).slice(2)}`,
-    rawPayload: { localSimulator: true, createdBy: req.user.id },
-  });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'message.local_inbound_captured', entityType: 'contact', entityId: result.contact.id, metadata: { phone: cleanPhone } });
-  res.status(201).json(result);
-}));
-
-app.post('/api/whatsapp/test-message', rateLimit({
-  bucketName: 'whatsapp-test-message',
-  maxRequests: 20,
-  windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const { to, text } = req.body;
-  const cleanTo = String(to || '').replace(/\D/g, '');
-  const cleanText = String(text || '').trim();
-
-  if (!cleanTo || !cleanText) {
-    return res.status(400).json({ error: 'To number and text are required' });
-  }
-
-  if (cleanTo.length < 11 || cleanTo.length > 15) {
-    return res.status(400).json({
-      error: 'Number country code ke saath hona chahiye. India ke liye format: 91XXXXXXXXXX',
-    });
-  }
-
-  if (cleanText.length > 500) {
-    return res.status(400).json({ error: 'Test message maximum 500 characters ka ho sakta hai.' });
-  }
-
-  const allowedTestNumbers = String(process.env.WHATSAPP_TEST_NUMBERS || '')
-    .split(',')
-    .map((item) => item.replace(/\D/g, ''))
-    .filter(Boolean);
-
-  if (!allowedTestNumbers.includes(cleanTo)) {
-    return res.status(403).json({
-      error: 'This number is not allowed for WhatsApp test messages. Add it in WHATSAPP_TEST_NUMBERS env.',
-    });
-  }
-
-  if (!isWhatsAppConfigured()) {
-    return res.status(400).json({
-      error: 'Real WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID .env me set karo, phir backend restart karo.',
-    });
-  }
-
-  const contact = await upsertContact({
-    tenantId: req.user.tenantId,
-    waId: cleanTo,
-    name: cleanTo,
-    phone: cleanTo,
-    label: 'Review Required',
-    touchInbound: false,
-  });
-
-  if (contact.opted_out) {
-    return res.status(403).json({
-      error: 'Customer has opted out. Do not send WhatsApp messages to this contact.',
-    });
-  }
-
-  if (!isReplyWindowOpen(contact)) {
-    return res.status(400).json({
-      error: '24-hour reply window expired. Free-form test message is not allowed. Ask customer to message first or use an approved WhatsApp template.',
-    });
-  }
-
-  const config = await getWhatsAppSendConfig(req.user.tenantId);
-
-  if (!config) {
-    return res.status(400).json({
-      error: 'WhatsApp is not configured. Message was not sent.',
-    });
-  }
-
-  const response = await postWhatsAppMessage(
-    config,
-    {
-      messaging_product: 'whatsapp',
-      to: cleanTo,
-      type: 'text',
-      text: { body: cleanText },
-    },
-    { tenantId: req.user.tenantId, type: 'test_text' },
-  );
-
-  const messageId = response.data?.messages?.[0]?.id || null;
-
-  const message = await addMessage({
-    tenantId: req.user.tenantId,
-    contactId: contact.id,
-    waMessageId: messageId,
-    direction: 'outbound',
-    type: 'text',
-    body: cleanText,
-    status: messageId ? 'sent' : 'accepted',
-    rawPayload: response.data,
-  });
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'whatsapp.test_message_sent',
-    entityType: 'message',
-    entityId: message?.id,
-    metadata: {
-      to: cleanTo,
-      messageId,
-      contactId: contact.id,
-    },
-  });
-
-  res.json({
-    ok: true,
-    to: cleanTo,
-    contactId: contact.id,
-    savedMessageId: message?.id || null,
-    messageId,
-  });
-}));
-
-// =========================================================
-// ROUTES — USERS
-// =========================================================
-
-app.get('/api/users', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const result = await query(
-    'SELECT id, tenant_id, name, email, role, active FROM users WHERE tenant_id = $1 ORDER BY role, name',
-    [req.user.tenantId],
-  );
-  res.json(result.rows.map(publicUser));
-}));
-
-app.post('/api/users', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const cleanName = String(req.body?.name || '').trim();
-  const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
-  const cleanRole = String(req.body?.role || '').trim().toLowerCase();
-  const cleanPassword = String(req.body?.password || '');
-
-  if (!cleanName || !cleanEmail || !cleanRole || !cleanPassword) {
-    return res.status(400).json({ error: 'Name, email, role, password required' });
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-    return res.status(400).json({ error: 'Valid email required' });
-  }
-
-  if (!['admin', 'manager', 'sales'].includes(cleanRole)) {
-    return res.status(400).json({ error: 'Invalid role' });
-  }
-
-  if (cleanPassword.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-
-  const existingUser = await query(
-    `SELECT id, tenant_id
-     FROM users
-     WHERE lower(email) = $1
-     LIMIT 1`,
-    [cleanEmail],
-  );
-
-  if (existingUser.rows[0]) {
-    return res.status(409).json({ error: 'User with this email already exists' });
-  }
-
-  const hash = await bcrypt.hash(cleanPassword, 10);
-
-  const result = await query(
-    `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
-     VALUES ($1, $2, $3, $4, $5, true)
-     RETURNING id, tenant_id, name, email, role, active`,
-    [req.user.tenantId, cleanName, cleanEmail, hash, cleanRole],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'user.created',
-    entityType: 'user',
-    entityId: result.rows[0].id,
-    metadata: {
-      email: cleanEmail,
-      role: cleanRole,
-    },
-  });
-
-  res.status(201).json(publicUser(result.rows[0]));
-}));
-
-app.patch('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-
-  const { name, role, active, password } = req.body;
-
-  if (role !== undefined && !['admin', 'manager', 'sales'].includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
-  }
-
-  if (password !== undefined && String(password).length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-
-  const existingResult = await query(
-    `SELECT id, role, active
-     FROM users
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const existingUser = existingResult.rows[0];
-
-  if (!existingUser) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  if (req.params.id === req.user.id && active === false) {
-    return res.status(400).json({ error: 'You cannot deactivate your own logged-in admin user' });
-  }
-
-  if (req.params.id === req.user.id && role !== undefined && role !== 'admin') {
-    return res.status(400).json({ error: 'You cannot remove admin role from your own logged-in user' });
-  }
-
-  const nextRole = role !== undefined ? role : existingUser.role;
-  const nextActive = active !== undefined ? active : existingUser.active;
-
-  if (
-    existingUser.role === 'admin'
-    && existingUser.active === true
-    && (nextRole !== 'admin' || nextActive === false)
-  ) {
-    const remainingAdmins = await countActiveTenantAdmins(req.user.tenantId, existingUser.id);
-
-    if (remainingAdmins < 1) {
-      return res.status(400).json({ error: 'At least one active admin is required for this company' });
-    }
-  }
-
-  const passwordHash = password ? await bcrypt.hash(password, 10) : null;
-
-  const result = await query(
-    `UPDATE users
-     SET name = COALESCE($3, name),
-         role = COALESCE($4, role),
-         active = COALESCE($5, active),
-         password_hash = COALESCE($6, password_hash)
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING id, tenant_id, name, email, role, active`,
-    [req.params.id, req.user.tenantId, name, role, active, passwordHash],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'user.updated',
-    entityType: 'user',
-    entityId: result.rows[0].id,
-    metadata: {
-      role: result.rows[0].role,
-      active: result.rows[0].active,
-    },
-  });
-
-  res.json(publicUser(result.rows[0]));
-}));
-
-app.delete('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-
-  if (req.params.id === req.user.id) {
-    return res.status(400).json({ error: 'You cannot delete your own logged-in user' });
-  }
-
-  const existingResult = await query(
-    `SELECT id, role, active
-     FROM users
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const existingUser = existingResult.rows[0];
-
-  if (!existingUser) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  if (existingUser.role === 'admin' && existingUser.active === true) {
-    const remainingAdmins = await countActiveTenantAdmins(req.user.tenantId, existingUser.id);
-
-    if (remainingAdmins < 1) {
-      return res.status(400).json({ error: 'At least one active admin is required for this company' });
-    }
-  }
-
-  const result = await query(
-    `UPDATE users
-     SET active = false
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING id, tenant_id, name, email, role, active`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'user.deleted',
-    entityType: 'user',
-    entityId: result.rows[0].id,
-    metadata: {
-      email: result.rows[0].email,
-      role: result.rows[0].role,
-    },
-  });
-     res.json({ ok: true, deleted: publicUser(result.rows[0]) });
-}));
-
-// =========================================================
-// ROUTES — AUDIT
-// =========================================================
-
-app.get('/api/audit-events', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const result = await query(
-    `SELECT ae.*, u.name AS actor_name
-     FROM audit_events ae
-     LEFT JOIN users u ON u.id = ae.actor_user_id
-     WHERE ae.tenant_id = $1
-     ORDER BY ae.created_at DESC
-     LIMIT 100`,
-    [req.user.tenantId],
-  );
-  res.json(result.rows);
-}));
-
-app.get('/api/webhook-events/failed', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const result = await query(
-    `SELECT
-       id,
-       tenant_id,
-       provider,
-       phone_number_id,
-       event_type,
-       status,
-       attempts,
-       last_error,
-       received_at,
-       processing_started_at,
-       processed_at
-     FROM webhook_events
-     WHERE tenant_id = $1
-       AND status = 'failed'
-     ORDER BY received_at DESC
-     LIMIT 100`,
-    [req.user.tenantId],
-  );
-
-  res.json(result.rows);
-}));
-
-app.post('/api/webhook-events/cleanup', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const retentionDays = Math.min(
-    Math.max(Number(req.body?.retentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 30), 7),
-    180,
-  );
-
-  const result = await query(
-    `DELETE FROM webhook_events
-     WHERE tenant_id = $1
-       AND status = 'processed'
-       AND received_at < now() - ($2::int * interval '1 day')
-     RETURNING id`,
-    [req.user.tenantId, retentionDays],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'webhook_events.cleanup',
-    entityType: 'webhook_event',
-    entityId: null,
-    metadata: {
-      retentionDays,
-      deletedCount: result.rowCount,
-    },
-  });
-
-  res.json({
-    ok: true,
-    retentionDays,
-    deletedCount: result.rowCount,
-  });
-}));
-
-app.post('/api/webhook-events/recover-stuck', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const stuckMinutes = Math.min(
-    Math.max(Number(req.body?.stuckMinutes || process.env.WEBHOOK_STUCK_MINUTES || 10), 5),
-    120,
-  );
-
-  const result = await query(
-    `UPDATE webhook_events
-     SET status = 'failed',
-         last_error = COALESCE(last_error, 'Recovered from stuck processing state')
-     WHERE tenant_id = $1
-       AND status = 'processing'
-       AND processing_started_at < now() - ($2::int * interval '1 minute')
-     RETURNING id`,
-    [req.user.tenantId, stuckMinutes],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'webhook_events.recover_stuck',
-    entityType: 'webhook_event',
-    entityId: null,
-    metadata: {
-      stuckMinutes,
-      recoveredCount: result.rowCount,
-    },
-  });
-
-  res.json({
-    ok: true,
-    stuckMinutes,
-    recoveredCount: result.rowCount,
-  });
-}));
-
-app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
-
-  const webhookRetentionDays = Math.min(
-    Math.max(Number(req.body?.webhookRetentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 30), 7),
-    180,
-  );
-
-  const outboundRetentionDays = Math.min(
-    Math.max(Number(req.body?.outboundRetentionDays || process.env.OUTBOUND_MESSAGE_RETENTION_DAYS || 60), 14),
-    365,
-  );
-
-  const stuckMinutes = Math.min(
-    Math.max(Number(req.body?.stuckMinutes || process.env.WEBHOOK_STUCK_MINUTES || 10), 5),
-    120,
-  );
-
-  const [deletedWebhookEvents, deletedOutboundMessages, recoveredStuckWebhooks] = await Promise.all([
-    query(
-      `DELETE FROM webhook_events
-       WHERE tenant_id = $1
-         AND status = 'processed'
-         AND received_at < now() - ($2::int * interval '1 day')
-       RETURNING id`,
-      [req.user.tenantId, webhookRetentionDays],
-    ),
-    query(
-      `DELETE FROM outbound_messages
-       WHERE tenant_id = $1
-         AND status = 'sent'
-         AND created_at < now() - ($2::int * interval '1 day')
-       RETURNING id`,
-      [req.user.tenantId, outboundRetentionDays],
-    ),
-    query(
-      `UPDATE webhook_events
-       SET status = 'failed',
-           last_error = COALESCE(last_error, 'Recovered from stuck processing state by maintenance')
-       WHERE tenant_id = $1
-         AND status = 'processing'
-         AND processing_started_at < now() - ($2::int * interval '1 minute')
-       RETURNING id`,
-      [req.user.tenantId, stuckMinutes],
-    ),
-  ]);
-
-  const result = {
-    webhookRetentionDays,
-    outboundRetentionDays,
-    stuckMinutes,
-    deletedWebhookEvents: deletedWebhookEvents.rowCount,
-    deletedOutboundMessages: deletedOutboundMessages.rowCount,
-    recoveredStuckWebhooks: recoveredStuckWebhooks.rowCount,
-  };
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'system.maintenance_run',
-    entityType: 'system',
-    entityId: null,
-    metadata: result,
-  });
-
-  res.json({
-    ok: true,
-    ...result,
-  });
-}));
-
-app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const eventResult = await query(
-    `SELECT id, tenant_id, status, payload, attempts
-     FROM webhook_events
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const event = eventResult.rows[0];
-
-  if (!event) {
-    return res.status(404).json({ error: 'Webhook event not found' });
-  }
-
-  if (event.status !== 'failed') {
-    return res.status(400).json({
-      error: `Only failed webhook events can be retried. Current status: ${event.status}`,
-    });
-  }
-
-  const maxRetryAttempts = Number(process.env.WEBHOOK_EVENT_MAX_RETRY_ATTEMPTS || 5);
-
-  if (Number(event.attempts || 0) >= maxRetryAttempts) {
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'webhook_event.retry_blocked',
-      entityType: 'webhook_event',
-      entityId: event.id,
-      metadata: {
-        attempts: event.attempts,
-        maxRetryAttempts,
-      },
-    });
-
-    return res.status(429).json({
-      error: `Retry limit reached for this webhook event. Attempts: ${event.attempts}/${maxRetryAttempts}`,
-    });
-  }
-
-  const eventTenantId = event.tenant_id;
-
-  await markWebhookEventProcessing(event.id, eventTenantId);
-
-  try {
-    await processWhatsAppWebhookPayload(event.payload);
-    await markWebhookEventProcessed(event.id, eventTenantId);
-
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'webhook_event.retried',
-      entityType: 'webhook_event',
-      entityId: event.id,
-      metadata: {
-        previousAttempts: event.attempts,
-        result: 'processed',
-        eventTenantId,
-      },
-    });
-
-    return res.json({
-      ok: true,
-      id: event.id,
-      status: 'processed',
-      message: 'Webhook event retried successfully.',
-    });
-  } catch (error) {
-    await markWebhookEventFailed(event.id, eventTenantId, error);
-
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'webhook_event.retry_failed',
-      entityType: 'webhook_event',
-      entityId: event.id,
-      metadata: {
-        previousAttempts: event.attempts,
-        result: 'failed',
-        eventTenantId,
-        error: String(error.message || error).slice(0, 500),
-      },
-    });
-
-    return res.status(500).json({
-      ok: false,
-      id: event.id,
-      status: 'failed',
-      error: 'Webhook retry failed. Check failed webhook events for last_error.',
-    });
-  }
-}));
-
-app.get('/api/outbound-messages/failed', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const result = await query(
-    `SELECT
-       id,
-       tenant_id,
-       contact_id,
-       wa_message_id,
-       to_phone,
-       message_type,
-       template_name,
-       language,
-       body,
-       status,
-       attempts,
-       last_error,
-       sent_at,
-       created_at,
-       updated_at
-     FROM outbound_messages
-     WHERE tenant_id = $1
-       AND status = 'failed'
-     ORDER BY updated_at DESC
-     LIMIT 100`,
-    [req.user.tenantId],
-  );
-
-  res.json(result.rows);
-}));
-
-app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const result = await query(
-    `SELECT *
-     FROM outbound_messages
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const outbound = result.rows[0];
-
-  if (!outbound) {
-    return res.status(404).json({ error: 'Outbound message not found' });
-  }
-
-  if (outbound.status !== 'failed') {
-    return res.status(400).json({
-      error: `Only failed outbound messages can be retried. Current status: ${outbound.status}`,
-    });
-  }
-
-  const maxAttempts = Number(process.env.OUTBOUND_MESSAGE_MAX_RETRY_ATTEMPTS || 5);
-
-  if (Number(outbound.attempts || 0) >= maxAttempts) {
-    return res.status(429).json({
-      error: `Retry limit reached. Attempts: ${outbound.attempts}/${maxAttempts}`,
-    });
-  }
-
-  let contact = null;
-
-  if (outbound.contact_id) {
-    contact = await findContact(outbound.contact_id, req.user.tenantId);
-  }
-
-  if (!contact) {
-    const contactResult = await query(
-      `SELECT *
-       FROM contacts
-       WHERE tenant_id = $1
-         AND wa_id = $2
-       LIMIT 1`,
-      [req.user.tenantId, outbound.to_phone],
-    );
-
-    contact = contactResult.rows[0] || null;
-  }
-
-  if (!contact) {
-    return res.status(404).json({ error: 'Contact not found for outbound retry' });
-  }
-
-  if (contact.opted_out) {
-    return res.status(403).json({
-      error: 'Customer has opted out. Do not retry WhatsApp message to this contact.',
-    });
-  }
-
-  if (!['text', 'template'].includes(outbound.message_type)) {
-    return res.status(400).json({
-      error: `Retry is not supported for outbound message type: ${outbound.message_type}`,
-    });
-  }
-
-  if (outbound.message_type === 'text' && String(outbound.body || '').length > MAX_WHATSAPP_TEXT_LENGTH) {
-    return res.status(400).json({
-      error: `WhatsApp text message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
-    });
-  }
-
-  if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
-    return res.status(400).json({
-      error: '24-hour reply window expired. Text retry is not allowed. Use approved template.',
-    });
-  }
-  if (outbound.message_type === 'template') {
-    await validateTemplateRetryAllowed(
-      req.user.tenantId,
-      outbound.template_name,
-      outbound.language || 'en',
-    );
-  }
-
-  await markOutboundSending(outbound.id, req.user.tenantId);
-
-  try {
-    let waMessageId = null;
-
-    if (outbound.message_type === 'template') {
-      waMessageId = await sendWhatsAppTemplate(
-        contact,
-        outbound.template_name,
-        outbound.language || 'en',
-        req.user.tenantId,
-      );
-    } else {
-      waMessageId = await sendWhatsAppText(
-        contact,
-        outbound.body,
-        req.user.tenantId,
-      );
-    }
-
-    await markOutboundSent(outbound.id, req.user.tenantId, waMessageId);
-
-    const message = await addMessage({
-      tenantId: req.user.tenantId,
-      contactId: contact.id,
-      waMessageId,
-      direction: 'outbound',
-      type: outbound.message_type === 'template' ? 'template' : 'text',
-      body: outbound.body,
-      status: waMessageId ? 'sent' : 'accepted',
-      templateName: outbound.template_name || null,
-      rawPayload: {
-        retriedOutboundMessageId: outbound.id,
-      },
-      normalizedText: outbound.body,
-    });
-
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'outbound_message.retried',
-      entityType: 'outbound_message',
-      entityId: outbound.id,
-      metadata: {
-        contactId: contact.id,
-        messageRowId: message?.id || null,
-        waMessageId,
-      },
-    });
-
-    return res.json({
-      ok: true,
-      id: outbound.id,
-      status: 'sent',
-      waMessageId,
-      message,
-    });
-  } catch (error) {
-    await markOutboundFailed(outbound.id, req.user.tenantId, error);
-
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'outbound_message.retry_failed',
-      entityType: 'outbound_message',
-      entityId: outbound.id,
-      metadata: {
-        error: String(error.response?.data?.error?.message || error.message || error).slice(0, 500),
-      },
-    });
-
-    return res.status(500).json({
-      ok: false,
-      error: error.response?.data?.error?.message || error.message || 'Outbound retry failed',
-    });
-  }
-}));
-
-app.get('/api/system/message-health', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const [
-    webhookStatus,
-    outboundStatus,
-    messageStatus,
-  ] = await Promise.all([
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM webhook_events
-       WHERE tenant_id = $1
-         AND received_at >= now() - interval '7 days'
-       GROUP BY status
-       ORDER BY status`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM outbound_messages
-       WHERE tenant_id = $1
-         AND created_at >= now() - interval '7 days'
-       GROUP BY status
-       ORDER BY status`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT direction, status, COUNT(*)::int AS count
-       FROM messages
-       WHERE tenant_id = $1
-         AND created_at >= now() - interval '7 days'
-       GROUP BY direction, status
-       ORDER BY direction, status`,
-      [req.user.tenantId],
-    ),
-  ]);
-
-  res.json({
-    webhookEvents: webhookStatus.rows,
-    outboundMessages: outboundStatus.rows,
-    messages: messageStatus.rows,
-    window: '7 days',
-    timestamp: new Date().toISOString(),
-  });
-}));
-
-app.get('/api/system/status', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const db = await healthCheck();
-  const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
-  const warnings = validateRuntimeConfig();
-
-  const [webhookCounts, outboundCounts, recentFailures] = await Promise.all([
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM webhook_events
-       WHERE tenant_id = $1
-         AND received_at >= now() - interval '24 hours'
-       GROUP BY status`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT status, COUNT(*)::int AS count
-       FROM outbound_messages
-       WHERE tenant_id = $1
-         AND created_at >= now() - interval '24 hours'
-       GROUP BY status`,
-      [req.user.tenantId],
-    ),
-    query(
-      `SELECT
-         'webhook' AS source,
-         id::text AS id,
-         last_error,
-         received_at AS at
-       FROM webhook_events
-       WHERE tenant_id = $1
-         AND status = 'failed'
-       UNION ALL
-       SELECT
-         'outbound' AS source,
-         id::text AS id,
-         last_error,
-         updated_at AS at
-       FROM outbound_messages
-       WHERE tenant_id = $1
-         AND status = 'failed'
-       ORDER BY at DESC
-       LIMIT 10`,
-      [req.user.tenantId],
-    ),
-  ]);
-
-  res.json({
-    ok: db.ok,
-    database: db,
-    whatsapp: {
-      configured: isWhatsAppConfigured(),
-      phoneNumberMapped: accountStatus.phoneNumberMapped,
-      phoneNumberMappedToCurrentTenant: accountStatus.phoneNumberMappedToCurrentTenant,
-      phoneNumberMappedTenantSlug: accountStatus.phoneNumberMappedTenantSlug,
-      webhookVerifyTokenSet: hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN),
-      webhookAppSecretSet: hasRealValue(process.env.WHATSAPP_APP_SECRET),
-    },
-    counts24h: {
-      webhookEvents: webhookCounts.rows,
-      outboundMessages: outboundCounts.rows,
-    },
-    recentFailures: recentFailures.rows,
-    warnings,
-    uptimeSeconds: Math.round(process.uptime()),
-    timestamp: new Date().toISOString(),
-  });
-}));
-
-app.post('/api/outbound-messages/retry-failed', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const limit = Math.min(Math.max(Number(req.body?.limit || 10), 1), 50);
-  const maxAttempts = Number(process.env.OUTBOUND_MESSAGE_MAX_RETRY_ATTEMPTS || 5);
-
-  const failedResult = await query(
-    `SELECT *
-     FROM outbound_messages
-     WHERE tenant_id = $1
-       AND status = 'failed'
-       AND attempts < $2
-     ORDER BY updated_at ASC
-     LIMIT $3`,
-    [req.user.tenantId, maxAttempts, limit],
-  );
-
-  const summary = {
-    picked: failedResult.rows.length,
-    retried: 0,
-    sent: 0,
-    failed: 0,
-    skipped: 0,
-    errors: [],
-  };
-
-  for (const outbound of failedResult.rows) {
-    try {
-      let contact = null;
-
-      if (outbound.contact_id) {
-        contact = await findContact(outbound.contact_id, req.user.tenantId);
-      }
-
-      if (!contact) {
-        const contactResult = await query(
-          `SELECT *
-           FROM contacts
-           WHERE tenant_id = $1
-             AND wa_id = $2
-           LIMIT 1`,
-          [req.user.tenantId, outbound.to_phone],
-        );
-
-        contact = contactResult.rows[0] || null;
-      }
-
-      if (!contact) {
-        summary.skipped += 1;
-        summary.errors.push({
-          id: outbound.id,
-          reason: 'contact_not_found',
-        });
-        continue;
-      }
-
-      if (contact.opted_out) {
-        summary.skipped += 1;
-        summary.errors.push({
-          id: outbound.id,
-          reason: 'contact_opted_out',
-        });
-        continue;
-      }
-
-      if (!['text', 'template'].includes(outbound.message_type)) {
-        summary.skipped += 1;
-        summary.errors.push({
-          id: outbound.id,
-          reason: 'unsupported_message_type',
-          messageType: outbound.message_type,
-        });
-        continue;
-      }
-
-      if (outbound.message_type === 'text' && String(outbound.body || '').length > MAX_WHATSAPP_TEXT_LENGTH) {
-        summary.skipped += 1;
-        summary.errors.push({
-          id: outbound.id,
-          reason: 'text_too_long',
-        });
-        continue;
-      }
-
-      if (outbound.message_type === 'text' && !isReplyWindowOpen(contact)) {
-        summary.skipped += 1;
-        summary.errors.push({
-          id: outbound.id,
-          reason: 'reply_window_expired',
-        });
-        continue;
-      }
-
-      if (outbound.message_type === 'template') {
-        try {
-          await validateTemplateRetryAllowed(
-            req.user.tenantId,
-            outbound.template_name,
-            outbound.language || 'en',
-          );
-        } catch (error) {
-          summary.skipped += 1;
-          summary.errors.push({
-            id: outbound.id,
-            reason: 'template_not_active',
-            error: String(error.message || error).slice(0, 300),
-          });
-          continue;
-        }
-      }
-
-      await markOutboundSending(outbound.id, req.user.tenantId);
-      summary.retried += 1;
-
-      let waMessageId = null;
-
-      if (outbound.message_type === 'template') {
-        waMessageId = await sendWhatsAppTemplate(
-          contact,
-          outbound.template_name,
-          outbound.language || 'en',
-          req.user.tenantId,
-        );
-      } else {
-        waMessageId = await sendWhatsAppText(
-          contact,
-          outbound.body,
-          req.user.tenantId,
-        );
-      }
-
-      await markOutboundSent(outbound.id, req.user.tenantId, waMessageId);
-
-      await addMessage({
-        tenantId: req.user.tenantId,
-        contactId: contact.id,
-        waMessageId,
-        direction: 'outbound',
-        type: outbound.message_type === 'template' ? 'template' : 'text',
-        body: outbound.body,
-        status: waMessageId ? 'sent' : 'accepted',
-        templateName: outbound.template_name || null,
-        rawPayload: {
-          batchRetriedOutboundMessageId: outbound.id,
-        },
-        normalizedText: outbound.body,
-      });
-
-      summary.sent += 1;
-    } catch (error) {
-      summary.failed += 1;
-
-      await markOutboundFailed(outbound.id, req.user.tenantId, error);
-
-      summary.errors.push({
-        id: outbound.id,
-        reason: String(error.response?.data?.error?.message || error.message || error).slice(0, 300),
-      });
-    }
-  }
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'outbound_messages.retry_failed_batch',
-    entityType: 'outbound_message',
-    entityId: null,
-    metadata: summary,
-  });
-
-  res.json({
-    ok: true,
-    ...summary,
-  });
-}));
-
-// =========================================================
-// ROUTES — DASHBOARD
-// =========================================================
-
-app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
-  const params = [req.user.tenantId];
-  const where = ['c.tenant_id = $1'];
-  if (!canMonitor(req.user)) {
-    params.push(req.user.id);
-    where.push(`c.assigned_to = $${params.length}`);
-  }
-  const scopeWhere = `WHERE ${where.join(' AND ')}`;
-  const summary = await query(
-    `SELECT
-      COUNT(*)::int AS total_conversations,
-      COUNT(*) FILTER (WHERE c.assigned_to IS NULL)::int AS unassigned,
-      COUNT(*) FILTER (WHERE c.last_inbound_at >= now() - interval '24 hours')::int AS open_windows,
-      COUNT(*) FILTER (WHERE c.last_inbound_at IS NULL OR c.last_inbound_at < now() - interval '24 hours')::int AS expired_windows
-     FROM contacts c ${scopeWhere}`,
-    params,
-  );
-  const labels = await query(
-    `SELECT c.label, COUNT(*)::int AS count FROM contacts c ${scopeWhere} GROUP BY c.label ORDER BY count DESC`,
-    params,
-  );
-  res.json({ ...summary.rows[0], labels: labels.rows });
-}));
-
-// =========================================================
-// ROUTES — CONVERSATIONS / CONTACTS
-// =========================================================
-
-app.get('/api/conversations', requireAuth, asyncHandler(async (req, res) => {
-  const { label, assigned, q, window } = req.query;
-  const params = [req.user.tenantId];
-  const where = ['c.tenant_id = $1'];
-  if (!canMonitor(req.user)) {
-    params.push(req.user.id);
-    where.push(`c.assigned_to = $${params.length}`);
-  }
-
-  if (label && label !== 'all') {
-    params.push(label);
-    where.push(`c.label = $${params.length}`);
-  }
-
-  if (assigned === 'unassigned') {
-    if (!canMonitor(req.user)) {
-      return res.status(403).json({ error: 'Only manager/admin can view unassigned conversations' });
-    }
-
-    where.push('c.assigned_to IS NULL');
-  }
-  if (q) { params.push(`%${q}%`); where.push(`(c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length} OR c.company ILIKE $${params.length})`); }
-  if (window === 'open') where.push(`c.last_inbound_at >= now() - interval '24 hours'`);
-  if (window === 'expired') where.push(`(c.last_inbound_at IS NULL OR c.last_inbound_at < now() - interval '24 hours')`);
-  const result = await query(
-    `SELECT c.*, u.name AS assigned_name,
-      m.body AS last_message, m.created_at AS last_message_at,
-      CASE WHEN c.last_inbound_at >= now() - interval '24 hours' THEN true ELSE false END AS reply_window_open,
-      COALESCE(unread.count, 0) AS unread_count
-     FROM contacts c
-     LEFT JOIN users u ON u.id = c.assigned_to AND u.tenant_id = c.tenant_id
-     LEFT JOIN LATERAL (SELECT body, created_at FROM messages WHERE contact_id = c.id AND tenant_id = c.tenant_id ORDER BY created_at DESC LIMIT 1) m ON true
-     LEFT JOIN LATERAL (SELECT COUNT(*)::int AS count FROM messages WHERE contact_id = c.id AND tenant_id = c.tenant_id AND direction = 'inbound' AND status = 'received') unread ON true
-     WHERE ${where.join(' AND ')}
-     ORDER BY COALESCE(m.created_at, c.updated_at) DESC`,
-    params,
-  );
-  res.json(result.rows);
-}));
-
-app.get('/api/contacts/:id/assignment-history', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  const result = await query(
-    `SELECT ah.*, from_user.name AS from_user_name, to_user.name AS to_user_name, changed_user.name AS changed_by_name
-     FROM assignment_history ah
-     LEFT JOIN users from_user ON from_user.id = ah.from_user_id AND from_user.tenant_id = ah.tenant_id
-     LEFT JOIN users to_user ON to_user.id = ah.to_user_id AND to_user.tenant_id = ah.tenant_id
-     LEFT JOIN users changed_user ON changed_user.id = ah.changed_by AND changed_user.tenant_id = ah.tenant_id
-     WHERE ah.contact_id = $1 AND ah.tenant_id = $2
-     ORDER BY ah.created_at DESC`,
-    [req.params.id, req.user.tenantId],
-  );
-  res.json(result.rows);
-}));
-
-app.get('/api/contacts/:id/timeline', requireAuth, asyncHandler(async (req, res) => {
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
-  const [messageRows, quoteRows, orderRows, auditRows] = await Promise.all([
-    query('SELECT id, direction, type, body, status, created_at, status_updated_at FROM messages WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at DESC LIMIT 25', [req.params.id, req.user.tenantId]),
-    query('SELECT id, quote_no, status, amount, created_at FROM quotations WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at DESC LIMIT 20', [req.params.id, req.user.tenantId]),
-    query('SELECT id, order_no, status, payment_status, dispatch_status, amount, created_at FROM sales_orders WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at DESC LIMIT 20', [req.params.id, req.user.tenantId]),
-    query(
-      `SELECT ae.*, u.name AS actor_name FROM audit_events ae
-       LEFT JOIN users u ON u.id = ae.actor_user_id AND u.tenant_id = ae.tenant_id
-       WHERE ae.tenant_id = $2 AND ((ae.entity_type = 'contact' AND ae.entity_id = $1) OR (ae.metadata->>'contactId' = $1::text))
-       ORDER BY ae.created_at DESC LIMIT 25`,
-      [req.params.id, req.user.tenantId],
-    ),
-  ]);
-  const rows = [
-    ...messageRows.rows.map((item) => ({ kind: 'message', at: item.created_at, title: `${item.direction} ${item.type}`, text: item.body, status: item.status })),
-    ...quoteRows.rows.map((item) => ({ kind: 'quotation', at: item.created_at, title: item.quote_no, text: `Amount ${item.amount}`, status: item.status })),
-    ...orderRows.rows.map((item) => ({ kind: 'order', at: item.created_at, title: item.order_no, text: `Pay ${item.payment_status} / Dispatch ${item.dispatch_status}`, status: item.status })),
-    ...auditRows.rows.map((item) => ({ kind: 'audit', at: item.created_at, title: item.action, text: item.actor_name || 'System', status: item.entity_type })),
-  ];
-  res.json(rows.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 50));
-}));
-
-app.get('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req, res) => {
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
-  const result = await query(
-    `SELECT id, tenant_id, contact_id, wa_message_id, direction, type, body, status, template_name,
-            caption, media_id, media_url, mime_type, file_name, file_size,
-            interactive_payload, button_payload, status_updated_at, created_at
-     FROM messages WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at ASC`,
-    [req.params.id, req.user.tenantId],
-  );
-  res.json(result.rows);
-}));
-
-app.post('/api/conversations/:id/read', requireAuth, asyncHandler(async (req, res) => {
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
-  const result = await query(
-    `UPDATE messages SET status = 'read' WHERE contact_id = $1 AND tenant_id = $2 AND direction = 'inbound' AND status = 'received' RETURNING id`,
-    [req.params.id, req.user.tenantId],
-  );
-  res.json({ ok: true, updated: result.rowCount });
-}));
-
-app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { name, company, stage, owner, notes, label, assigned_to, assignment_reason } = req.body;
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
-  if (assigned_to !== undefined && !canMonitor(req.user)) return res.status(403).json({ error: 'Only manager/admin can assign' });
-
-  if (stage !== undefined) {
-    const settings = await getAppSettings(req.user.tenantId);
-    const allowedStages = new Set((settings.stages || DEFAULT_APP_SETTINGS.stages).map((item) => String(item).trim().toLowerCase()));
-    const cleanStage = String(stage || '').trim().toLowerCase();
-
-    if (!allowedStages.has(cleanStage)) {
-      return res.status(400).json({ error: 'Invalid contact stage' });
-    }
-  }
-
-  const shouldUpdateAssignment = assigned_to !== undefined;
-  const assignedToValue = assigned_to === '' ? null : assigned_to;
-  if (assignedToValue) {
-    const assignedUser = await query(
-      'SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND active = true LIMIT 1',
-      [assignedToValue, req.user.tenantId],
-    );    if (!assignedUser.rows[0]) return res.status(400).json({ error: 'Assigned user not found for this company' });
-  }
-  const before = await query('SELECT assigned_to FROM contacts WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
-  const result = await query(
-    `UPDATE contacts
-     SET name = COALESCE($2, name), company = COALESCE($3, company), stage = COALESCE($4, stage),
-         owner = COALESCE($5, owner), notes = COALESCE($6, notes), label = COALESCE($7, label),
-         assigned_to = CASE WHEN $8 THEN $9::uuid ELSE assigned_to END, updated_at = now()
-     WHERE id = $1 AND tenant_id = $10
-     RETURNING *`,
-    [req.params.id, name, company, stage, owner, notes, label, shouldUpdateAssignment, assignedToValue, req.user.tenantId],
-  );
-  await recordAssignmentHistory({ tenantId: req.user.tenantId, contactId: req.params.id, fromUserId: before.rows[0]?.assigned_to, toUserId: result.rows[0]?.assigned_to, changedBy: req.user.id, reason: assignment_reason });
-  res.json(result.rows[0]);
-}));
-
-app.get('/api/contacts/opt-outs', requireAuth, async (req, res) => {
-  try {
-    const tenantId = req.user?.tenantId;
-    const role = req.user?.role;
-
-    if (!tenantId) {
-      return res.status(401).json({ error: 'Tenant session missing' });
-    }
-
-    if (!['admin', 'manager'].includes(role)) {
-      return res.status(403).json({ error: 'Admin/manager access required' });
-    }
-
-    const result = await query(
-      `
-      SELECT
-        id,
-        name,
-        phone,
-        wa_id,
-        company,
-        label,
-        stage,
-        opted_out,
-        opted_out_at,
-        opted_out_reason,
-        updated_at,
-        last_inbound_at
-      FROM contacts
-      WHERE tenant_id = $1
-        AND opted_out = true
-      ORDER BY opted_out_at DESC NULLS LAST, updated_at DESC
-      LIMIT 500
-      `,
-      [tenantId]
-    );
-
-    return res.json(result.rows);
-  } catch (error) {
-    console.error('Load opt-out contacts failed:', {
-      message: error.message,
-      code: error.code || null,
-    });
-
-    return res.status(500).json({
-      error: 'Unable to load opt-out contacts',
-    });
-  }
-});
-
-app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
-  try {
-    const tenantId = req.user?.tenantId;
-    const userId = req.user?.id;
-    const role = req.user?.role;
-    const contactId = req.params.id;
-    const optedOut = Boolean(req.body?.optedOut);
-    const reason = String(req.body?.reason || '').trim();
-
-    if (!tenantId || !userId) {
-      return res.status(401).json({ error: 'Tenant session missing' });
-    }
-
-    if (!['admin', 'manager'].includes(role)) {
-      return res.status(403).json({ error: 'Admin/manager access required' });
-    }
-
-    const existingResult = await query(
-      `
-      SELECT id, name, phone, opted_out
-      FROM contacts
-      WHERE id = $1
-        AND tenant_id = $2
-      LIMIT 1
-      `,
-      [contactId, tenantId]
-    );
-
-    const existingContact = existingResult.rows[0];
-
-    if (!existingContact) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-
-    const updateResult = await query(
-      `
-      UPDATE contacts
-      SET
-        opted_out = $1,
-        opted_out_at = CASE
-          WHEN $1 = true THEN COALESCE(opted_out_at, now())
-          ELSE NULL
-        END,
-        opted_out_reason = CASE
-          WHEN $1 = true THEN NULLIF($2, '')
-          ELSE NULL
-        END,
-        updated_at = now()
-      WHERE id = $3
-        AND tenant_id = $4
-      RETURNING
-        id,
-        name,
-        phone,
-        wa_id,
-        company,
-        label,
-        stage,
-        opted_out,
-        opted_out_at,
-        opted_out_reason,
-        updated_at,
-        last_inbound_at
-      `,
-      [optedOut, reason, contactId, tenantId]
-    );
-
-    const updatedContact = updateResult.rows[0];
-
-    await query(
-      `
-      INSERT INTO audit_events (
-        tenant_id,
-        actor_user_id,
-        action,
-        entity_type,
-        entity_id,
-        metadata
-      )
-      VALUES ($1, $2, $3, 'contact', $4, $5::jsonb)
-      `,
-      [
-        tenantId,
-        userId,
-        optedOut ? 'contact_manual_opt_out' : 'contact_manual_opt_in',
-        contactId,
-        JSON.stringify({
-          phone: existingContact.phone,
-          name: existingContact.name,
-          previousOptedOut: existingContact.opted_out,
-          newOptedOut: optedOut,
-          reason: optedOut ? reason : '',
-        }),
-      ]
-    );
-
-    return res.json(updatedContact);
-  } catch (error) {
-    console.error('Update contact opt-out failed:', {
-      message: error.message,
-      code: error.code || null,
-    });
-
-    return res.status(500).json({
-      error: 'Unable to update contact opt-out status',
-    });
-  }
-});
-
-app.post('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req, res) => {
-  const { text, templateName, language } = req.body;
-
-  const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-
-  if (!canAccessContact(req.user, contact)) {
-    return res.status(403).json({ error: 'Conversation assigned to another user' });
-  }
-
-  if (contact.opted_out) {
-    return res.status(403).json({
-      error: 'Customer has opted out. Do not send WhatsApp messages to this contact.',
-    });
-  }
-
-  const cleanText = String(text || '').trim();
-  const cleanTemplateName = String(templateName || '').trim();
-  const cleanLanguage = String(language || 'en').trim() || 'en';
-
-  if (!cleanText && !cleanTemplateName) {
-    return res.status(400).json({ error: 'Message text or template is required' });
-  }
-
-  if (cleanText && !cleanTemplateName && cleanText.length > MAX_WHATSAPP_TEXT_LENGTH) {
-    return res.status(400).json({
-      error: `WhatsApp text message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
-    });
-  }
-
-  if (cleanText && cleanTemplateName) {
-    return res.status(400).json({ error: 'Send either text or template, not both' });
-  }
-
-  const replyWindowOpen = isReplyWindowOpen(contact);
-
-  if (!replyWindowOpen && !cleanTemplateName) {
-    return res.status(400).json({
-      error: '24-hour reply window expired. Use an approved WhatsApp template.',
-    });
-  }
-
-  let templateRecord = null;
-
-  if (cleanTemplateName) {
-    const templateResult = await query(
-      `SELECT id, name, language, body
-       FROM whatsapp_templates
-       WHERE tenant_id = $1
-         AND name = $2
-         AND language = $3
-         AND active = true
-       LIMIT 1`,
-      [req.user.tenantId, cleanTemplateName, cleanLanguage],
-    );
-
-    templateRecord = templateResult.rows[0];
-
-    if (!templateRecord) {
-      return res.status(400).json({ error: 'Template is not active or not found for this company' });
-    }
-  }
-
-  let waMessageId = null;
-  let body = cleanText;
-  let type = 'text';
-
-  const outboundPayload = cleanTemplateName
-    ? {
-        messaging_product: 'whatsapp',
-        to: contact.wa_id,
-        type: 'template',
-        template: {
-          name: cleanTemplateName,
-          language: { code: cleanLanguage },
-        },
-      }
-    : {
-        messaging_product: 'whatsapp',
-        to: contact.wa_id,
-        type: 'text',
-        text: { body: cleanText },
-      };
-
-  const outboundRecord = await createOutboundMessageRecord({
-    tenantId: req.user.tenantId,
-    contactId: contact.id,
-    toPhone: contact.wa_id || contact.phone,
-    messageType: cleanTemplateName ? 'template' : 'text',
-    templateName: cleanTemplateName || null,
-    language: cleanTemplateName ? cleanLanguage : null,
-    body: cleanTemplateName ? `[Template] ${cleanTemplateName}` : cleanText,
-    payload: outboundPayload,
-    createdBy: req.user.id,
-  });
-
-  await markOutboundSending(outboundRecord?.id, req.user.tenantId);
-
-  try {
-    if (cleanTemplateName) {
-      waMessageId = await sendWhatsAppTemplate(contact, cleanTemplateName, cleanLanguage, req.user.tenantId);
-      body = `[Template] ${cleanTemplateName}`;
-      type = 'template';
-    } else {
-      waMessageId = await sendWhatsAppText(contact, cleanText, req.user.tenantId);
-    }
-
-    await markOutboundSent(outboundRecord?.id, req.user.tenantId, waMessageId);
-  } catch (error) {
-    await markOutboundFailed(outboundRecord?.id, req.user.tenantId, error);
-
-    return res.status(400).json({
-      error: error.response?.data?.error?.message || error.message || 'WhatsApp message failed',
-      outboundMessageId: outboundRecord?.id || null,
-    });
-  }
-
-  const status = waMessageId ? 'sent' : 'queued-local';
-
-  if (!waMessageId && !shouldAllowLocalMessageQueue()) {
-    return res.status(400).json({ error: 'WhatsApp message was not sent.' });
-  }
-
-  const message = await addMessage({
-    tenantId: req.user.tenantId,
-    contactId: contact.id,
-    waMessageId,
-    direction: 'outbound',
-    type,
-    body,
-    status,
-    templateName: cleanTemplateName || null,
-    normalizedText: body,
-  });
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'message.sent',
-    entityType: 'message',
-    entityId: message?.id,
-    metadata: {
-      contactId: contact.id,
-      status,
-      type,
-      replyWindowOpen,
-      templateId: templateRecord?.id || null,
-    },
-  });
-
-  res.status(201).json(message);
-}));
-
-// =========================================================
-// ROUTES — TEMPLATES
-// =========================================================
-
-app.get('/api/templates', requireAuth, asyncHandler(async (req, res) => {
-  const result = await query(
-    `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
-     FROM whatsapp_templates
-     WHERE tenant_id = $1
-       AND active = true
-     ORDER BY name, language`,
-    [req.user.tenantId],
-  );
-
-  res.json(result.rows);
-}));
-
-app.get('/api/templates/manage', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const result = await query(
-    `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
-     FROM whatsapp_templates
-     WHERE tenant_id = $1
-     ORDER BY active DESC, name, language`,
-    [req.user.tenantId],
-  );
-
-  res.json(result.rows);
-}));
-
-app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const cleanName = String(req.body?.name || '').trim().toLowerCase();
-  const cleanLanguage = String(req.body?.language || 'en').trim() || 'en';
-  const cleanBody = String(req.body?.body || '').trim();
-  const active = req.body?.active === undefined ? true : Boolean(req.body.active);
-
-  if (!cleanName || !cleanBody) {
-    return res.status(400).json({ error: 'Template name and body required' });
-  }
-
-  if (!/^[a-z0-9_]{2,80}$/.test(cleanName)) {
-    return res.status(400).json({
-      error: 'Template name should match Meta template name format: lowercase letters, numbers, underscore only',
-    });
-  }
-
-  if (!/^[a-z]{2,3}(?:_[a-z]{2})?$/i.test(cleanLanguage)) {
-    return res.status(400).json({ error: 'Invalid language code. Example: en, en_US, hi' });
-  }
-
-  if (cleanBody.length > 1000) {
-    return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
-  }
-
-  const result = await query(
-    `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active, category, meta_status)
-     VALUES ($1, $2, $3, $4, $5, 'manual', 'manual')
-     ON CONFLICT (tenant_id, name, language)
-     DO UPDATE SET body = EXCLUDED.body,
-                   active = EXCLUDED.active,
-                   meta_status = COALESCE(NULLIF(whatsapp_templates.meta_status, ''), 'manual')
-     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
-    [req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'template.saved',
-    entityType: 'whatsapp_template',
-    entityId: result.rows[0].id,
-    metadata: {
-      name: cleanName,
-      language: cleanLanguage,
-      active,
-    },
-  });
-
-  res.status(201).json(result.rows[0]);
-}));
-
-app.post('/api/templates/sync-meta', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const config = await getWhatsAppTemplateSyncConfig(req.user.tenantId);
-
-  if (!config) {
-    return res.status(400).json({
-      error: 'Meta template sync is not configured. Connect WhatsApp through Embedded Signup or set WHATSAPP_WABA_ID + WHATSAPP_ACCESS_TOKEN for local/demo.',
-    });
-  }
-
-  const response = await axios.get(
-    `https://graph.facebook.com/${config.apiVersion}/${config.wabaId}/message_templates`,
-    {
-      headers: { Authorization: `Bearer ${config.accessToken}` },
-      params: {
-        fields: 'name,language,status,category,components',
-        limit: 100,
-      },
-      timeout: 15000,
-    },
-  );
-
-  const templates = Array.isArray(response.data?.data) ? response.data.data : [];
-  const synced = [];
-
-  for (const template of templates) {
-    const cleanName = String(template.name || '').trim().toLowerCase();
-    const cleanLanguage = String(template.language || 'en').trim() || 'en';
-
-    if (!cleanName || !/^[a-z0-9_]{2,80}$/.test(cleanName)) {
-      continue;
-    }
-
-    const body = extractMetaTemplateBody(template) || `[${cleanName}]`;
-    const metaStatus = normalizeMetaTemplateStatus(template.status);
-    const category = normalizeMetaTemplateCategory(template.category);
-    const active = metaStatus === 'approved';
-
-    const result = await query(
-      `INSERT INTO whatsapp_templates
-         (tenant_id, name, language, body, active, category, meta_status, last_synced_at, meta_payload)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
-       ON CONFLICT (tenant_id, name, language)
-       DO UPDATE SET body = EXCLUDED.body,
-                     active = EXCLUDED.active,
-                     category = EXCLUDED.category,
-                     meta_status = EXCLUDED.meta_status,
-                     last_synced_at = now(),
-                     meta_payload = EXCLUDED.meta_payload
-       RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
-      [
-        req.user.tenantId,
-        cleanName,
-        cleanLanguage,
-        body.slice(0, 1000),
-        active,
-        category,
-        metaStatus,
-        template,
-      ],
-    );
-
-    synced.push(result.rows[0]);
-  }
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'template.synced_from_meta',
-    entityType: 'whatsapp_template',
-    metadata: {
-      syncedCount: synced.length,
-      metaCount: templates.length,
-      source: config.source,
-    },
-  });
-
-  res.json({
-    ok: true,
-    syncedCount: synced.length,
-    metaCount: templates.length,
-    templates: synced,
-  });
-}));
-
-app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const existingResult = await query(
-    `SELECT id, name, language, body, active
-     FROM whatsapp_templates
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const existing = existingResult.rows[0];
-
-  if (!existing) {
-    return res.status(404).json({ error: 'Template not found' });
-  }
-
-  const cleanName = req.body?.name === undefined
-    ? existing.name
-    : String(req.body.name || '').trim().toLowerCase();
-
-  const cleanLanguage = req.body?.language === undefined
-    ? existing.language
-     : String(req.body.language || 'en').trim() || 'en';
-
-  const cleanBody = req.body?.body === undefined
-    ? existing.body
-    : String(req.body.body || '').trim();
-
-  const active = req.body?.active === undefined ? existing.active : Boolean(req.body.active);
-
-  if (!cleanName || !cleanBody) {
-    return res.status(400).json({ error: 'Template name and body required' });
-  }
-
-  if (!/^[a-z0-9_]{2,80}$/.test(cleanName)) {
-    return res.status(400).json({
-      error: 'Template name should match Meta template name format: lowercase letters, numbers, underscore only',
-    });
-  }
-
-  if (!/^[a-z]{2,3}(?:_[a-z]{2})?$/i.test(cleanLanguage)) {
-    return res.status(400).json({ error: 'Invalid language code. Example: en, en_US, hi' });
-  }
-
-  if (cleanBody.length > 1000) {
-    return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
-  }
-
-    const duplicateTemplate = await query(
-    `SELECT id
-     FROM whatsapp_templates
-     WHERE tenant_id = $1
-       AND name = $2
-       AND language = $3
-       AND id <> $4
-     LIMIT 1`,
-    [req.user.tenantId, cleanName, cleanLanguage, req.params.id],
-  );
-
-  if (duplicateTemplate.rows[0]) {
-    return res.status(409).json({ error: 'Template with this name and language already exists' });
-  }
-
-  const result = await query(
-    `UPDATE whatsapp_templates
-     SET name = $3,
-         language = $4,
-         body = $5,
-         active = $6
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
-    [req.params.id, req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
-  );
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'template.updated',
-    entityType: 'whatsapp_template',
-    entityId: result.rows[0].id,
-    metadata: {
-      name: cleanName,
-      language: cleanLanguage,
-      active,
-    },
-  });
-
-  res.json(result.rows[0]);
-}));
-
-// =========================================================
-// ROUTES — ENQUIRY DRAFTS
-// =========================================================
-
-app.get('/api/enquiry-drafts', requireAuth, asyncHandler(async (req, res) => {
-  const params = [req.user.tenantId];
-  const where = ['e.tenant_id = $1'];
-  if (!canMonitor(req.user)) {
-    params.push(req.user.id);
-    where.push(`c.assigned_to = $${params.length}`);
-  }
-  const result = await query(
-    `SELECT e.*, c.name AS contact_name, c.phone
-     FROM enquiry_drafts e
-     LEFT JOIN contacts c ON c.id = e.contact_id AND c.tenant_id = e.tenant_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY e.created_at DESC`,
-    params,
-  );
-  res.json(result.rows);
-}));
-
-app.post('/api/enquiry-drafts/:id/create-erp', requireAuth, asyncHandler(async (req, res) => {
-  const draft = await getEnquiryDraftById(req.params.id, req.user.tenantId);
-  if (!draft) return res.status(404).json({ error: 'Enquiry draft not found' });
-  if (!(await canAccessDraft(req.user, draft))) return res.status(403).json({ error: 'Enquiry draft assigned to another user' });
-  const result = await query(
-    `UPDATE enquiry_drafts SET status = 'erp_created', erp_enquiry_no = COALESCE(erp_enquiry_no, $2), reviewed_by = $3
-     WHERE id = $1 AND tenant_id = $4
-     RETURNING *`,
-    [req.params.id, `ERP-WA-${Date.now()}`, req.user.id, req.user.tenantId],
-  );
-  res.json(result.rows[0]);
-}));
-
-app.post('/api/enquiry-drafts/:id/create-quote', requireAuth, asyncHandler(async (req, res) => {
-  const draft = await getEnquiryDraftById(req.params.id, req.user.tenantId);
-  if (!draft) return res.status(404).json({ error: 'Enquiry draft not found' });
-  if (!(await canAccessDraft(req.user, draft))) return res.status(403).json({ error: 'Enquiry draft assigned to another user' });
-  const rate = toFiniteNumber(req.body.rate, 0);
-  const item = normalizeSalesItem({ description: [draft.shape, draft.grade, draft.size].filter(Boolean).join(' ') || 'WhatsApp enquiry item', grade: draft.grade, size: draft.size, shape: draft.shape, quantity: draft.quantity, rate });
-  const quote = await createQuotation({ tenantId: req.user.tenantId, contactId: draft.contact_id, notes: req.body.notes || `Created from WhatsApp enquiry ${draft.id}`, items: [item], source: 'WhatsApp Auto', validUntil: req.body.valid_until });
-  await query('UPDATE enquiry_drafts SET status = $2, reviewed_by = $3 WHERE id = $1 AND tenant_id = $4', [draft.id, 'quoted', req.user.id, req.user.tenantId]);
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'quotation.created_from_draft', entityType: 'quotation', entityId: quote.id, metadata: { draftId: draft.id, contactId: draft.contact_id } });
-  res.status(201).json(quote);
-}));
-
-// =========================================================
-// ROUTES — PRODUCTS
-// =========================================================
-
-app.get('/api/products', requireAuth, asyncHandler(async (req, res) => {
-  const { q, active } = req.query;
-  const params = [req.user.tenantId];
-  const where = ['tenant_id = $1'];
-  if (q) { params.push(`%${q}%`); where.push(`(sku ILIKE $${params.length} OR name ILIKE $${params.length} OR category ILIKE $${params.length} OR grade ILIKE $${params.length} OR size ILIKE $${params.length} OR shape ILIKE $${params.length})`); }
-  if (active === 'true' || active === 'false') { params.push(active === 'true'); where.push(`active = $${params.length}`); }
-  const result = await query(`SELECT * FROM products WHERE ${where.join(' AND ')} ORDER BY active DESC, created_at DESC LIMIT 500`, params);
-  res.json(result.rows);
-}));
-
-app.post('/api/products', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const product = normalizeProduct(req.body);
-  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
-  const existing = await query('SELECT id FROM products WHERE tenant_id = $1 AND lower(sku) = lower($2) LIMIT 1', [req.user.tenantId, product.sku]);
-  if (existing.rows[0]) return res.status(409).json({ error: 'Product SKU already exists' });
-  const result = await query(
-    'INSERT INTO products (tenant_id, sku, name, category, grade, size, shape, unit, price, stock_qty, active, custom_fields) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *',
-    [req.user.tenantId, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
-  );
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'product.created', entityType: 'product', entityId: result.rows[0].id, metadata: { sku: product.sku } });
-  res.status(201).json(result.rows[0]);
-}));
-
-app.patch('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const product = normalizeProduct(req.body);
-  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
-  
-    const duplicate = await query(
-    `SELECT id
-     FROM products
-     WHERE tenant_id = $1
-       AND lower(sku) = lower($2)
-       AND id <> $3
-     LIMIT 1`,
-    [req.user.tenantId, product.sku, req.params.id],
-  );
-
-  if (duplicate.rows[0]) {
-    return res.status(409).json({ error: 'Product SKU already exists' });
-  }
-
-  const result = await query(
-    'UPDATE products SET sku=$3, name=$4, category=$5, grade=$6, size=$7, shape=$8, unit=$9, price=$10, stock_qty=$11, active=$12, custom_fields=$13 WHERE id=$1 AND tenant_id=$2 RETURNING *',
-    [req.params.id, req.user.tenantId, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
-  );
-  if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'product.updated', entityType: 'product', entityId: result.rows[0].id, metadata: { sku: product.sku } });
-  res.json(result.rows[0]);
-}));
-
-app.post('/api/products/import', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-
-  if (!rows.length) {
-    return res.status(400).json({ error: 'CSV rows required' });
-  }
-
-  if (rows.length > 1000) {
-    return res.status(400).json({ error: 'Maximum 1000 products can be imported at once' });
-  }
-  let inserted = 0;
-  let updated = 0;
-  const skipped = [];
-  for (const [index, row] of rows.entries()) {
-    const product = productFromImportRow(row);
-    if (!product.sku || !product.name) { skipped.push({ row: index + 1, reason: 'SKU and product name required' }); continue; }
-    const result = await query(
-      `INSERT INTO products (tenant_id, sku, name, category, grade, size, shape, unit, price, stock_qty, active, custom_fields)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       ON CONFLICT (tenant_id, sku)
-       DO UPDATE SET name=EXCLUDED.name, category=EXCLUDED.category, grade=EXCLUDED.grade, size=EXCLUDED.size,
-                     shape=EXCLUDED.shape, unit=EXCLUDED.unit, price=EXCLUDED.price, stock_qty=EXCLUDED.stock_qty,
-                     active=EXCLUDED.active, custom_fields=EXCLUDED.custom_fields
-       RETURNING (xmax = 0) AS inserted`,
-      [req.user.tenantId, product.sku, product.name, product.category, product.grade, product.size, product.shape, product.unit, product.price, product.stock_qty, product.active, product.custom_fields],
-    );
-    if (result.rows[0]?.inserted) inserted += 1;
-    else updated += 1;
-  }
-  res.json({ inserted, updated, skipped });
-}));
-
-app.delete('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  const linked = await query(
-    `SELECT
-       EXISTS (
-         SELECT 1 FROM quotation_items
-         WHERE tenant_id = $1 AND product_id = $2
-       ) AS used_in_quotation,
-       EXISTS (
-         SELECT 1 FROM sales_order_items
-         WHERE tenant_id = $1 AND product_id = $2
-       ) AS used_in_order`,
-    [req.user.tenantId, req.params.id],
-  );
-
-  if (linked.rows[0]?.used_in_quotation || linked.rows[0]?.used_in_order) {
-    return res.status(409).json({
-      error: 'Product is used in quotation/order history. Deactivate it instead of deleting.',
-    });
-  }
-
-  const result = await query(
-    'DELETE FROM products WHERE id = $1 AND tenant_id = $2 RETURNING id',
-    [req.params.id, req.user.tenantId],
-  );
-  if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'product.deleted', entityType: 'product', entityId: result.rows[0].id, metadata: {} });
-  res.json({ ok: true });
-}));
-
-// =========================================================
-// ROUTES — QUOTATIONS
-// =========================================================
-
-app.get('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
-  const params = [req.user.tenantId];
-  const where = ['q.tenant_id = $1'];
-  if (!canMonitor(req.user)) { params.push(req.user.id); where.push(`c.assigned_to = $${params.length}`); }
-  const result = await query(
-    `SELECT q.*, c.name AS contact_name, c.phone,
-      COALESCE(json_agg(qi ORDER BY qi.created_at) FILTER (WHERE qi.id IS NOT NULL), '[]') AS items
-     FROM quotations q
-     LEFT JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id
-     LEFT JOIN quotation_items qi ON qi.quotation_id = q.id AND qi.tenant_id = q.tenant_id
-     WHERE ${where.join(' AND ')}
-     GROUP BY q.id, c.name, c.phone
-     ORDER BY q.created_at DESC`,
-    params,
-  );
-  res.json(result.rows);
-}));
-
-app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
-  if (!(await canAccessContactId(req.user, req.body.contact_id))) return res.status(403).json({ error: 'Quotation contact assigned to another user' });
-  const items = Array.isArray(req.body.items) && req.body.items.length
-    ? req.body.items
-    : [{ description: req.body.notes || 'Manual quotation item', quantity: 1, rate: toFiniteNumber(req.body.amount, 0) }];
-  const quote = await createQuotation({ tenantId: req.user.tenantId, contactId: req.body.contact_id, notes: req.body.notes, items, source: req.body.source || 'WhatsApp', validUntil: req.body.valid_until });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'quotation.created', entityType: 'quotation', entityId: quote.id, metadata: { contactId: req.body.contact_id || null } });
-  res.status(201).json(quote);
-}));
-
-app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const settings = await getAppSettings(req.user.tenantId);
-
-  if (!settings.quoteApprovalEnabled) {
-    return res.status(400).json({ error: 'Quotation approval workflow is disabled in Settings.' });
-  }
-
-  const managerPhone = String(settings.quoteApprovalManagerPhone || '').replace(/\D/g, '');
-
-  if (managerPhone.length < 11 || managerPhone.length > 15) {
-    return res.status(400).json({
-      error: 'Manager WhatsApp number is missing/invalid. Add it in Settings > Quotation Approval Workflow.',
-    });
-  }
-
-  const templateName = String(settings.quoteApprovalTemplateName || '').trim().toLowerCase();
-  const templateLanguage = String(settings.quoteApprovalTemplateLanguage || 'en').trim() || 'en';
-
-  if (!templateName) {
-    return res.status(400).json({ error: 'Manager approval template name is missing in Settings.' });
-  }
-
-  const templateResult = await query(
-    `SELECT id, name, language, active
-     FROM whatsapp_templates
-     WHERE tenant_id = $1
-       AND name = $2
-       AND language = $3
-       AND active = true
-     LIMIT 1`,
-    [req.user.tenantId, templateName, templateLanguage],
-  );
-
-  const templateRecord = templateResult.rows[0];
-
-  if (!templateRecord) {
-    return res.status(400).json({
-      error: 'Manager approval template is not active/found in Templates. Add the approved Meta template name and language first.',
-    });
-  }
-
-  const quoteResult = await query(
-    `SELECT q.*, c.name AS contact_name, c.phone, c.company
-     FROM quotations q
-     LEFT JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id
-     WHERE q.id = $1
-       AND q.tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const quote = quoteResult.rows[0];
-
-  if (!quote) {
-    return res.status(404).json({ error: 'Quotation not found' });
-  }
-
-  if (!(await canAccessContactId(req.user, quote.contact_id))) {
-    return res.status(403).json({ error: 'Quotation assigned to another user' });
-  }
-
-  if (['converted', 'lost', 'accepted'].includes(String(quote.status || '').toLowerCase())) {
-    return res.status(400).json({ error: 'This quotation is already closed/converted and cannot be sent for manager approval.' });
-  }
-
-  const itemResult = await query(
-    `SELECT *
-     FROM quotation_items
-     WHERE quotation_id = $1
-       AND tenant_id = $2
-     ORDER BY created_at`,
-    [quote.id, req.user.tenantId],
-  );
-
-  const items = itemResult.rows;
-  const customerName = quote.company || quote.contact_name || quote.phone || 'Customer';
-  const amountText = `${settings.currency || 'INR'} ${Number(quote.amount || 0).toLocaleString('en-IN')}`;
-  const revisionText = `Rev ${Number(quote.revision_no || 0)}`;
-  const itemSummary = formatQuotationItemsForApproval(items);
-
-  const managerContact = await upsertContact({
-    tenantId: req.user.tenantId,
-    waId: managerPhone,
-    name: settings.quoteApprovalManagerName || 'Quote Approval Manager',
-    phone: managerPhone,
-    label: 'Review Required',
-    touchInbound: false,
-  });
-
-  let waMessageId = null;
-
-  try {
-    waMessageId = await sendWhatsAppTemplateToNumber({
-      tenantId: req.user.tenantId,
-      to: managerPhone,
-      templateName,
-      language: templateLanguage,
-      bodyParams: [
-        quote.quote_no,
-        customerName,
-        amountText,
-        revisionText,
-      ],
-    });
-  } catch (error) {
-    await recordQuotationApprovalEvent({
-      tenantId: req.user.tenantId,
-      quotationId: quote.id,
-      actorType: 'sales',
-      actorUserId: req.user.id,
-      actorPhone: null,
-      action: 'sent_to_manager',
-      reason: 'manager_send_failed',
-      rawPayload: {
-        status: error.response?.status || null,
-        message: error.response?.data?.error?.message || error.message,
-      },
-    });
-
-    return res.status(400).json({
-      error: error.response?.data?.error?.message || error.message || 'Manager approval WhatsApp message failed',
-    });
-  }
-
-  const outboundBody = [
-    `[Manager Approval] ${quote.quote_no}`,
-    `Customer: ${customerName}`,
-    `Amount: ${amountText}`,
-    revisionText,
-    '',
-    itemSummary,
-  ].filter(Boolean).join('\n');
-
-  const message = await addMessage({
-    tenantId: req.user.tenantId,
-    contactId: managerContact.id,
-    waMessageId,
-    direction: 'outbound',
-    type: 'template',
-    body: outboundBody,
-    status: waMessageId ? 'sent' : 'accepted',
-    templateName,
-    rawPayload: {
-      templateName,
-      templateLanguage,
-      quoteId: quote.id,
-      quoteNo: quote.quote_no,
-      bodyParams: [quote.quote_no, customerName, amountText, revisionText],
-    },
-    normalizedText: outboundBody,
-  });
-
-  const updatedQuoteResult = await query(
-    `UPDATE quotations
-     SET status = 'pending_manager_approval',
-         approval_status = 'pending_manager_approval',
-         manager_approval_status = 'pending',
-         manager_approval_requested_at = now(),
-         manager_phone = $3
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING *`,
-    [quote.id, req.user.tenantId, managerPhone],
-  );
-
-  await recordQuotationApprovalEvent({
-    tenantId: req.user.tenantId,
-    quotationId: quote.id,
-    actorType: 'sales',
-    actorUserId: req.user.id,
-    actorPhone: null,
-    action: 'sent_to_manager',
-    reason: null,
-    rawPayload: {
-      managerPhone: maskValue(managerPhone),
-      templateName,
-      templateLanguage,
-      messageId: waMessageId,
-      messageRowId: message?.id || null,
-    },
-  });
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'quotation.sent_to_manager',
-    entityType: 'quotation',
-    entityId: quote.id,
-    metadata: {
-      managerPhone: maskValue(managerPhone),
-      templateName,
-      messageId: waMessageId,
-      messageRowId: message?.id || null,
-    },
-  });
-
-  res.json({
-    ok: true,
-    quotation: updatedQuoteResult.rows[0],
-    managerContactId: managerContact.id,
-    messageId: waMessageId,
-  });
-}));
-
-app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
-  }
-
-  const settings = await getAppSettings(req.user.tenantId);
-
-  const quoteResult = await query(
-    `SELECT q.*, c.id AS contact_id, c.name AS contact_name, c.wa_id, c.phone, c.company, c.opted_out, c.last_inbound_at
-     FROM quotations q
-     JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id
-     WHERE q.id = $1
-       AND q.tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const quote = quoteResult.rows[0];
-
-  if (!quote) {
-    return res.status(404).json({ error: 'Quotation not found' });
-  }
-
-  if (!(await canAccessContactId(req.user, quote.contact_id))) {
-    return res.status(403).json({ error: 'Quotation assigned to another user' });
-  }
-
-  if (quote.opted_out) {
-    return res.status(403).json({
-      error: 'Customer has opted out. Do not send WhatsApp quotation to this contact.',
-    });
-  }
-
-  if (settings.quoteApprovalEnabled && quote.manager_approval_status !== 'approved') {
-    return res.status(400).json({
-      error: 'Manager approval is required before sending this quotation to customer.',
-    });
-  }
-
-  if (['converted', 'lost', 'accepted'].includes(String(quote.status || '').toLowerCase())) {
-    return res.status(400).json({
-      error: 'This quotation is already closed/converted and cannot be sent to customer.',
-    });
-  }
-
-  const templateName = String(settings.customerQuoteTemplateName || '').trim().toLowerCase();
-  const templateLanguage = String(settings.customerQuoteTemplateLanguage || 'en').trim() || 'en';
-
-  if (!templateName) {
-    return res.status(400).json({
-      error: 'Customer quote template name is missing in Settings.',
-    });
-  }
-
-  const templateResult = await query(
-    `SELECT id, name, language, active
-     FROM whatsapp_templates
-     WHERE tenant_id = $1
-       AND name = $2
-       AND language = $3
-       AND active = true
-     LIMIT 1`,
-    [req.user.tenantId, templateName, templateLanguage],
-  );
-
-  const templateRecord = templateResult.rows[0];
-
-  if (!templateRecord) {
-    return res.status(400).json({
-      error: 'Customer quote template is not active/found in Templates. Add the approved Meta template name and language first.',
-    });
-  }
-
-  const itemResult = await query(
-    `SELECT *
-     FROM quotation_items
-     WHERE quotation_id = $1
-       AND tenant_id = $2
-     ORDER BY created_at`,
-    [quote.id, req.user.tenantId],
-  );
-
-  const items = itemResult.rows;
-  const customerName = quote.company || quote.contact_name || quote.phone || 'Customer';
-  const amountText = `${settings.currency || 'INR'} ${Number(quote.amount || 0).toLocaleString('en-IN')}`;
-  const validUntilText = quote.valid_until
-    ? new Date(quote.valid_until).toLocaleDateString('en-IN')
-    : 'As per quotation';
-  const itemSummary = formatQuotationItemsForApproval(items);
-
-  let waMessageId = null;
-
-  try {
-    waMessageId = await sendWhatsAppTemplateToNumber({
-      tenantId: req.user.tenantId,
-      to: quote.wa_id || quote.phone,
-      templateName,
-      language: templateLanguage,
-      bodyParams: [
-        customerName,
-        quote.quote_no,
-        amountText,
-        validUntilText,
-      ],
-    });
-  } catch (error) {
-    return res.status(400).json({
-      error: error.response?.data?.error?.message || error.message || 'Customer quote WhatsApp message failed',
-    });
-  }
-
-  const outboundBody = [
-    `[Customer Quote] ${quote.quote_no}`,
-    `Customer: ${customerName}`,
-    `Amount: ${amountText}`,
-    `Valid Until: ${validUntilText}`,
-    '',
-    itemSummary,
-  ].filter(Boolean).join('\n');
-
-  const message = await addMessage({
-    tenantId: req.user.tenantId,
-    contactId: quote.contact_id,
-    waMessageId,
-    direction: 'outbound',
-    type: 'template',
-    body: outboundBody,
-    status: waMessageId ? 'sent' : 'accepted',
-    templateName,
-    rawPayload: {
-      templateName,
-      templateLanguage,
-      quoteId: quote.id,
-      quoteNo: quote.quote_no,
-      bodyParams: [customerName, quote.quote_no, amountText, validUntilText],
-    },
-    normalizedText: outboundBody,
-  });
-
-  const updatedQuoteResult = await query(
-    `UPDATE quotations
-     SET status = 'customer_sent',
-         approval_status = 'customer_sent',
-         customer_sent_at = now()
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING *`,
-    [quote.id, req.user.tenantId],
-  );
-
-  await recordQuotationApprovalEvent({
-    tenantId: req.user.tenantId,
-    quotationId: quote.id,
-    actorType: 'sales',
-    actorUserId: req.user.id,
-    actorPhone: null,
-    action: 'sent_to_customer',
-    reason: null,
-    rawPayload: {
-      templateName,
-      templateLanguage,
-      messageId: waMessageId,
-      messageRowId: message?.id || null,
-    },
-  });
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'quotation.sent_to_customer',
-    entityType: 'quotation',
-    entityId: quote.id,
-    metadata: {
-      templateName,
-      messageId: waMessageId,
-      messageRowId: message?.id || null,
-      contactId: quote.contact_id,
-    },
-  });
-
-  res.json({
-    ok: true,
-    quotation: updatedQuoteResult.rows[0],
-    messageId: waMessageId,
-    messageRowId: message?.id || null,
-  });
-}));
-
-app.patch('/api/quotations/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { status, valid_until, notes } = req.body;
-
-  if (status !== undefined) {
-    const allowedQuotationStatuses = new Set([
-      'draft',
-      'pending_manager_approval',
-      'manager_approved',
-      'manager_rejected_waiting_reason',
-      'revision_required',
-      'sent',
-      'customer_sent',
-      'accepted',
-      'rejected',
-      'expired',
-      'converted',
-      'lost',
-    ]);    const cleanStatus = String(status || '').trim().toLowerCase();
-
-    if (!allowedQuotationStatuses.has(cleanStatus)) {
-      return res.status(400).json({ error: 'Invalid quotation status' });
-    }
-  }
-
-  const existingQuote = (await query('SELECT * FROM quotations WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
-  if (!existingQuote) return res.status(404).json({ error: 'Quotation not found' });
-  if (!(await canAccessContactId(req.user, existingQuote.contact_id))) return res.status(403).json({ error: 'Quotation assigned to another user' });
-  const result = await query(
-    'UPDATE quotations SET status=COALESCE($2,status), valid_until=COALESCE($3,valid_until), notes=COALESCE($4,notes) WHERE id=$1 AND tenant_id=$5 RETURNING *',
-    [req.params.id, status, valid_until, notes, req.user.tenantId],
-  );
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'quotation.updated', entityType: 'quotation', entityId: result.rows[0].id, metadata: { status: result.rows[0].status } });
-  res.json(result.rows[0]);
-}));
-
-app.get('/api/quotations/:id/print-text', requireAuth, asyncHandler(async (req, res) => {
-  const settings = await getAppSettings(req.user.tenantId);
-  const quoteResult = await query(
-    'SELECT q.*, c.name AS contact_name, c.phone, c.company FROM quotations q LEFT JOIN contacts c ON c.id = q.contact_id AND c.tenant_id = q.tenant_id WHERE q.id = $1 AND q.tenant_id = $2',
-    [req.params.id, req.user.tenantId],
-  );
-  const quote = quoteResult.rows[0];
-  if (!quote) return res.status(404).json({ error: 'Quotation not found' });
-  if (!(await canAccessContactId(req.user, quote.contact_id))) return res.status(403).json({ error: 'Quotation assigned to another user' });
-  const itemResult = await query('SELECT * FROM quotation_items WHERE quotation_id = $1 AND tenant_id = $2 ORDER BY created_at', [quote.id, req.user.tenantId]);
-  const items = itemResult.rows;
-  const lines = [
-    settings.companyName,
-    `Quotation: ${quote.quote_no}`,
-    `Customer: ${quote.contact_name || quote.phone || 'Customer'}`,
-    quote.company ? `Company: ${quote.company}` : '',
-    `Status: ${quote.status}`,
-    `Amount: ${settings.currency} ${Number(quote.amount || 0).toLocaleString('en-IN')}`,
-    '',
-    'Items:',
-    ...items.map((item, index) => `${index + 1}. ${item.description} | ${item.quantity} ${item.unit} x ${item.rate} = ${item.amount}`),
-    '',
-    quote.notes ? `Notes: ${quote.notes}` : '',
-  ].filter((line) => line !== '');
-  res.type('text/plain').send(lines.join('\n'));
-}));
-
-app.post('/api/quotations/:id/convert-order', requireAuth, asyncHandler(async (req, res) => {
-  const quoteResult = await query(
-    `SELECT *
-     FROM quotations
-     WHERE id = $1
-       AND tenant_id = $2
-     LIMIT 1`,
-    [req.params.id, req.user.tenantId],
-  );
-
-  const quote = quoteResult.rows[0];
-
-  if (!quote) {
-    return res.status(404).json({ error: 'Quotation not found' });
-  }
-
-  if (!(await canAccessContactId(req.user, quote.contact_id))) {
-    return res.status(403).json({ error: 'Quotation assigned to another user' });
-  }
-
-  if (quote.status !== 'accepted' || quote.approval_status !== 'customer_approved') {
-    return res.status(400).json({
-      error: 'Order can be created only after customer approves the quotation.',
-    });
-  }
-
-  const existingOrderCheck = await query(
-    `SELECT id, order_no
-     FROM sales_orders
-     WHERE tenant_id = $1
-       AND notes ILIKE $2
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [req.user.tenantId, `%Converted from quotation ${quote.quote_no}%`],
-  );
-
-  if (existingOrderCheck.rows[0]) {
-    return res.status(409).json({
-      error: `Order already exists for this quotation: ${existingOrderCheck.rows[0].order_no}`,
-    });
-  }
-
-  const itemResult = await query(
-    `SELECT *
-     FROM quotation_items
-     WHERE quotation_id = $1
-       AND tenant_id = $2
-     ORDER BY created_at`,
-    [quote.id, req.user.tenantId],
-  );
-
-  if (!itemResult.rows.length) {
-    return res.status(400).json({ error: 'Quotation has no items. Cannot create order.' });
-  }
-
-  const order = await createSalesOrder({
-    tenantId: req.user.tenantId,
-    contactId: quote.contact_id,
-    notes: req.body.notes || `Converted from quotation ${quote.quote_no}`,
-    items: itemResult.rows,
-    source: 'WhatsApp Quote',
-    paymentStatus: req.body.payment_status || 'pending',
-    dispatchStatus: req.body.dispatch_status || 'pending',
-  });
-
-  const updatedQuote = await query(
-    `UPDATE quotations
-     SET status = 'converted',
-         approval_status = 'converted_to_order'
-     WHERE id = $1
-       AND tenant_id = $2
-     RETURNING *`,
-    [quote.id, req.user.tenantId],
-  );
-
-  await recordQuotationApprovalEvent({
-    tenantId: req.user.tenantId,
-    quotationId: quote.id,
-    actorType: 'sales',
-    actorUserId: req.user.id,
-    action: 'converted_to_order',
-    reason: null,
-    rawPayload: {
-      orderId: order.id,
-      orderNo: order.order_no,
-    },
-  });
-
-  await recordAudit({
-    tenantId: req.user.tenantId,
-    actorUserId: req.user.id,
-    action: 'quotation.converted_to_order',
-    entityType: 'sales_order',
-    entityId: order.id,
-    metadata: {
-      quoteId: quote.id,
-      quoteNo: quote.quote_no,
-      contactId: quote.contact_id,
-      orderNo: order.order_no,
-      quotationStatus: updatedQuote.rows[0]?.status,
-      approvalStatus: updatedQuote.rows[0]?.approval_status,
-    },
-  });
-
-  let acknowledgement = { sent: false, reason: 'not_attempted' };
-
-  try {
-    acknowledgement = await sendOrderAcknowledgementToCustomer({
-      tenantId: req.user.tenantId,
-      userId: req.user.id,
-      order,
-      quote,
-    });
-  } catch (error) {
-    acknowledgement = {
-      sent: false,
-      reason: error.response?.data?.error?.message || error.message || 'acknowledgement_failed',
-    };
-
-    await recordAudit({
-      tenantId: req.user.tenantId,
-      actorUserId: req.user.id,
-      action: 'order.acknowledgement_failed',
-      entityType: 'sales_order',
-      entityId: order.id,
-      metadata: {
-        quoteId: quote.id,
-        quoteNo: quote.quote_no,
-        orderNo: order.order_no,
-        reason: acknowledgement.reason,
-      },
-    });
-  }
-
-  res.status(201).json({
-    ...order,
-    acknowledgement,
-  });
-}));
-
-// =========================================================
-// ROUTES — ORDERS
-// =========================================================
-
-app.get('/api/orders', requireAuth, asyncHandler(async (req, res) => {
-  const params = [req.user.tenantId];
-  const where = ['o.tenant_id = $1'];
-  if (!canMonitor(req.user)) { params.push(req.user.id); where.push(`c.assigned_to = $${params.length}`); }
-  const result = await query(
-    `SELECT o.*, c.name AS contact_name, c.phone,
-      COALESCE(json_agg(soi ORDER BY soi.created_at) FILTER (WHERE soi.id IS NOT NULL), '[]') AS items
-     FROM sales_orders o
-     LEFT JOIN contacts c ON c.id = o.contact_id AND c.tenant_id = o.tenant_id
-     LEFT JOIN sales_order_items soi ON soi.order_id = o.id AND soi.tenant_id = o.tenant_id
-     WHERE ${where.join(' AND ')}
-     GROUP BY o.id, c.name, c.phone
-     ORDER BY o.created_at DESC`,
-    params,
-  );
-  res.json(result.rows);
-}));
-
-app.post('/api/orders', requireAuth, asyncHandler(async (req, res) => {
-  if (!(await canAccessContactId(req.user, req.body.contact_id))) return res.status(403).json({ error: 'Order contact assigned to another user' });
-  const items = Array.isArray(req.body.items) && req.body.items.length
-    ? req.body.items
-    : [{ description: req.body.notes || 'Manual order item', quantity: 1, rate: toFiniteNumber(req.body.amount, 0) }];
-  const order = await createSalesOrder({ tenantId: req.user.tenantId, contactId: req.body.contact_id, notes: req.body.notes, items, source: req.body.source || 'WhatsApp', paymentStatus: req.body.payment_status || 'pending', dispatchStatus: req.body.dispatch_status || 'pending' });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'order.created', entityType: 'sales_order', entityId: order.id, metadata: { contactId: req.body.contact_id || null } });
-  res.status(201).json(order);
-}));
-
-app.patch('/api/orders/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { status, payment_status, dispatch_status, notes } = req.body;
-
-  if (status !== undefined) {
-    const allowedOrderStatuses = new Set(['pending', 'confirmed', 'processing', 'completed', 'closed', 'cancelled']);
-    const cleanStatus = String(status || '').trim().toLowerCase();
-
-    if (!allowedOrderStatuses.has(cleanStatus)) {
-      return res.status(400).json({ error: 'Invalid order status' });
-    }
-  }
-
-  if (payment_status !== undefined) {
-    const allowedPaymentStatuses = new Set(['pending', 'partial', 'paid', 'overdue', 'cancelled']);
-
-    if (!allowedPaymentStatuses.has(String(payment_status || '').trim().toLowerCase())) {
-      return res.status(400).json({ error: 'Invalid payment status' });
-    }
-  }
-
-  if (dispatch_status !== undefined) {
-    const allowedDispatchStatuses = new Set(['pending', 'packed', 'dispatched', 'delivered', 'cancelled']);
-
-    if (!allowedDispatchStatuses.has(String(dispatch_status || '').trim().toLowerCase())) {
-      return res.status(400).json({ error: 'Invalid dispatch status' });
-    }
-  }
-
-  const existingOrder = (await query('SELECT * FROM sales_orders WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
-  if (!existingOrder) return res.status(404).json({ error: 'Order not found' });
-  if (!(await canAccessContactId(req.user, existingOrder.contact_id))) return res.status(403).json({ error: 'Order assigned to another user' });
-  const result = await query(
-    'UPDATE sales_orders SET status=COALESCE($2,status), payment_status=COALESCE($3,payment_status), dispatch_status=COALESCE($4,dispatch_status), notes=COALESCE($5,notes) WHERE id=$1 AND tenant_id=$6 RETURNING *',
-    [req.params.id, status, payment_status, dispatch_status, notes, req.user.tenantId],
-  );
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'order.updated', entityType: 'sales_order', entityId: result.rows[0].id, metadata: { status: result.rows[0].status, paymentStatus: result.rows[0].payment_status, dispatchStatus: result.rows[0].dispatch_status } });
-  res.json(result.rows[0]);
-}));
+const routeContext = {
+  axios,
+  bcrypt,
+  crypto,
+  fs,
+  path,
+  query,
+  healthCheck,
+  asyncHandler,
+  rateLimit,
+  maskValue,
+  maskEmail,
+  maskId,
+  hasRealValue,
+  toFiniteNumber,
+  isStrongPassword,
+  strongPasswordError,
+  normalizeUserText,
+  isReplyWindowOpen,
+  isOptOutMessage,
+  encryptSecret,
+  decryptSecret,
+  safeMetaError,
+  safeErrorLog,
+  cleanList,
+  WEEK_DAYS,
+  DEFAULT_VOICE_WEEKLY_HOURS,
+  cleanVoiceWeeklyHours,
+  cleanUnavailableHours,
+  mediaRoot,
+  port,
+  isProduction,
+  jwtSecret,
+  signUser,
+  publicUser,
+  setAuthCookie,
+  clearAuthCookie,
+  requireAuth,
+  isSuperAdmin,
+  canMonitor,
+  requireSuperAdmin,
+  normalizeTenantSlug,
+  publicTenant,
+  countActiveTenantAdmins,
+  getDemoTenantId,
+  ensureDefaultWhatsAppAccountMapping,
+  getEnvWhatsAppAccountStatus,
+  getTenantIdForWebhookValue,
+  recordAudit,
+  recordAssignmentHistory,
+  loginAttempts,
+  MAX_LOGIN_ATTEMPTS,
+  LOGIN_LOCK_MS,
+  MAX_WHATSAPP_TEXT_LENGTH,
+  DEFAULT_APP_SETTINGS,
+  PRODUCT_FIELD_ALIASES,
+  serverStartedAt,
+  isWhatsAppConfigured,
+  shouldAllowLocalMessageQueue,
+  getLoginAttemptKey,
+  isLoginLocked,
+  recordFailedLogin,
+  clearLoginAttempts,
+  validateRuntimeConfig,
+  normalizeAppSettings,
+  getAppSettings,
+  saveAppSettings,
+  normalizeProduct,
+  normalizeHeader,
+  findProductValue,
+  productFromImportRow,
+  normalizeKnowledgeBaseItem,
+  shouldUseKnowledgeBase,
+  knowledgeSearchTerms,
+  findKnowledgeMatches,
+  buildKnowledgeReply,
+  verifyMetaWebhookSignature,
+  categorizeMessage,
+  extractEnquiry,
+  getBotIntent,
+  botProductSearchTerms,
+  findBotProductMatches,
+  formatBotProductLine,
+  buildBotReplyText,
+  buildBotReply,
+  shouldSendMainMenu,
+  buildMainMenuInteractive,
+  menuPayloadToText,
+  getProductCategoriesForTenant,
+  buildCategoryMenuInteractive,
+  findExactProductCategory,
+  buildCategoryProductsReply,
+  buildMenuSelectionReply,
+  hasQuoteRequestSignal,
+  hasEnoughQuoteDetails,
+  buildMissingQuoteDetailsReply,
+  findBestProductForQuote,
+  createStructuredQuoteDraft,
+  buildStructuredQuoteConfirmation,
+  parseQuantity,
+  normalizeSalesItem,
+  sumItems,
+  validateSalesItemsForTenant,
+  validateContactForTenant,
+  validateTemplateRetryAllowed,
+  extractText,
+  normalizeWhatsAppMessage,
+  extensionFromMime,
+  downloadWhatsAppMedia,
+  getLeastLoadedSalesUser,
+  upsertContact,
+  addMessage,
+  updateMessageStatus,
+  createEnquiryDraft,
+  maybeSendBotAutoReply,
+  processInboundMessage,
+  findContact,
+  canAccessContact,
+  canAccessContactId,
+  canAccessDraft,
+  getEnquiryDraftById,
+  createQuotation,
+  createSalesOrder,
+  getWhatsAppSendConfig,
+  getWhatsAppTemplateSyncConfig,
+  extractMetaTemplateBody,
+  normalizeMetaTemplateStatus,
+  normalizeMetaTemplateCategory,
+  whatsappMessagesUrl,
+  whatsappHeaders,
+  createOutboundMessageRecord,
+  markOutboundSending,
+  markOutboundSent,
+  markOutboundFailed,
+  sleep,
+  isRetryableWhatsAppError,
+  postWhatsAppMessage,
+  sendWhatsAppText,
+  sendWhatsAppInteractiveList,
+  sendWhatsAppTemplate,
+  sendWhatsAppTemplateToNumber,
+  formatQuotationItemsForApproval,
+  recordQuotationApprovalEvent,
+  sendOrderAcknowledgementToCustomer,
+  isManagerApproveText,
+  isManagerRejectText,
+  findLatestManagerQuote,
+  sendManagerApprovalSystemReply,
+  handleManagerApprovalInbound,
+  isCustomerQuoteApproveText,
+  isCustomerQuoteRejectText,
+  findLatestCustomerSentQuote,
+  sendCustomerQuoteSystemReply,
+  handleCustomerQuoteInbound,
+};
+
+registerCoreRoutes(app, routeContext);
+registerWhatsAppRoutes(app, routeContext);
+registerCrmRoutes(app, routeContext);
+registerSalesRoutes(app, routeContext);
+registerCampaignRoutes(app, routeContext);
 
 // =========================================================
 // ERROR HANDLER
@@ -8065,7 +3323,7 @@ app.use((err, req, res, next) => {
     return res.status(err.statusCode).json({ error: err.message || 'Invalid request' });
   }
 
-  console.error(err);
+  console.error('Unhandled route error:', safeErrorLog(err));
 
   if (isProduction) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -8108,10 +3366,7 @@ async function gracefulShutdown(signal) {
     console.log('Shutdown completed cleanly.');
     process.exit(0);
   } catch (error) {
-    console.error('Shutdown failed:', {
-      message: error.message,
-      code: error.code || null,
-    });
+    console.error('Shutdown failed:', safeErrorLog(error));
     process.exit(1);
   }
 }
@@ -8125,7 +3380,8 @@ process.on('SIGINT', () => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled promise rejection:', reason);
+  const error = reason instanceof Error ? reason : new Error(String(reason || 'Unknown promise rejection'));
+  console.error('Unhandled promise rejection:', safeErrorLog(error));
 });
 
 if (require.main === module) {

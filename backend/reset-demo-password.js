@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', 'private', 'backend.env') });
 
 const bcrypt = require('bcrypt');
 const { Client } = require('pg');

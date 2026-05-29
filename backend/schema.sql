@@ -138,6 +138,18 @@ ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
 ALTER TABLE contacts
 ADD COLUMN IF NOT EXISTS opted_out_reason TEXT;
 
+ALTER TABLE contacts
+ADD COLUMN IF NOT EXISTS marketing_opted_in BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE contacts
+ADD COLUMN IF NOT EXISTS marketing_opted_in_at TIMESTAMPTZ;
+
+ALTER TABLE contacts
+ADD COLUMN IF NOT EXISTS marketing_opt_in_source TEXT;
+
+ALTER TABLE contacts
+ADD COLUMN IF NOT EXISTS marketing_opt_in_proof TEXT;
+
 UPDATE contacts
 SET tenant_id = (SELECT id FROM tenants WHERE slug = 'demo')
 WHERE tenant_id IS NULL;
@@ -953,7 +965,103 @@ CREATE INDEX IF NOT EXISTS outbound_messages_wa_message_idx
 ON outbound_messages (tenant_id, wa_message_id);
 
 -- =========================================================
--- 15. DEFAULT TENANT TEMPLATES
+-- 15. WHATSAPP CAMPAIGNS + CONSENT
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS contact_consents (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  consent_type TEXT NOT NULL DEFAULT 'marketing',
+  channel TEXT NOT NULL DEFAULT 'whatsapp',
+  status TEXT NOT NULL,
+  source TEXT NOT NULL,
+  proof_text TEXT,
+  recorded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS contact_consents_tenant_contact_idx
+ON contact_consents (tenant_id, contact_id, consent_type, channel, recorded_at DESC);
+
+CREATE TABLE IF NOT EXISTS campaigns (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'whatsapp',
+  template_id UUID REFERENCES whatsapp_templates(id) ON DELETE SET NULL,
+  template_name TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'en',
+  status TEXT NOT NULL DEFAULT 'draft',
+  scheduled_at TIMESTAMPTZ,
+  total_recipients INTEGER NOT NULL DEFAULT 0,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  skipped_count INTEGER NOT NULL DEFAULT 0,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS campaigns_tenant_status_idx
+ON campaigns (tenant_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS campaign_recipients (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  to_phone TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  skip_reason TEXT,
+  outbound_message_id UUID REFERENCES outbound_messages(id) ON DELETE SET NULL,
+  sent_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS campaign_recipients_campaign_idx
+ON campaign_recipients (tenant_id, campaign_id, status);
+
+CREATE INDEX IF NOT EXISTS campaign_recipients_contact_idx
+ON campaign_recipients (tenant_id, contact_id, created_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'contact_consents_status_check'
+  ) THEN
+    ALTER TABLE contact_consents
+    ADD CONSTRAINT contact_consents_status_check
+    CHECK (status IN ('opted_in', 'opted_out'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'campaigns_status_check'
+  ) THEN
+    ALTER TABLE campaigns
+    ADD CONSTRAINT campaigns_status_check
+    CHECK (status IN ('draft', 'scheduled', 'sending', 'sent', 'partial_failed', 'failed', 'cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'campaign_recipients_status_check'
+  ) THEN
+    ALTER TABLE campaign_recipients
+    ADD CONSTRAINT campaign_recipients_status_check
+    CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'skipped'));
+  END IF;
+END $$;
+
+-- =========================================================
+-- 16. DEFAULT TENANT TEMPLATES
 -- =========================================================
 
 INSERT INTO whatsapp_templates (tenant_id, name, language, body)
@@ -981,7 +1089,7 @@ WHERE slug = 'demo'
 ON CONFLICT (tenant_id, name, language) DO NOTHING;
 
 -- =========================================================
--- 16. PERFORMANCE INDEXES
+-- 17. PERFORMANCE INDEXES
 -- =========================================================
 
 CREATE INDEX IF NOT EXISTS users_tenant_role_idx
@@ -999,11 +1107,14 @@ ON contacts (tenant_id, stage);
 CREATE INDEX IF NOT EXISTS contacts_tenant_phone_idx
 ON contacts (tenant_id, phone);
 
+CREATE INDEX IF NOT EXISTS contacts_tenant_marketing_idx
+ON contacts (tenant_id, marketing_opted_in, opted_out);
+
 CREATE INDEX IF NOT EXISTS products_tenant_active_idx
 ON products (tenant_id, active);
 
 -- =========================================================
--- 17. DATA QUALITY CONSTRAINTS
+-- 18. DATA QUALITY CONSTRAINTS
 -- =========================================================
 
 DO $$

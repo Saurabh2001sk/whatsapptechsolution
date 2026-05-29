@@ -10,7 +10,7 @@ const {
   normalizeProduct,
   normalizeSalesItem,
   parseQuantity,
-} = require('../server');
+} = require('./server');
 
 test('categorizes common WhatsApp sales intents', () => {
   assert.equal(categorizeMessage('Please send quotation and price'), 'Quotation Required');
