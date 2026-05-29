@@ -1,4 +1,4 @@
-require('dotenv').config({ path: require('path').join(__dirname, '..', 'private', 'backend.env') });
+require('dotenv').config();
 
 const axios = require('axios');
 const bcrypt = require('bcrypt');
@@ -113,10 +113,18 @@ const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 
+function parseAllowedOrigins(value = '') {
+  return String(value || '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+}
+
 const allowedOrigins = new Set([
-  process.env.FRONTEND_URL,
+  ...parseAllowedOrigins(process.env.FRONTEND_URL),
+  ...parseAllowedOrigins(process.env.FRONTEND_URLS),
   ...(!isProduction ? ['http://localhost:5173', 'http://127.0.0.1:5173'] : []),
-].filter(Boolean));
+]);
 
 app.use(cors({
   origin(origin, callback) {
@@ -162,6 +170,18 @@ app.use((req, res, next) => {
 
   if (isProduction) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "img-src 'self' data: blob:",
+        "media-src 'self' blob:",
+        "connect-src 'self'",
+      ].join('; '),
+    );
   }
 
   next();
@@ -1837,21 +1857,53 @@ async function processInboundMessage({ tenantId, waId, name, body, waMessageId, 
 
   const contact = await upsertContact({ tenantId, waId, name, phone: waId, label });
 
-  if (isOptOut) {
+if (isOptOut) {
     await query(
       `UPDATE contacts
        SET opted_out = true,
            opted_out_at = now(),
            opted_out_reason = $3,
+           marketing_opted_in = false,
+           marketing_opted_in_at = NULL,
+           marketing_opt_in_source = 'whatsapp_customer_opt_out',
+           marketing_opt_in_proof = NULL,
            updated_at = now()
        WHERE id = $1
          AND tenant_id = $2`,
       [contact.id, tenantId, optOutText],
     );
 
+    await query(
+      `INSERT INTO contact_consents (
+         tenant_id,
+         contact_id,
+         consent_type,
+         channel,
+         status,
+         source,
+         proof_text,
+         recorded_by
+       )
+       VALUES ($1, $2, 'marketing', 'whatsapp', 'opted_out', 'whatsapp_customer_opt_out', $3, NULL)`,
+      [tenantId, contact.id, optOutText.slice(0, 500)],
+    );
+
+    await recordAudit({
+      tenantId,
+      action: 'contact.customer_opted_out',
+      entityType: 'contact',
+      entityId: contact.id,
+      metadata: {
+        phone: maskValue(waId),
+        reason: optOutText,
+        waMessageId: maskId(waMessageId || ''),
+      },
+    });
+
     contact.opted_out = true;
     contact.opted_out_at = new Date();
     contact.opted_out_reason = optOutText;
+    contact.marketing_opted_in = false;
   }
   const saved = await addMessage({
     tenantId, contactId: contact.id, waMessageId, direction: 'inbound',
@@ -2096,6 +2148,10 @@ async function getWhatsAppTemplateSyncConfig(tenantId) {
     }
   }
 
+  if (isProduction) {
+    return null;
+  }
+
   const envWabaId = String(process.env.WHATSAPP_WABA_ID || '').trim();
   const envToken = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
 
@@ -2104,7 +2160,7 @@ async function getWhatsAppTemplateSyncConfig(tenantId) {
       apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
       wabaId: envWabaId,
       accessToken: envToken,
-      source: 'env_fallback',
+      source: 'dev_env_fallback',
     };
   }
 
@@ -3053,25 +3109,61 @@ async function ensureSchema() {
   await query(schema);
 }
 
+function demoPassword(envName, fallback) {
+  const password = String(process.env[envName] || fallback)
+
+  if (!isStrongPassword(password)) {
+    throw new Error(`${envName} ${strongPasswordError()}`)
+  }
+
+  return password
+}
+
 async function ensureDefaultUsers() {
   if (isProduction) {
-    console.log('Production mode: default demo users are not created automatically');
-    return;
+    console.log('Production mode: default demo users are not created automatically')
+    return
   }
-  const tenantId = await getDemoTenantId();
+
+  const tenantId = await getDemoTenantId()
   const defaults = [
-    { name: 'Admin User', email: 'admin@bos.com', password: 'admin123', role: 'admin' },
-    { name: 'Manager User', email: 'manager@bos.com', password: 'manager123', role: 'manager' },
-    { name: 'Sales Person', email: 'sales@bos.com', password: 'sales123', role: 'sales' },
-  ];
-  const hashed = await Promise.all(defaults.map(async (u) => ({ ...u, hash: await bcrypt.hash(u.password, 10) })));
+    {
+      name: 'Admin User',
+      email: 'admin@bos.com',
+      password: demoPassword('DEMO_ADMIN_PASSWORD', 'AdminDemo@12345'),
+      role: 'admin',
+    },
+    {
+      name: 'Manager User',
+      email: 'manager@bos.com',
+      password: demoPassword('DEMO_MANAGER_PASSWORD', 'ManagerDemo@12345'),
+      role: 'manager',
+    },
+    {
+      name: 'Sales Person',
+      email: 'sales@bos.com',
+      password: demoPassword('DEMO_SALES_PASSWORD', 'SalesDemo@12345'),
+      role: 'sales',
+    },
+  ]
+
+  const hashed = await Promise.all(defaults.map(async (u) => ({
+    ...u,
+    hash: await bcrypt.hash(u.password, 10),
+  })))
+
   await Promise.all(hashed.map((user) => query(
-    `INSERT INTO users (tenant_id, name, email, password_hash, role)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
+     VALUES ($1, $2, $3, $4, $5, true)
      ON CONFLICT (email)
-     DO UPDATE SET tenant_id = COALESCE(users.tenant_id, EXCLUDED.tenant_id)`,
+     DO UPDATE SET
+       tenant_id = COALESCE(users.tenant_id, EXCLUDED.tenant_id),
+       name = EXCLUDED.name,
+       password_hash = EXCLUDED.password_hash,
+       role = EXCLUDED.role,
+       active = true`,
     [tenantId, user.name, user.email, user.hash, user.role],
-  )));
+  )))
 }
 
 async function ensurePlatformSuperAdmin() {
@@ -3315,6 +3407,10 @@ registerCampaignRoutes(app, routeContext);
 // =========================================================
 
 app.use((err, req, res, next) => {
+  if (String(err.message || '').startsWith('CORS blocked origin:')) {
+    return res.status(403).json({ error: 'CORS blocked origin' });
+  }
+
   if (err.code === '22P02') {
     return res.status(400).json({ error: 'Invalid id format' });
   }
@@ -3323,7 +3419,7 @@ app.use((err, req, res, next) => {
     return res.status(err.statusCode).json({ error: err.message || 'Invalid request' });
   }
 
-  console.error('Unhandled route error:', safeErrorLog(err));
+  console.error('Unhandled route error:', safeErrorLog(err, isProduction));
 
   if (isProduction) {
     return res.status(500).json({ error: 'Internal server error' });

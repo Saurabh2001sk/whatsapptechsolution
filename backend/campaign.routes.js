@@ -104,6 +104,12 @@ function registerCampaignRoutes(app, ctx) {
       return res.status(400).json({ error: 'Invalid scheduled time' });
     }
 
+    if (scheduledAt && !sendNow) {
+      return res.status(400).json({
+        error: 'Campaign scheduling is not enabled yet. Use Send Now only until the queue worker is connected.',
+      });
+    }
+
     const template = await getCampaignTemplate(req.user.tenantId, templateName, language);
 
     if (!template) {
@@ -114,16 +120,53 @@ function registerCampaignRoutes(app, ctx) {
       });
     }
 
-    const cleanRows = rows
-      .map((row) => ({
-        phone: normalizeCampaignPhone(rowValue(row, ['phone', 'Phone', 'mobile', 'Mobile', 'whatsapp', 'WhatsApp'])),
-        optInSource: rowValue(row, ['opt_in_source', 'Opt In Source', 'source', 'Source']),
-        optInProof: rowValue(row, ['opt_in_proof', 'Opt In Proof', 'proof', 'Proof']),
-      }))
-      .filter((row) => row.phone);
+const cleanRows = rows.map((row) => ({
+      phone: normalizeCampaignPhone(rowValue(row, ['phone', 'Phone', 'mobile', 'Mobile', 'whatsapp', 'WhatsApp'])),
+      optInSource: rowValue(row, ['opt_in_source', 'Opt In Source', 'source', 'Source']).slice(0, 80) || 'campaign_csv',
+      optInProof: rowValue(row, ['opt_in_proof', 'Opt In Proof', 'proof', 'Proof']).slice(0, 500),
+    }));
 
     if (!cleanRows.length) {
       return res.status(400).json({ error: 'CSV must include a phone column' });
+    }
+
+    const missingPhoneRowIndex = cleanRows.findIndex((row) => !row.phone);
+
+    if (missingPhoneRowIndex >= 0) {
+      return res.status(400).json({
+        error: `CSV row ${missingPhoneRowIndex + 1} is missing phone number.`,
+      });
+    }
+
+    const invalidPhoneRow = cleanRows.find((row) => row.phone.length < 11 || row.phone.length > 15);
+
+    if (invalidPhoneRow) {
+      return res.status(400).json({
+        error: `Invalid phone number ${invalidPhoneRow.phone}. Use country code format, e.g. 91XXXXXXXXXX.`,
+      });
+    }
+
+    const phoneCounts = cleanRows.reduce((acc, row) => {
+      acc.set(row.phone, (acc.get(row.phone) || 0) + 1);
+      return acc;
+    }, new Map());
+
+    const duplicatePhones = [...phoneCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([phone]) => phone);
+
+    if (duplicatePhones.length) {
+      return res.status(400).json({
+        error: `Duplicate phone numbers found in CSV. Remove duplicates before campaign sending. First duplicate: ${duplicatePhones[0]}`,
+      });
+    }
+
+        const weakProofRow = cleanRows.find((row) => row.optInProof && row.optInProof.length < 8);
+
+    if (weakProofRow) {
+      return res.status(400).json({
+        error: `Opt-in proof is too short for ${weakProofRow.phone}. Add clear proof like "Customer replied START on WhatsApp".`,
+      });
     }
 
     const uniquePhones = [...new Set(cleanRows.map((row) => row.phone))];
@@ -236,6 +279,63 @@ function registerCampaignRoutes(app, ctx) {
 
     if (sendNow) {
       const sendableRecipients = recipients.filter((recipient) => recipient.status === 'pending').slice(0, 50);
+
+      if (!sendableRecipients.length) {
+            if (sendNow && skipped.length > 0) {
+      await recordAudit({
+        tenantId: req.user.tenantId,
+        actorUserId: req.user.id,
+        action: 'campaign.skipped_recipients_detected',
+        entityType: 'campaign',
+        entityId: campaign.id,
+        metadata: {
+          skippedCount: skipped.length,
+          skippedReasons: skipped.slice(0, 20).map((item) => item.skip_reason || 'unknown'),
+        },
+      });
+    }
+        const skippedCount = skipped.length;
+
+        const updatedCampaignResult = await query(
+          `UPDATE campaigns
+           SET status = 'failed',
+               total_recipients = $3,
+               sent_count = 0,
+               failed_count = 0,
+               skipped_count = $4,
+               updated_at = now()
+           WHERE id = $1
+             AND tenant_id = $2
+           RETURNING *`,
+          [campaign.id, req.user.tenantId, recipients.length, skippedCount],
+        );
+
+        await recordAudit({
+          tenantId: req.user.tenantId,
+          actorUserId: req.user.id,
+          action: 'campaign.blocked_no_sendable_recipients',
+          entityType: 'campaign',
+          entityId: campaign.id,
+          metadata: {
+            templateName: template.name,
+            language: template.language,
+            totalRecipients: recipients.length,
+            skippedCount,
+          },
+        });
+
+        return res.status(400).json({
+          error: 'Campaign has no sendable recipients. Check opt-in, opt-out, and contact matching.',
+          campaign: updatedCampaignResult.rows[0],
+          summary: {
+            total: recipients.length,
+            sent: 0,
+            failed: 0,
+            skipped: skippedCount,
+            pending: 0,
+          },
+        });
+      }
 
       for (const recipient of sendableRecipients) {
         const contact = recipient.contact;

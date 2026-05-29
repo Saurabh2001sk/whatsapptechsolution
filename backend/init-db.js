@@ -1,4 +1,4 @@
-require('dotenv').config({ path: require('path').join(__dirname, '..', 'private', 'backend.env') });
+require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');

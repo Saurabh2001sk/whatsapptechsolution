@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api, apiBaseUrl } from './apiClient'
 
+function isSafeWhatsAppMediaUrl(url = '') {
+  return /^\/media\/whatsapp\/[a-zA-Z0-9_.-]+$/.test(String(url || ''))
+}
+
 export function mediaSrc(url) {
-  if (!url) return ''
-  if (url.startsWith('http')) return url
+  if (!isSafeWhatsAppMediaUrl(url)) return ''
   return `${apiBaseUrl}${url}`
 }
 
@@ -11,22 +14,26 @@ export function ProtectedImage({ url, alt }) {
   const [src, setSrc] = useState('')
 
   useEffect(() => {
+    setSrc('')
+
     if (!url) return undefined
 
-    if (url.startsWith('http')) {
-      return undefined
-    }
+   if (!isSafeWhatsAppMediaUrl(url)) {
+  return undefined
+}
 
     let objectUrl = ''
     let cancelled = false
 
-    api.get(url, { responseType: 'blob' })
+    api.get(url, { responseType: 'blob', silentError: true })
       .then((res) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(res.data)
         setSrc(objectUrl)
       })
-      .catch(() => setSrc(''))
+      .catch(() => {
+        if (!cancelled) setSrc('')
+      })
 
     return () => {
       cancelled = true
@@ -34,7 +41,7 @@ export function ProtectedImage({ url, alt }) {
     }
   }, [url])
 
-  const displaySrc = url?.startsWith('http') ? url : src
+const displaySrc = src
 
   if (!displaySrc) return <span>Loading media...</span>
 
@@ -47,12 +54,11 @@ export function ProtectedMediaLink({ url, children, className }) {
 
     if (!url) return
 
-    if (url.startsWith('http')) {
-      window.open(url, '_blank', 'noopener,noreferrer')
-      return
-    }
+if (!isSafeWhatsAppMediaUrl(url)) {
+  return
+}
 
-    const res = await api.get(url, { responseType: 'blob' })
+    const res = await api.get(url, { responseType: 'blob', silentError: true })
     const objectUrl = URL.createObjectURL(res.data)
     window.open(objectUrl, '_blank', 'noopener,noreferrer')
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)

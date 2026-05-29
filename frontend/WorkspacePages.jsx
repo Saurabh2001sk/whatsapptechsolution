@@ -30,6 +30,7 @@ import {
   Trash2,
   Upload,
   UserPlus,
+  UserRound,
   Users,
   Wallet,
   X,
@@ -724,7 +725,9 @@ export function SingleMessagePage({
 }) {
   const [messageType, setMessageType] = useState('text')
   const [guideOpen, setGuideOpen] = useState(true)
-  const selectedTemplate = templates.find((template) => template.name === templateName)
+  const selectedTemplate = templates.find((template) => (
+  template.id === templateName || template.name === templateName
+))
   const messageTypes = ['template', 'text', 'media', 'interactive', 'payment', 'catalog', 'location']
   const supportedType = ['template', 'text'].includes(messageType)
   const previewBody = messageType === 'template' ? selectedTemplate?.body : messageType === 'text' ? draft : ''
@@ -795,9 +798,9 @@ export function SingleMessagePage({
               Approved Template:
               <select value={templateName} onChange={(event) => setTemplateName(event.target.value)} disabled={!selected || selected.opted_out}>
                 <option value="">Select approved template</option>
-                {templates.map((template) => (
-                  <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
-                ))}
+{templates.map((template) => (
+  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
+))}
               </select>
             </label>
           )}
@@ -836,28 +839,83 @@ export function BulkMessagePage({ templates, contacts }) {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
-  const selectedTemplate = templates.find((template) => template.name === templateName)
+  function csvPhone(row = {}) {
+    return String(row.phone || row.Phone || row.mobile || row.Mobile || row.whatsapp || row.WhatsApp || '').replace(/\D/g, '')
+  }
+
+  function csvProof(row = {}) {
+    return String(row.opt_in_proof || row['Opt In Proof'] || row.proof || row.Proof || '').trim()
+  }
+
+  const selectedTemplate = templates.find((template) => (
+  template.id === templateName || template.name === templateName
+))
   const contactPhoneMap = new Map(contacts.map((contact) => [String(contact.phone || '').replace(/\D/g, ''), contact]))
-  const matchedRows = rows.map((row) => contactPhoneMap.get(String(row.phone || row.Phone || '').replace(/\D/g, ''))).filter(Boolean)
+  const csvPhones = rows.map(csvPhone).filter(Boolean)
+  const phoneCounts = csvPhones.reduce((acc, phone) => {
+    acc.set(phone, (acc.get(phone) || 0) + 1)
+    return acc
+  }, new Map())
+  const duplicatePhones = [...phoneCounts.entries()].filter(([, count]) => count > 1).map(([phone]) => phone)
+  const matchedRows = rows.map((row) => contactPhoneMap.get(csvPhone(row))).filter(Boolean)
+  const unknownRows = rows.filter((row) => csvPhone(row) && !contactPhoneMap.get(csvPhone(row)))
   const blockedRows = matchedRows.filter((contact) => contact.opted_out)
+  const weakProofRows = rows.filter((row) => {
+    const proof = csvProof(row)
+    return proof && proof.length < 8
+  })
+const csvValidationError =
+    duplicatePhones.length ? `Duplicate phone found: ${duplicatePhones[0]}` :
+    unknownRows.length ? `Unknown contact found: ${csvPhone(unknownRows[0])}. Add/contact sync this customer before campaign sending.` :
+    blockedRows.length ? `Opted-out contact found: ${blockedRows[0].phone}. Remove opted-out customers before campaign sending.` :
+    weakProofRows.length ? `Opt-in proof too short for ${csvPhone(weakProofRows[0])}` :
+    schedule ? 'Scheduling is not enabled yet. Use Send Now only.' :
+    drip ? 'Drip campaigns are not enabled yet.' :
+    ''
 
   async function uploadCsv(event) {
     const file = event.target.files?.[0]
     if (!file) return
+
+    setError('')
+    setResult(null)
     setRows(parseCsv(await file.text()))
   }
 
   async function submitCampaign() {
+    if (csvValidationError) {
+      setError(csvValidationError)
+      return
+    }
+
+    if (!matchedRows.length) {
+      setError('CSV contacts must match existing tenant contacts before campaign sending.')
+      return
+    }
+
+    if (unknownRows.length || blockedRows.length) {
+      setError('Campaign blocked. Remove unknown and opted-out contacts before sending.')
+      return
+    }
+
+    if (!selectedTemplate) {
+      setError('Select an approved template before sending campaign.')
+      return
+    }
+
     setSubmitting(true)
     setError('')
     setResult(null)
 
     try {
+const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone || '').replace(/\D/g, '')))
+      const safeRows = rows.filter((row) => allowedPhones.has(csvPhone(row)))
+
       const res = await api.post('/api/campaigns', {
-        name: campaignName,
-        templateName,
-        language: selectedTemplate?.language || 'en',
-        rows,
+        name: campaignName.trim(),
+        templateName: selectedTemplate.name,
+        language: selectedTemplate.language || 'en',
+        rows: safeRows,
         sendNow: !schedule,
         scheduledAt: schedule ? scheduledAt : null,
       })
@@ -902,8 +960,8 @@ export function BulkMessagePage({ templates, contacts }) {
             <select value={templateName} onChange={(event) => setTemplateName(event.target.value)}>
               <option value="">Select an approved template</option>
               {templates.map((template) => (
-                <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
-              ))}
+  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
+))}
             </select>
           </label>
           <div className="suite-inline-actions">
@@ -925,17 +983,21 @@ export function BulkMessagePage({ templates, contacts }) {
           {!!rows.length && (
             <div className="suite-validation">
               <strong>{rows.length} CSV row(s) loaded</strong>
-              <span>{matchedRows.length} matched to tenant contacts; {blockedRows.length} blocked by opt-out.</span>
+              <span>{matchedRows.length} matched; {unknownRows.length} unknown; {blockedRows.length} opted-out; {duplicatePhones.length} duplicate.</span>
+              {weakProofRows.length > 0 && <span>{weakProofRows.length} row(s) have weak opt-in proof.</span>}
+              {csvValidationError && <span className="danger">{csvValidationError}</span>}
             </div>
           )}
-          <label className="suite-toggle"><input type="checkbox" checked={schedule} onChange={(event) => setSchedule(event.target.checked)} /> Schedule</label>
-          {schedule && (
-            <label>
-              Schedule Time
-              <input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} />
-            </label>
-          )}
-          <label className="suite-toggle"><input type="checkbox" checked={drip} onChange={(event) => setDrip(event.target.checked)} /> Add Drip to this Campaign</label>
+          <label className="suite-toggle">
+            <input type="checkbox" checked={false} disabled /> Schedule
+          </label>
+          <div className="suite-policy-note">
+            Scheduling will be enabled after the queue worker is connected. Use Send Campaign for now.
+          </div>
+
+          <label className="suite-toggle">
+            <input type="checkbox" checked={false} disabled /> Add Drip to this Campaign
+          </label>
           {drip && (
             <div className="suite-policy-note">
               Drip sequence builder will be connected after base campaign sending records stable consent, template, and delivery history.
@@ -956,7 +1018,7 @@ export function BulkMessagePage({ templates, contacts }) {
           <button
             className="suite-primary-button"
             type="button"
-            disabled={submitting || !campaignName || !selectedTemplate || !rows.length || (schedule && !scheduledAt)}
+                        disabled={submitting || !campaignName || !selectedTemplate || !rows.length || Boolean(csvValidationError) || !matchedRows.length}
             onClick={submitCampaign}
           >
             {submitting ? 'Submitting...' : schedule ? 'Save Scheduled Campaign' : 'Send Campaign'}
@@ -982,7 +1044,9 @@ export function CannedMessagePage({
   sending,
 }) {
   const [tab, setTab] = useState('single')
-  const selectedTemplate = templates.find((template) => template.name === templateName)
+  const selectedTemplate = templates.find((template) => (
+  template.id === templateName || template.name === templateName
+))
 
   function chooseTemplate(event) {
     setDraft('')
@@ -1025,9 +1089,9 @@ export function CannedMessagePage({
             <span className="required">*</span> Select Canned Message
             <select value={templateName} onChange={chooseTemplate} disabled={tab !== 'single' || !selected || selected.opted_out}>
               <option value="">Choose an approved canned message</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.name}>{template.name} ({template.language})</option>
-              ))}
+             {templates.map((template) => (
+  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
+))}
             </select>
           </label>
           {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
@@ -1390,7 +1454,7 @@ export function UsersPage({ users, newUser, setNewUser, editingUserId, onCreate,
           </div>
           <label>Name<input placeholder="Full name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} /></label>
           <label>Email<input placeholder="name@company.com" value={newUser.email} disabled={Boolean(editingUserId)} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} /></label>
-          <label>Password<input placeholder={editingUserId ? 'Leave blank to keep old password' : '12+ chars with number & symbol'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
+          <label>Password<input type="password" autoComplete="new-password" placeholder={editingUserId ? 'Leave blank to keep old password' : '12+ chars with number & symbol'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
           <label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></label>
           <div className="user-form-actions">
             <button className="user-action-primary" type="submit">{editingUserId ? <CheckCircle2 size={16} /> : <UserPlus size={16} />} {editingUserId ? 'Update User' : 'Create User'}</button>
@@ -2171,6 +2235,9 @@ export function SettingsPage({
                   <input placeholder="Customer number" value={testMessage.to} onChange={(e) => setTestMessage({ ...testMessage, to: e.target.value })} />
                   <input placeholder="Test message inside 24-hour window only" value={testMessage.text} onChange={(e) => setTestMessage({ ...testMessage, text: e.target.value })} />
                   <button type="submit">Send Test</button>
+                  <div className="suite-policy-note">
+  Test message is a free-form WhatsApp message. It is allowed only when the customer has messaged within the last 24 hours, or backend will block it. Outside 24 hours, use an approved template.
+</div>
                 </form>
                 <small className="setup-copy">Free-form test messages are allowed only inside the customer&apos;s 24-hour WhatsApp reply window.</small>
                 {testResult && <small>{testResult}</small>}

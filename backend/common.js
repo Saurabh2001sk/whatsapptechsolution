@@ -185,10 +185,20 @@ function safeMetaError(error) {
 }
 
 function safeErrorLog(error, isProduction = false) {
+  function redactText(value = '') {
+    return String(value || '')
+      .replace(/(access_token=)[^&\s]+/gi, '$1[REDACTED]')
+      .replace(/(token=)[^&\s]+/gi, '$1[REDACTED]')
+      .replace(/(password=)[^&\s]+/gi, '$1[REDACTED]')
+      .replace(/(authorization:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+      .replace(/(whatsapp_access_token\s*[:=]\s*)[^\s,}]+/gi, '$1[REDACTED]')
+      .replace(/(jwt_secret\s*[:=]\s*)[^\s,}]+/gi, '$1[REDACTED]');
+  }
+
   return {
-    message: error?.message || 'Unknown error',
+    message: redactText(error?.message || 'Unknown error'),
     code: error?.code || null,
-    stack: isProduction ? undefined : error?.stack,
+    stack: isProduction ? undefined : redactText(error?.stack || ''),
   };
 }
 

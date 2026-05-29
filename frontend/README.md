@@ -21,9 +21,9 @@ These settings are persisted in the backend `app_settings` table and let each bu
 ## Demo Login
 
 ```text
-admin@bos.com / admin123
-manager@bos.com / manager123
-sales@bos.com / sales123
+admin@bos.com / AdminDemo@12345
+manager@bos.com / ManagerDemo@12345
+sales@bos.com / SalesDemo@12345
 ```
 
 Roles:

@@ -155,6 +155,87 @@ function registerSalesRoutes(app, ctx) {
     handleCustomerQuoteInbound,
   } = ctx;
 
+    const MAX_SALES_ITEMS_PER_DOCUMENT = 50;
+  const MAX_SALES_NOTES_LENGTH = 2000;
+
+  function cleanSalesText(value = '', maxLength = 500) {
+    return String(value || '').trim().slice(0, maxLength);
+  }
+
+  function cleanSalesSource(value = '', fallback = 'WhatsApp') {
+    const cleanValue = cleanSalesText(value, 80);
+    return cleanValue || fallback;
+  }
+
+  function cleanSalesDate(value = '') {
+    const rawValue = String(value || '').trim();
+
+    if (!rawValue) return null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+      return { error: 'Date must be in YYYY-MM-DD format' };
+    }
+
+    const date = new Date(`${rawValue}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime())) {
+      return { error: 'Invalid date' };
+    }
+
+    const today = new Date();
+    const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+    if (date < todayUtc) {
+      return { error: 'Date cannot be in the past' };
+    }
+
+    return rawValue;
+  }
+
+  function normalizeSalesPayloadItems(body = {}, fallbackDescription = 'Manual item') {
+    const rawItems = Array.isArray(body.items) && body.items.length
+      ? body.items
+      : [{
+          description: body.notes || fallbackDescription,
+          quantity: 1,
+          rate: toFiniteNumber(body.amount, 0),
+        }];
+
+    if (rawItems.length > MAX_SALES_ITEMS_PER_DOCUMENT) {
+      return {
+        error: `Maximum ${MAX_SALES_ITEMS_PER_DOCUMENT} items allowed`,
+      };
+    }
+
+    const items = rawItems.map(normalizeSalesItem);
+
+    for (const [index, item] of items.entries()) {
+      if (!cleanSalesText(item.description, 500)) {
+        return { error: `Item ${index + 1} description is required` };
+      }
+
+      if (Number(item.quantity || 0) <= 0) {
+        return { error: `Item ${index + 1} quantity must be greater than zero` };
+      }
+
+      if (Number(item.rate || 0) < 0) {
+        return { error: `Item ${index + 1} rate cannot be negative` };
+      }
+
+      if (Number(item.amount || 0) < 0) {
+        return { error: `Item ${index + 1} amount cannot be negative` };
+      }
+    }
+
+    if (sumItems(items) <= 0) {
+      return {
+        error: 'Total amount must be greater than zero',
+      };
+    }
+
+    return { items };
+  }
+
 app.get('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
   const params = [req.user.tenantId];
   const where = ['q.tenant_id = $1'];
@@ -174,12 +255,54 @@ app.get('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
-  if (!(await canAccessContactId(req.user, req.body.contact_id))) return res.status(403).json({ error: 'Quotation contact assigned to another user' });
-  const items = Array.isArray(req.body.items) && req.body.items.length
-    ? req.body.items
-    : [{ description: req.body.notes || 'Manual quotation item', quantity: 1, rate: toFiniteNumber(req.body.amount, 0) }];
-  const quote = await createQuotation({ tenantId: req.user.tenantId, contactId: req.body.contact_id, notes: req.body.notes, items, source: req.body.source || 'WhatsApp', validUntil: req.body.valid_until });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'quotation.created', entityType: 'quotation', entityId: quote.id, metadata: { contactId: req.body.contact_id || null } });
+  const contactId = String(req.body?.contact_id || '').trim();
+
+  if (!contactId) {
+    return res.status(400).json({ error: 'Quotation contact is required' });
+  }
+
+  if (!(await canAccessContactId(req.user, contactId))) {
+    return res.status(403).json({ error: 'Quotation contact assigned to another user' });
+  }
+
+  const itemResult = normalizeSalesPayloadItems(req.body, 'Manual quotation item');
+
+  if (itemResult.error) {
+    return res.status(400).json({ error: itemResult.error });
+  }
+
+  const validUntil = cleanSalesDate(req.body?.valid_until);
+
+  if (validUntil?.error) {
+    return res.status(400).json({ error: `Quotation valid until: ${validUntil.error}` });
+  }
+
+  const notes = cleanSalesText(req.body?.notes, MAX_SALES_NOTES_LENGTH);
+  const source = cleanSalesSource(req.body?.source, 'WhatsApp');
+
+  const quote = await createQuotation({
+    tenantId: req.user.tenantId,
+    contactId,
+    notes,
+    items: itemResult.items,
+    source,
+    validUntil,
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'quotation.created',
+    entityType: 'quotation',
+    entityId: quote.id,
+    metadata: {
+      contactId,
+      source,
+      itemCount: itemResult.items.length,
+      amount: quote.amount,
+    },
+  });
+
   res.status(201).json(quote);
 }));
 
@@ -696,14 +819,28 @@ app.post('/api/quotations/:id/convert-order', requireAuth, asyncHandler(async (r
     return res.status(400).json({ error: 'Quotation has no items. Cannot create order.' });
   }
 
+  const allowedPaymentStatuses = new Set(['pending', 'partial', 'paid', 'overdue', 'cancelled']);
+  const allowedDispatchStatuses = new Set(['pending', 'packed', 'dispatched', 'delivered', 'cancelled']);
+
+  const paymentStatus = String(req.body?.payment_status || 'pending').trim().toLowerCase();
+  const dispatchStatus = String(req.body?.dispatch_status || 'pending').trim().toLowerCase();
+
+  if (!allowedPaymentStatuses.has(paymentStatus)) {
+    return res.status(400).json({ error: 'Invalid payment status' });
+  }
+
+  if (!allowedDispatchStatuses.has(dispatchStatus)) {
+    return res.status(400).json({ error: 'Invalid dispatch status' });
+  }
+
   const order = await createSalesOrder({
     tenantId: req.user.tenantId,
     contactId: quote.contact_id,
-    notes: req.body.notes || `Converted from quotation ${quote.quote_no}`,
+    notes: cleanSalesText(req.body?.notes, MAX_SALES_NOTES_LENGTH) || `Converted from quotation ${quote.quote_no}`,
     items: itemResult.rows,
     source: 'WhatsApp Quote',
-    paymentStatus: req.body.payment_status || 'pending',
-    dispatchStatus: req.body.dispatch_status || 'pending',
+    paymentStatus,
+    dispatchStatus,
   });
 
   const updatedQuote = await query(
@@ -804,12 +941,65 @@ app.get('/api/orders', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/orders', requireAuth, asyncHandler(async (req, res) => {
-  if (!(await canAccessContactId(req.user, req.body.contact_id))) return res.status(403).json({ error: 'Order contact assigned to another user' });
-  const items = Array.isArray(req.body.items) && req.body.items.length
-    ? req.body.items
-    : [{ description: req.body.notes || 'Manual order item', quantity: 1, rate: toFiniteNumber(req.body.amount, 0) }];
-  const order = await createSalesOrder({ tenantId: req.user.tenantId, contactId: req.body.contact_id, notes: req.body.notes, items, source: req.body.source || 'WhatsApp', paymentStatus: req.body.payment_status || 'pending', dispatchStatus: req.body.dispatch_status || 'pending' });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'order.created', entityType: 'sales_order', entityId: order.id, metadata: { contactId: req.body.contact_id || null } });
+  const contactId = String(req.body?.contact_id || '').trim();
+
+  if (!contactId) {
+    return res.status(400).json({ error: 'Order contact is required' });
+  }
+
+  if (!(await canAccessContactId(req.user, contactId))) {
+    return res.status(403).json({ error: 'Order contact assigned to another user' });
+  }
+
+  const itemResult = normalizeSalesPayloadItems(req.body, 'Manual order item');
+
+  if (itemResult.error) {
+    return res.status(400).json({ error: itemResult.error });
+  }
+
+  const allowedPaymentStatuses = new Set(['pending', 'partial', 'paid', 'overdue', 'cancelled']);
+  const allowedDispatchStatuses = new Set(['pending', 'packed', 'dispatched', 'delivered', 'cancelled']);
+
+  const paymentStatus = String(req.body?.payment_status || 'pending').trim().toLowerCase();
+  const dispatchStatus = String(req.body?.dispatch_status || 'pending').trim().toLowerCase();
+
+  if (!allowedPaymentStatuses.has(paymentStatus)) {
+    return res.status(400).json({ error: 'Invalid payment status' });
+  }
+
+  if (!allowedDispatchStatuses.has(dispatchStatus)) {
+    return res.status(400).json({ error: 'Invalid dispatch status' });
+  }
+
+  const notes = cleanSalesText(req.body?.notes, MAX_SALES_NOTES_LENGTH);
+  const source = cleanSalesSource(req.body?.source, 'WhatsApp');
+
+  const order = await createSalesOrder({
+    tenantId: req.user.tenantId,
+    contactId,
+    notes,
+    items: itemResult.items,
+    source,
+    paymentStatus,
+    dispatchStatus,
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'order.created',
+    entityType: 'sales_order',
+    entityId: order.id,
+    metadata: {
+      contactId,
+      source,
+      itemCount: itemResult.items.length,
+      amount: order.amount,
+      paymentStatus,
+      dispatchStatus,
+    },
+  });
+
   res.status(201).json(order);
 }));
 

@@ -4,16 +4,35 @@ const hasDatabase = Boolean(process.env.DATABASE_URL);
 const isProduction = process.env.NODE_ENV === 'production';
 
 function shouldUseSsl() {
-  if (!isProduction) return false;
-
   const databaseUrl = String(process.env.DATABASE_URL || '');
+
+  if (!databaseUrl) return false;
+  if (process.env.PGSSL === 'disable') return false;
+
   return !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1');
+}
+
+function sslConfig() {
+  if (!shouldUseSsl()) return undefined;
+
+  const ca = String(process.env.PGSSL_CA_CERT || '').trim();
+
+  if (ca) {
+    return {
+      ca: ca.replace(/\\n/g, '\n'),
+      rejectUnauthorized: true,
+    };
+  }
+
+  return {
+    rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true',
+  };
 }
 
 const pool = hasDatabase
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: shouldUseSsl() ? { rejectUnauthorized: false } : undefined,
+      ssl: sslConfig(),
 
       // Keep pool small and stable for WhatsApp webhook workloads.
       max: Number(process.env.PG_POOL_MAX || 10),

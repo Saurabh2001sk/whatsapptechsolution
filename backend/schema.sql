@@ -627,32 +627,6 @@ ON whatsapp_accounts (tenant_id, phone_number_id);
 CREATE INDEX IF NOT EXISTS whatsapp_accounts_waba_idx
 ON whatsapp_accounts (waba_id);
 
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT;
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS access_token_iv TEXT;
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS access_token_tag TEXT;
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS token_type TEXT DEFAULT 'business_integration_system_user';
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS connected_by UUID REFERENCES users(id) ON DELETE SET NULL;
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
-
-ALTER TABLE whatsapp_accounts
-ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
-
-CREATE INDEX IF NOT EXISTS whatsapp_accounts_tenant_phone_idx
-ON whatsapp_accounts (tenant_id, phone_number_id);
-
-CREATE INDEX IF NOT EXISTS whatsapp_accounts_waba_idx
-ON whatsapp_accounts (waba_id);
 
 CREATE INDEX IF NOT EXISTS whatsapp_accounts_tenant_active_idx
 ON whatsapp_accounts (tenant_id, active);
@@ -1349,3 +1323,52 @@ ON quotations (tenant_id, status);
 
 CREATE INDEX IF NOT EXISTS sales_orders_tenant_status_idx
 ON sales_orders (tenant_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_tenant_updated_desc
+ON contacts (tenant_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_tenant_last_inbound_desc
+ON contacts (tenant_id, last_inbound_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_tenant_assigned_updated_desc
+ON contacts (tenant_id, assigned_to, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_tenant_label_updated_desc
+ON contacts (tenant_id, label, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_tenant_contact_created_desc
+ON messages (tenant_id, contact_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_tenant_status_created_desc
+ON messages (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_tenant_wa_message_id
+ON messages (tenant_id, wa_message_id)
+WHERE wa_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_created_desc
+ON audit_events (tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_events_tenant_status_received_desc
+ON webhook_events (tenant_id, status, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_tenant_status_created_desc
+ON outbound_messages (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_quotations_tenant_status_created_desc
+ON quotations (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sales_orders_tenant_status_created_desc
+ON sales_orders (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_products_tenant_active_name
+ON products (tenant_id, active, name);
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_tenant_status_created_desc
+ON campaigns (tenant_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_recipients_tenant_campaign_status
+ON campaign_recipients (tenant_id, campaign_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_contact_consents_tenant_contact_recorded_desc
+ON contact_consents (tenant_id, contact_id, recorded_at DESC);

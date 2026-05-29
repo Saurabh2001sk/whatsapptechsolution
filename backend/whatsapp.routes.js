@@ -313,20 +313,23 @@ async function processWhatsAppWebhookPayload(payload) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
 
-      console.log('WA webhook change value:', {
-        phoneNumberId: value?.metadata?.phone_number_id || null,
-        displayPhoneNumber: value?.metadata?.display_phone_number || null,
-        contactsCount: value?.contacts?.length || 0,
-        messagesCount: value?.messages?.length || 0,
-        statusesCount: value?.statuses?.length || 0,
-      });
+      if (!isProduction) {
+        console.log('WA webhook change value:', {
+          phoneNumberId: maskId(value?.metadata?.phone_number_id || ''),
+          contactsCount: value?.contacts?.length || 0,
+          messagesCount: value?.messages?.length || 0,
+          statusesCount: value?.statuses?.length || 0,
+        });
+      }
 
       const tenantId = await getTenantIdForWebhookValue(value);
 
-      console.log('WA webhook tenant mapping:', {
-        phoneNumberId: value?.metadata?.phone_number_id || null,
-        tenantId,
-      });
+      if (!isProduction) {
+        console.log('WA webhook tenant mapping:', {
+          phoneNumberId: maskId(value?.metadata?.phone_number_id || ''),
+          tenantId,
+        });
+      }
 
       if (!tenantId) {
         console.warn('Webhook ignored: no active tenant mapped for phone_number_id', {
@@ -370,11 +373,13 @@ app.post('/webhook', rateLimit({
   maxRequests: 3000,
   windowMs: 5 * 60 * 1000,
 }), asyncHandler(async (req, res) => {
-  console.log('WA webhook received:', {
-    object: req.body?.object || null,
-    entries: req.body?.entry?.length || 0,
-    hasSignature: Boolean(req.headers['x-hub-signature-256']),
-  });
+  if (!isProduction) {
+    console.log('WA webhook received:', {
+      object: req.body?.object || null,
+      entries: req.body?.entry?.length || 0,
+      hasSignature: Boolean(req.headers['x-hub-signature-256']),
+    });
+  }
 
   if (!verifyMetaWebhookSignature(req)) {
     console.warn('WA webhook rejected: invalid signature');
@@ -382,24 +387,29 @@ app.post('/webhook', rateLimit({
   }
 
   const payload = req.body;
-  const webhookEvent = await createWebhookEvent(payload);
 
   res.sendStatus(200);
 
   setImmediate(async () => {
+    let webhookEvent = null;
+
     try {
+      webhookEvent = await createWebhookEvent(payload);
+
       await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
 
       await processWhatsAppWebhookPayload(payload);
 
       await markWebhookEventProcessed(webhookEvent.id, webhookEvent.tenant_id);
     } catch (error) {
-console.error('WA webhook async processing failed:', {
-  webhookEventId: webhookEvent?.id || null,
-  ...safeErrorLog(error),
-});
+      console.error('WA webhook async processing failed:', {
+        webhookEventId: webhookEvent?.id || null,
+        ...safeErrorLog(error),
+      });
 
-      await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
+      if (webhookEvent?.id) {
+        await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
+      }
     }
   });
 }));
@@ -415,6 +425,12 @@ app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res
   if (cleanPhone.length < 11 || !body) {
     return res.status(400).json({ error: 'Phone country code ke saath aur message required hai.' });
   }
+
+  if (body.length > MAX_WHATSAPP_TEXT_LENGTH) {
+    return res.status(400).json({
+      error: `Inbound simulator message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
+    });
+  }
   const result = await processInboundMessage({
     tenantId: req.user.tenantId,
     waId: cleanPhone,
@@ -423,7 +439,14 @@ app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res
     waMessageId: `local.${Date.now()}.${Math.random().toString(16).slice(2)}`,
     rawPayload: { localSimulator: true, createdBy: req.user.id },
   });
-  await recordAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'message.local_inbound_captured', entityType: 'contact', entityId: result.contact.id, metadata: { phone: cleanPhone } });
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'message.local_inbound_captured',
+    entityType: 'contact',
+    entityId: result.contact.id,
+    metadata: { phone: maskValue(cleanPhone) },
+  });
   res.status(201).json(result);
 }));
 
@@ -531,7 +554,7 @@ app.post('/api/whatsapp/test-message', rateLimit({
     entityType: 'message',
     entityId: message?.id,
     metadata: {
-      to: cleanTo,
+      to: maskValue(cleanTo),
       messageId,
       contactId: contact.id,
     },
@@ -559,7 +582,11 @@ app.get('/api/users', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows.map(publicUser));
 }));
 
-app.post('/api/users', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/users', rateLimit({
+  bucketName: 'user-create',
+  maxRequests: 30,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -613,7 +640,7 @@ app.post('/api/users', requireAuth, asyncHandler(async (req, res) => {
     entityType: 'user',
     entityId: result.rows[0].id,
     metadata: {
-      email: cleanEmail,
+      email: maskEmail(cleanEmail),
       role: cleanRole,
     },
   });
@@ -621,7 +648,11 @@ app.post('/api/users', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json(publicUser(result.rows[0]));
 }));
 
-app.patch('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
+app.patch('/api/users/:id', rateLimit({
+  bucketName: 'user-update',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
 
   const { name, role, active, password } = req.body;
@@ -701,7 +732,11 @@ app.patch('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
   res.json(publicUser(result.rows[0]));
 }));
 
-app.delete('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
+app.delete('/api/users/:id', rateLimit({
+  bucketName: 'user-delete',
+  maxRequests: 30,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
 
   if (req.params.id === req.user.id) {
@@ -747,9 +782,9 @@ app.delete('/api/users/:id', requireAuth, asyncHandler(async (req, res) => {
     entityType: 'user',
     entityId: result.rows[0].id,
     metadata: {
-      email: result.rows[0].email,
-      role: result.rows[0].role,
-    },
+  email: maskEmail(result.rows[0].email),
+  role: result.rows[0].role,
+},
   });
      res.json({ ok: true, deleted: publicUser(result.rows[0]) });
 }));
@@ -801,45 +836,75 @@ app.get('/api/webhook-events/failed', requireAuth, asyncHandler(async (req, res)
   res.json(result.rows);
 }));
 
-app.post('/api/webhook-events/cleanup', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/webhook-events/cleanup', rateLimit({
+  bucketName: 'webhook-events-cleanup',
+  maxRequests: 10,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
 
   const retentionDays = Math.min(
-    Math.max(Number(req.body?.retentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 30), 7),
-    180,
+    Math.max(Number(req.body?.retentionDays || process.env.WEBHOOK_EVENT_RETENTION_DAYS || 365), 90),
+    3650,
   );
 
-  const result = await query(
-    `DELETE FROM webhook_events
+  const confirmDelete = String(req.body?.confirmDelete || '').trim();
+  const deletionConfirmed = confirmDelete === 'DELETE_OLD_PROCESSED_WEBHOOK_EVENTS';
+
+  const eligibleResult = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM webhook_events
      WHERE tenant_id = $1
        AND status = 'processed'
-       AND received_at < now() - ($2::int * interval '1 day')
-     RETURNING id`,
+       AND received_at < now() - ($2::int * interval '1 day')`,
     [req.user.tenantId, retentionDays],
   );
+
+  let deletedCount = 0;
+
+  if (deletionConfirmed) {
+    const deleteResult = await query(
+      `DELETE FROM webhook_events
+       WHERE tenant_id = $1
+         AND status = 'processed'
+         AND received_at < now() - ($2::int * interval '1 day')
+       RETURNING id`,
+      [req.user.tenantId, retentionDays],
+    );
+
+    deletedCount = deleteResult.rowCount;
+  }
 
   await recordAudit({
     tenantId: req.user.tenantId,
     actorUserId: req.user.id,
-    action: 'webhook_events.cleanup',
+    action: deletionConfirmed ? 'webhook_events.cleanup_deleted' : 'webhook_events.cleanup_checked',
     entityType: 'webhook_event',
     entityId: null,
     metadata: {
       retentionDays,
-      deletedCount: result.rowCount,
+      eligibleCount: eligibleResult.rows[0]?.count || 0,
+      deletedCount,
+      deletionConfirmed,
     },
   });
 
   res.json({
     ok: true,
     retentionDays,
-    deletedCount: result.rowCount,
+    eligibleCount: eligibleResult.rows[0]?.count || 0,
+    deletedCount,
+    deletionConfirmed,
   });
 }));
 
-app.post('/api/webhook-events/recover-stuck', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/webhook-events/recover-stuck', rateLimit({
+  bucketName: 'webhook-events-recover-stuck',
+  maxRequests: 20,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -879,7 +944,11 @@ app.post('/api/webhook-events/recover-stuck', requireAuth, asyncHandler(async (r
   });
 }));
 
-app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/system/maintenance', rateLimit({
+  bucketName: 'system-maintenance',
+  maxRequests: 10,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -899,21 +968,24 @@ app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) =
     120,
   );
 
-  const [deletedWebhookEvents, deletedOutboundMessages, recoveredStuckWebhooks] = await Promise.all([
+  const confirmDelete = String(req.body?.confirmDelete || '').trim();
+  const deletionConfirmed = confirmDelete === 'DELETE_OLD_SYSTEM_RECORDS';
+
+  const [eligibleWebhookEvents, eligibleOutboundMessages, recoveredStuckWebhooks] = await Promise.all([
     query(
-      `DELETE FROM webhook_events
+      `SELECT COUNT(*)::int AS count
+       FROM webhook_events
        WHERE tenant_id = $1
          AND status = 'processed'
-         AND received_at < now() - ($2::int * interval '1 day')
-       RETURNING id`,
+         AND received_at < now() - ($2::int * interval '1 day')`,
       [req.user.tenantId, webhookRetentionDays],
     ),
     query(
-      `DELETE FROM outbound_messages
+      `SELECT COUNT(*)::int AS count
+       FROM outbound_messages
        WHERE tenant_id = $1
          AND status = 'sent'
-         AND created_at < now() - ($2::int * interval '1 day')
-       RETURNING id`,
+         AND created_at < now() - ($2::int * interval '1 day')`,
       [req.user.tenantId, outboundRetentionDays],
     ),
     query(
@@ -928,13 +1000,40 @@ app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) =
     ),
   ]);
 
+  let deletedWebhookEvents = { rowCount: 0 };
+  let deletedOutboundMessages = { rowCount: 0 };
+
+  if (deletionConfirmed) {
+    [deletedWebhookEvents, deletedOutboundMessages] = await Promise.all([
+      query(
+        `DELETE FROM webhook_events
+         WHERE tenant_id = $1
+           AND status = 'processed'
+           AND received_at < now() - ($2::int * interval '1 day')
+         RETURNING id`,
+        [req.user.tenantId, webhookRetentionDays],
+      ),
+      query(
+        `DELETE FROM outbound_messages
+         WHERE tenant_id = $1
+           AND status = 'sent'
+           AND created_at < now() - ($2::int * interval '1 day')
+         RETURNING id`,
+        [req.user.tenantId, outboundRetentionDays],
+      ),
+    ]);
+  }
+
   const result = {
     webhookRetentionDays,
     outboundRetentionDays,
     stuckMinutes,
+    eligibleWebhookEvents: eligibleWebhookEvents.rows[0]?.count || 0,
+    eligibleOutboundMessages: eligibleOutboundMessages.rows[0]?.count || 0,
     deletedWebhookEvents: deletedWebhookEvents.rowCount,
     deletedOutboundMessages: deletedOutboundMessages.rowCount,
     recoveredStuckWebhooks: recoveredStuckWebhooks.rowCount,
+    deletionConfirmed,
   };
 
   await recordAudit({
@@ -952,7 +1051,11 @@ app.post('/api/system/maintenance', requireAuth, asyncHandler(async (req, res) =
   });
 }));
 
-app.post('/api/webhook-events/:id/retry', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/webhook-events/:id/retry', rateLimit({
+  bucketName: 'webhook-event-retry',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -1084,7 +1187,11 @@ app.get('/api/outbound-messages/failed', requireAuth, asyncHandler(async (req, r
   res.json(result.rows);
 }));
 
-app.post('/api/outbound-messages/:id/retry', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/outbound-messages/:id/retry', rateLimit({
+  bucketName: 'outbound-message-retry',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }

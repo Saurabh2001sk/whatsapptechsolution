@@ -140,7 +140,12 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
       })
       onAuthenticate(res.data.user)
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed')
+     setError(
+  err.response?.data?.error ||
+  err.response?.data?.message ||
+  err.message ||
+  'Login failed'
+)
     } finally {
       setSubmitting(false)
     }
@@ -1038,10 +1043,23 @@ const [authChecking, setAuthChecking] = useState(true)
   }
 
   useEffect(() => {
+    let lastMessage = ''
+    let lastShownAt = 0
+
     function showIssueToast(text) {
-      setNotice({ text, type: 'error' })
+      const message = String(text || 'Frontend/API issue detected')
+      const now = Date.now()
+
+      if (message === lastMessage && now - lastShownAt < 5000) {
+        return
+      }
+
+      lastMessage = message
+      lastShownAt = now
+
+      setNotice({ text: message, type: 'error' })
       window.setTimeout(() => {
-        setNotice((current) => (current?.text === text ? null : current))
+        setNotice((current) => (current?.text === message ? null : current))
       }, 8000)
     }
 
@@ -1073,9 +1091,19 @@ const [authChecking, setAuthChecking] = useState(true)
     }
   }, [])
 
-  function apiErrorMessage(err, fallback) {
-    return err.response?.data?.error || err.message || fallback
+function apiErrorMessage(err, fallback = 'Request failed') {
+  const backendMessage =
+    err.response?.data?.error ||
+    err.response?.data?.message
+
+  if (backendMessage) return backendMessage
+
+  if (err.message === 'Network Error') {
+    return 'Network error: backend unreachable or CORS blocked this frontend origin.'
   }
+
+  return err.message || fallback
+}
 
   async function loadAll(overrides = {}) {
     if (!user?.id) return
@@ -1184,11 +1212,21 @@ if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
     }
   }
 
-  async function loadMessages(contactId, markRead = false) {
+async function loadMessages(contactId, markRead = false, options = {}) {
     if (!contactId) return
-    if (markRead) await api.post(`/api/conversations/${contactId}/read`)
-    const res = await api.get(`/api/conversations/${contactId}/messages`)
-    setMessages(res.data)
+
+    if (markRead) {
+      await api.post(`/api/conversations/${contactId}/read`, {}, { silentError: Boolean(options.silentError) })
+    }
+
+    const res = await api.get(`/api/conversations/${contactId}/messages`, {
+      silentError: Boolean(options.silentError),
+    })
+
+    setMessages((currentMessages) => {
+      const stillSelected = selectedId === contactId || options.force === true
+      return stillSelected ? res.data : currentMessages
+    })
   }
 
   useEffect(() => {
@@ -1212,12 +1250,31 @@ if (manageTemplateRes) setManagedTemplates(manageTemplateRes.data)
   useEffect(() => {
     if (isSuperAdminUser) return
     if (!selected?.id) return
-    // Selection drives the editable profile form and read receipt state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setSendError('')
-    loadMessages(selected.id, true).then(() => loadAll())
-    if (canMonitor) api.get(`/api/contacts/${selected.id}/assignment-history`).then((res) => setAssignmentHistory(res.data))
-    api.get(`/api/contacts/${selected.id}/timeline`).then((res) => setTimeline(res.data)).catch(() => setTimeline([]))
+
+    loadMessages(selected.id, true)
+      .then(() => {
+        setConversations((current) => current.map((item) => (
+          item.id === selected.id
+            ? { ...item, unread_count: 0 }
+            : item
+        )))
+      })
+      .catch((err) => {
+        notify(apiErrorMessage(err, 'Unable to load messages'), 'error')
+      })
+
+    if (canMonitor) {
+      api.get(`/api/contacts/${selected.id}/assignment-history`)
+        .then((res) => setAssignmentHistory(res.data))
+        .catch(() => setAssignmentHistory([]))
+    }
+
+    api.get(`/api/contacts/${selected.id}/timeline`)
+      .then((res) => setTimeline(res.data))
+      .catch(() => setTimeline([]))
+
     setLeadForm({
       name: selected.name || '',
       company: selected.company || '',
@@ -1256,18 +1313,15 @@ useEffect(() => {
 useEffect(() => {
   if (!user?.id) return undefined
   if (isSuperAdminUser) return undefined
+  if (!selectedId) return undefined
 
-  const interval = window.setInterval(() => {
-    loadAll({ filter, windowFilter, search })
-
-    if (selectedId) {
-      loadMessages(selectedId)
-    }
-  }, 10000)
+const interval = window.setInterval(() => {
+    loadMessages(selectedId, false, { silentError: true }).catch(() => {})
+  }, 30000)
 
   return () => window.clearInterval(interval)
 // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [user?.id, selectedId, filter, windowFilter, search])
+}, [user?.id, selectedId])
 
 if (authChecking) {
   return (
@@ -1377,13 +1431,21 @@ function manualOptOut(contact) {
 }
 
 function manualOptIn(contact) {
-  const confirmed = window.confirm(
-    `Mark ${contact.name || contact.phone} as opted-in again? Only do this if the customer has clearly requested opt-in.`
+  const proof = window.prompt(
+    `Proof for opting-in ${contact.name || contact.phone} again?\n\nExample: Customer replied START on WhatsApp / Customer requested opt-in on call / Written consent received.`,
+    'Customer requested opt-in'
   )
 
-  if (!confirmed) return
+  if (proof === null) return
 
-  updateContactOptOut(contact.id, false, '')
+  const cleanProof = proof.trim()
+
+  if (cleanProof.length < 8) {
+    notify('Opt-in proof is required for compliance', 'error')
+    return
+  }
+
+  updateContactOptOut(contact.id, false, cleanProof)
 }
 
 async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
@@ -1433,8 +1495,8 @@ if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={ap
       'audit',
       'users',
     ]
-    const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit']
-    const adminOnlyPages = ['users', 'connectWhatsApp']
+const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit', 'sendBulk', 'integrations', 'billing', 'voice', 'automation']
+const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing', 'integrations']
     const salesSubPages = ['quotes', 'orders', 'activeOrders']
     const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
 
@@ -1553,7 +1615,9 @@ async function sendMessage(event) {
   }
 
   const cleanText = draft.trim()
-  const selectedTemplate = templates.find((template) => template.name === templateName)
+  const selectedTemplate = templates.find((template) => (
+  template.id === templateName || template.name === templateName
+))
 
   setSendError('')
 
@@ -1562,9 +1626,9 @@ async function sendMessage(event) {
     return
   }
 
-  const payload = templateName
-    ? { templateName, language: selectedTemplate?.language || 'en' }
-    : { text: cleanText }
+const payload = selectedTemplate
+  ? { templateName: selectedTemplate.name, language: selectedTemplate.language || 'en' }
+  : { text: cleanText }
 
   if (!payload.templateName && !payload.text) {
     setSendError('Message text required hai, ya template select karo.')
@@ -1607,11 +1671,25 @@ async function simulateInbound(event) {
   }
 
   try {
-    await api.post('/api/local/inbound-message', simulator)
+    const res = await api.post('/api/local/inbound-message', simulator)
+    const contactId = res.data?.contact?.id || ''
+
     notify('Inbound message captured')
+    setSimulator((current) => ({
+      ...current,
+      message: '',
+    }))
     setActivePage('inbox')
     setFilter('all')
-    await loadAll()
+    setWindowFilter('all')
+    setSearch('')
+
+    if (contactId) {
+      setSelectedId(contactId)
+      await loadMessages(contactId)
+    }
+
+    await loadAll({ filter: 'all', windowFilter: 'all', search: '' })
   } catch (err) {
     notify(apiErrorMessage(err, 'Inbound simulator failed'), 'error')
   }
@@ -1717,7 +1795,14 @@ async function simulateInbound(event) {
     })
   }
 
-  async function deleteProduct(product) {
+async function deleteProduct(product) {
+  const confirmed = window.confirm(
+    `Delete product ${product.sku || product.name}?\n\nThis removes/deactivates it for the current company inventory. Continue?`
+  )
+
+  if (!confirmed) return
+
+  try {
     await api.delete(`/api/products/${product.id}`)
     notify('Product deleted')
     if (editingProductId === product.id) {
@@ -1725,7 +1810,10 @@ async function simulateInbound(event) {
       setProductForm(emptyProduct)
     }
     await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Product delete failed'), 'error')
   }
+}
 
   async function importProducts(rows) {
     setImportResult('')
@@ -1782,20 +1870,27 @@ async function simulateInbound(event) {
     }
   }
 
-  async function deleteUser(userItem) {
-    if (userItem.id === user.id) {
-      notify('You cannot delete your own logged-in user', 'error')
-      return
-    }
-    try {
-      await api.delete(`/api/users/${userItem.id}`)
-      notify('User deleted')
-      if (editingUserId === userItem.id) cancelUserEdit()
-      await loadAll()
-    } catch (err) {
-      notify(apiErrorMessage(err, 'User delete failed'), 'error')
-    }
+async function deleteUser(userItem) {
+  if (userItem.id === user.id) {
+    notify('You cannot delete your own logged-in user', 'error')
+    return
   }
+
+  const confirmed = window.confirm(
+    `Delete user ${userItem.name || userItem.email}?\n\nThis removes this user from the current company. Continue?`
+  )
+
+  if (!confirmed) return
+
+  try {
+    await api.delete(`/api/users/${userItem.id}`)
+    notify('User deleted')
+    if (editingUserId === userItem.id) cancelUserEdit()
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'User delete failed'), 'error')
+  }
+}
 
   async function syncTemplatesFromMeta() {
   if (!canMonitor) {
@@ -1920,21 +2015,44 @@ async function saveCustomization(event) {
   await saveSettingsPayload(customForm, 'Customization saved')
 }
 
-  async function sendTestMessage(event) {
+async function sendTestMessage(event) {
     event.preventDefault()
+
+    const cleanTo = String(testMessage.to || '').replace(/\D/g, '')
+    const cleanText = String(testMessage.text || '').trim()
+
+    if (cleanTo.length < 11 || cleanTo.length > 15) {
+      setTestResult('Number country code ke saath hona chahiye. India ke liye format: 91XXXXXXXXXX')
+      return
+    }
+
+    if (!cleanText) {
+      setTestResult('Test message text required hai.')
+      return
+    }
+
     setTestResult('')
+
     try {
-      const res = await api.post('/api/whatsapp/test-message', testMessage)
+      const res = await api.post('/api/whatsapp/test-message', {
+        to: cleanTo,
+        text: cleanText,
+      })
+
       setTestResult(`Accepted by Meta. To: ${res.data.to}. Message ID: ${res.data.messageId || 'not returned'}`)
       notify('Test message accepted')
       setActivePage('inbox')
       setFilter('all')
       setWindowFilter('all')
       setSearch('')
-      if (res.data.contactId) setSelectedId(res.data.contactId)
+
+      if (res.data.contactId) {
+        setSelectedId(res.data.contactId)
+      }
+
       await loadAll()
     } catch (err) {
-      setTestResult(err.response?.data?.error || 'Test message failed')
+      setTestResult(apiErrorMessage(err, 'Test message failed'))
     }
   }
 
@@ -1967,6 +2085,11 @@ async function saveCustomization(event) {
   async function refreshCurrentPage() {
     if (!isSuperAdminUser) {
       await loadAll()
+
+      if (selectedId) {
+        await loadMessages(selectedId)
+      }
+
       return
     }
 
@@ -2640,11 +2763,11 @@ async function saveCustomization(event) {
     disabled={!selected || selected.opted_out || sendingMessage}
   >
     <option value="">Text Reply</option>
-    {templates.map((template) => (
-      <option key={template.id} value={template.name}>
-        {template.name}{template.language ? ` (${template.language})` : ''}
-      </option>
-    ))}
+{templates.map((template) => (
+  <option key={template.id} value={template.id}>
+    {template.name}{template.language ? ` (${template.language})` : ''}
+  </option>
+))}
   </select>
 
   <button type="submit" disabled={!selected || selected.opted_out || sendingMessage || (!selected.reply_window_open && !templateName)}>

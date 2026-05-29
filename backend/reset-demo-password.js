@@ -1,4 +1,4 @@
-require('dotenv').config({ path: require('path').join(__dirname, '..', 'private', 'backend.env') });
+require('dotenv').config();
 
 const bcrypt = require('bcrypt');
 const { Client } = require('pg');
@@ -22,9 +22,22 @@ async function main() {
     sales: String(process.env.DEMO_SALES_PASSWORD || ''),
   };
 
-  if (Object.values(demoPasswords).some((password) => password.length < 12)) {
-    throw new Error('DEMO_ADMIN_PASSWORD, DEMO_MANAGER_PASSWORD and DEMO_SALES_PASSWORD must each be at least 12 characters');
-  }
+function isStrongDemoPassword(password) {
+  const value = String(password || '')
+
+  return (
+    value.length >= 12
+    && value.length <= 128
+    && /[a-z]/.test(value)
+    && /[A-Z]/.test(value)
+    && /[0-9]/.test(value)
+    && /[^a-zA-Z0-9]/.test(value)
+  )
+}
+
+if (Object.values(demoPasswords).some((password) => !isStrongDemoPassword(password))) {
+  throw new Error('DEMO_ADMIN_PASSWORD, DEMO_MANAGER_PASSWORD and DEMO_SALES_PASSWORD must each be 12-128 characters with uppercase, lowercase, number and symbol')
+}
 
   const client = new Client({
     connectionString: process.env.DATABASE_URL,

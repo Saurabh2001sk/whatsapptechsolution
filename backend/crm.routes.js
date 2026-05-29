@@ -184,7 +184,11 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
 // =========================================================
 
 app.get('/api/conversations', requireAuth, asyncHandler(async (req, res) => {
-  const { label, assigned, q, window } = req.query;
+  const { assigned } = req.query;
+  const label = String(req.query?.label || '').trim().slice(0, 80);
+  const q = String(req.query?.q || '').trim().slice(0, 80);
+  const windowFilter = String(req.query?.window || '').trim().toLowerCase();
+
   const params = [req.user.tenantId];
   const where = ['c.tenant_id = $1'];
   if (!canMonitor(req.user)) {
@@ -204,9 +208,18 @@ app.get('/api/conversations', requireAuth, asyncHandler(async (req, res) => {
 
     where.push('c.assigned_to IS NULL');
   }
-  if (q) { params.push(`%${q}%`); where.push(`(c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length} OR c.company ILIKE $${params.length})`); }
-  if (window === 'open') where.push(`c.last_inbound_at >= now() - interval '24 hours'`);
-  if (window === 'expired') where.push(`(c.last_inbound_at IS NULL OR c.last_inbound_at < now() - interval '24 hours')`);
+  if (q) {
+    params.push(`%${q}%`);
+    where.push(`(c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length} OR c.company ILIKE $${params.length})`);
+  }
+
+  if (windowFilter && !['all', 'open', 'expired'].includes(windowFilter)) {
+    return res.status(400).json({ error: 'Invalid conversation window filter' });
+  }
+
+  if (windowFilter === 'open') where.push(`c.last_inbound_at >= now() - interval '24 hours'`);
+  if (windowFilter === 'expired') where.push(`(c.last_inbound_at IS NULL OR c.last_inbound_at < now() - interval '24 hours')`);
+
   const result = await query(
     `SELECT c.*, u.name AS assigned_name,
       m.body AS last_message, m.created_at AS last_message_at,
@@ -217,7 +230,8 @@ app.get('/api/conversations', requireAuth, asyncHandler(async (req, res) => {
      LEFT JOIN LATERAL (SELECT body, created_at FROM messages WHERE contact_id = c.id AND tenant_id = c.tenant_id ORDER BY created_at DESC LIMIT 1) m ON true
      LEFT JOIN LATERAL (SELECT COUNT(*)::int AS count FROM messages WHERE contact_id = c.id AND tenant_id = c.tenant_id AND direction = 'inbound' AND status = 'received') unread ON true
      WHERE ${where.join(' AND ')}
-     ORDER BY COALESCE(m.created_at, c.updated_at) DESC`,
+     ORDER BY COALESCE(m.created_at, c.updated_at) DESC
+     LIMIT 100`,
     params,
   );
   res.json(result.rows);
@@ -270,10 +284,18 @@ app.get('/api/conversations/:id/messages', requireAuth, asyncHandler(async (req,
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
   if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
   const result = await query(
-    `SELECT id, tenant_id, contact_id, wa_message_id, direction, type, body, status, template_name,
-            caption, media_id, media_url, mime_type, file_name, file_size,
-            interactive_payload, button_payload, status_updated_at, created_at
-     FROM messages WHERE contact_id = $1 AND tenant_id = $2 ORDER BY created_at ASC`,
+    `SELECT *
+     FROM (
+       SELECT id, tenant_id, contact_id, wa_message_id, direction, type, body, status, template_name,
+              caption, media_id, media_url, mime_type, file_name, file_size,
+              interactive_payload, button_payload, status_updated_at, created_at
+       FROM messages
+       WHERE contact_id = $1
+         AND tenant_id = $2
+       ORDER BY created_at DESC
+       LIMIT 200
+     ) recent_messages
+     ORDER BY created_at ASC`,
     [req.params.id, req.user.tenantId],
   );
   res.json(result.rows);
@@ -291,42 +313,157 @@ app.post('/api/conversations/:id/read', requireAuth, asyncHandler(async (req, re
 }));
 
 app.patch('/api/contacts/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { name, company, stage, owner, notes, label, assigned_to, assignment_reason } = req.body;
   const contact = await findContact(req.params.id, req.user.tenantId);
-  if (!contact) return res.status(404).json({ error: 'Contact not found' });
-  if (!canAccessContact(req.user, contact)) return res.status(403).json({ error: 'Conversation assigned to another user' });
-  if (assigned_to !== undefined && !canMonitor(req.user)) return res.status(403).json({ error: 'Only manager/admin can assign' });
 
-  if (stage !== undefined) {
-    const settings = await getAppSettings(req.user.tenantId);
-    const allowedStages = new Set((settings.stages || DEFAULT_APP_SETTINGS.stages).map((item) => String(item).trim().toLowerCase()));
-    const cleanStage = String(stage || '').trim().toLowerCase();
+  if (!contact) {
+    return res.status(404).json({ error: 'Contact not found' });
+  }
 
-    if (!allowedStages.has(cleanStage)) {
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
+  const settings = await getAppSettings(req.user.tenantId);
+
+  function cleanOptionalText(value, maxLength) {
+    if (value === undefined) return undefined;
+
+    const cleanValue = String(value || '').trim();
+
+    if (!cleanValue) return null;
+
+    return cleanValue.slice(0, maxLength);
+  }
+
+  const cleanName = cleanOptionalText(req.body?.name, 120);
+  const cleanCompany = cleanOptionalText(req.body?.company, 160);
+  const cleanOwner = cleanOptionalText(req.body?.owner, 120);
+  const cleanNotes = cleanOptionalText(req.body?.notes, 2000);
+  const cleanAssignmentReason = cleanOptionalText(req.body?.assignment_reason, 500);
+
+  let cleanStage;
+
+  if (req.body?.stage !== undefined) {
+    cleanStage = String(req.body.stage || '').trim().toLowerCase();
+
+    const allowedStages = new Set(
+      (settings.stages || DEFAULT_APP_SETTINGS.stages)
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter(Boolean),
+    );
+
+    if (!cleanStage || !allowedStages.has(cleanStage)) {
       return res.status(400).json({ error: 'Invalid contact stage' });
     }
   }
 
-  const shouldUpdateAssignment = assigned_to !== undefined;
-  const assignedToValue = assigned_to === '' ? null : assigned_to;
+  let cleanLabel;
+
+  if (req.body?.label !== undefined) {
+    cleanLabel = String(req.body.label || '').trim();
+
+    const allowedLabels = new Set(
+      (settings.labels || DEFAULT_APP_SETTINGS.labels)
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter(Boolean),
+    );
+
+    if (!cleanLabel || !allowedLabels.has(cleanLabel.toLowerCase())) {
+      return res.status(400).json({ error: 'Invalid contact label' });
+    }
+
+    cleanLabel = cleanLabel.slice(0, 80);
+  }
+
+  const shouldUpdateAssignment = req.body?.assigned_to !== undefined;
+
+  if (shouldUpdateAssignment && !canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Only manager/admin can assign' });
+  }
+
+  const assignedToValue = shouldUpdateAssignment
+    ? String(req.body.assigned_to || '').trim() || null
+    : null;
+
   if (assignedToValue) {
     const assignedUser = await query(
-      'SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND active = true LIMIT 1',
+      `SELECT id
+       FROM users
+       WHERE id = $1
+         AND tenant_id = $2
+         AND active = true
+         AND role IN ('admin', 'manager', 'sales')
+       LIMIT 1`,
       [assignedToValue, req.user.tenantId],
-    );    if (!assignedUser.rows[0]) return res.status(400).json({ error: 'Assigned user not found for this company' });
+    );
+
+    if (!assignedUser.rows[0]) {
+      return res.status(400).json({ error: 'Assigned user not found for this company' });
+    }
   }
-  const before = await query('SELECT assigned_to FROM contacts WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
+
+  const before = await query(
+    'SELECT assigned_to FROM contacts WHERE id = $1 AND tenant_id = $2',
+    [req.params.id, req.user.tenantId],
+  );
+
   const result = await query(
     `UPDATE contacts
-     SET name = COALESCE($2, name), company = COALESCE($3, company), stage = COALESCE($4, stage),
-         owner = COALESCE($5, owner), notes = COALESCE($6, notes), label = COALESCE($7, label),
-         assigned_to = CASE WHEN $8 THEN $9::uuid ELSE assigned_to END, updated_at = now()
-     WHERE id = $1 AND tenant_id = $10
+     SET name = CASE WHEN $2::boolean THEN $3 ELSE name END,
+         company = CASE WHEN $4::boolean THEN $5 ELSE company END,
+         stage = CASE WHEN $6::boolean THEN $7 ELSE stage END,
+         owner = CASE WHEN $8::boolean THEN $9 ELSE owner END,
+         notes = CASE WHEN $10::boolean THEN $11 ELSE notes END,
+         label = CASE WHEN $12::boolean THEN $13 ELSE label END,
+         assigned_to = CASE WHEN $14::boolean THEN $15::uuid ELSE assigned_to END,
+         updated_at = now()
+     WHERE id = $1
+       AND tenant_id = $16
      RETURNING *`,
-    [req.params.id, name, company, stage, owner, notes, label, shouldUpdateAssignment, assignedToValue, req.user.tenantId],
+    [
+      req.params.id,
+      req.body?.name !== undefined,
+      cleanName,
+      req.body?.company !== undefined,
+      cleanCompany,
+      req.body?.stage !== undefined,
+      cleanStage,
+      req.body?.owner !== undefined,
+      cleanOwner,
+      req.body?.notes !== undefined,
+      cleanNotes,
+      req.body?.label !== undefined,
+      cleanLabel,
+      shouldUpdateAssignment,
+      assignedToValue,
+      req.user.tenantId,
+    ],
   );
-  await recordAssignmentHistory({ tenantId: req.user.tenantId, contactId: req.params.id, fromUserId: before.rows[0]?.assigned_to, toUserId: result.rows[0]?.assigned_to, changedBy: req.user.id, reason: assignment_reason });
-  res.json(result.rows[0]);
+
+  const updatedContact = result.rows[0];
+
+  await recordAssignmentHistory({
+    tenantId: req.user.tenantId,
+    contactId: req.params.id,
+    fromUserId: before.rows[0]?.assigned_to,
+    toUserId: updatedContact?.assigned_to,
+    changedBy: req.user.id,
+    reason: cleanAssignmentReason,
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'contact.updated',
+    entityType: 'contact',
+    entityId: updatedContact.id,
+    metadata: {
+      changedFields: Object.keys(req.body || {}).filter((key) => key !== 'assignment_reason'),
+      assignedToChanged: before.rows[0]?.assigned_to !== updatedContact.assigned_to,
+    },
+  });
+
+  res.json(updatedContact);
 }));
 
 app.get('/api/contacts/opt-outs', requireAuth, async (req, res) => {
@@ -413,9 +550,21 @@ app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Contact not found' });
     }
 
+    if (optedOut && reason.length < 3) {
+      return res.status(400).json({
+        error: 'Manual opt-out reason is required for compliance audit.',
+      });
+    }
+
+    if (!optedOut && reason.length < 8) {
+      return res.status(400).json({
+        error: 'Manual opt-in proof is required before enabling WhatsApp messages again.',
+      });
+    }
+
     const updateResult = await query(
       `
-      UPDATE contacts
+UPDATE contacts
       SET
         opted_out = $1,
         opted_out_at = CASE
@@ -425,6 +574,26 @@ app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
         opted_out_reason = CASE
           WHEN $1 = true THEN NULLIF($2, '')
           ELSE NULL
+        END,
+        marketing_opted_in = CASE
+          WHEN $1 = true THEN false
+          WHEN $1 = false THEN true
+          ELSE marketing_opted_in
+        END,
+        marketing_opted_in_at = CASE
+          WHEN $1 = true THEN NULL
+          WHEN $1 = false THEN COALESCE(marketing_opted_in_at, now())
+          ELSE marketing_opted_in_at
+        END,
+        marketing_opt_in_source = CASE
+          WHEN $1 = true THEN 'manual_admin_opt_out'
+          WHEN $1 = false THEN 'manual_admin_opt_in'
+          ELSE marketing_opt_in_source
+        END,
+        marketing_opt_in_proof = CASE
+          WHEN $1 = true THEN NULL
+          WHEN $1 = false THEN LEFT($2, 500)
+          ELSE marketing_opt_in_proof
         END,
         updated_at = now()
       WHERE id = $3
@@ -440,6 +609,9 @@ app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
         opted_out,
         opted_out_at,
         opted_out_reason,
+        marketing_opted_in,
+        marketing_opted_in_at,
+        marketing_opt_in_source,
         updated_at,
         last_inbound_at
       `,
@@ -447,6 +619,42 @@ app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
     );
 
     const updatedContact = updateResult.rows[0];
+
+if (optedOut) {
+      await query(
+        `
+        INSERT INTO contact_consents (
+          tenant_id,
+          contact_id,
+          consent_type,
+          channel,
+          status,
+          source,
+          proof_text,
+          recorded_by
+        )
+        VALUES ($1, $2, 'marketing', 'whatsapp', 'opted_out', 'manual_admin_opt_out', $3, $4)
+        `,
+        [tenantId, contactId, reason.slice(0, 500), userId]
+      );
+    } else {
+      await query(
+        `
+        INSERT INTO contact_consents (
+          tenant_id,
+          contact_id,
+          consent_type,
+          channel,
+          status,
+          source,
+          proof_text,
+          recorded_by
+        )
+        VALUES ($1, $2, 'marketing', 'whatsapp', 'opted_in', 'manual_admin_opt_in', $3, $4)
+        `,
+        [tenantId, contactId, reason.slice(0, 500), userId]
+      );
+    }
 
     await query(
       `
@@ -466,11 +674,11 @@ app.patch('/api/contacts/:id/opt-out', requireAuth, async (req, res) => {
         optedOut ? 'contact_manual_opt_out' : 'contact_manual_opt_in',
         contactId,
         JSON.stringify({
-          phone: existingContact.phone,
+          phone: maskValue(existingContact.phone),
           name: existingContact.name,
           previousOptedOut: existingContact.opted_out,
           newOptedOut: optedOut,
-          reason: optedOut ? reason : '',
+          reason,
         }),
       ]
     );
@@ -974,6 +1182,22 @@ app.post('/api/enquiry-drafts/:id/create-quote', requireAuth, asyncHandler(async
 // ROUTES — PRODUCTS
 // =========================================================
 
+function validateProductPayload(product = {}) {
+  if (!product.sku || !product.name) {
+    return 'SKU and product name required';
+  }
+
+  if (Number(product.price || 0) < 0) {
+    return 'Product price cannot be negative';
+  }
+
+  if (Number(product.stock_qty || 0) < 0) {
+    return 'Product stock cannot be negative';
+  }
+
+  return '';
+}
+
 app.get('/api/products', requireAuth, asyncHandler(async (req, res) => {
   const { q, active } = req.query;
   const params = [req.user.tenantId];
@@ -991,7 +1215,12 @@ app.post('/api/products', requireAuth, rateLimit({
 }), asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const product = normalizeProduct(req.body);
-  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
+  const productError = validateProductPayload(product);
+
+  if (productError) {
+    return res.status(400).json({ error: productError });
+  }
+
   const existing = await query('SELECT id FROM products WHERE tenant_id = $1 AND lower(sku) = lower($2) LIMIT 1', [req.user.tenantId, product.sku]);
   if (existing.rows[0]) return res.status(409).json({ error: 'Product SKU already exists' });
   const result = await query(
@@ -1009,7 +1238,11 @@ app.patch('/api/products/:id', requireAuth, rateLimit({
 }), asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const product = normalizeProduct(req.body);
-  if (!product.sku || !product.name) return res.status(400).json({ error: 'SKU and product name required' });
+  const productError = validateProductPayload(product);
+
+  if (productError) {
+    return res.status(400).json({ error: productError });
+  }
   
     const duplicate = await query(
     `SELECT id
@@ -1054,7 +1287,13 @@ app.post('/api/products/import', requireAuth, rateLimit({
   const skipped = [];
   for (const [index, row] of rows.entries()) {
     const product = productFromImportRow(row);
-    if (!product.sku || !product.name) { skipped.push({ row: index + 1, reason: 'SKU and product name required' }); continue; }
+    const productError = validateProductPayload(product);
+
+    if (productError) {
+      skipped.push({ row: index + 1, reason: productError });
+      continue;
+    }
+
     const result = await query(
       `INSERT INTO products (tenant_id, sku, name, category, grade, size, shape, unit, price, stock_qty, active, custom_fields)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -1068,6 +1307,21 @@ app.post('/api/products/import', requireAuth, rateLimit({
     if (result.rows[0]?.inserted) inserted += 1;
     else updated += 1;
   }
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'product.imported',
+    entityType: 'product',
+    entityId: null,
+    metadata: {
+      inserted,
+      updated,
+      skippedCount: skipped.length,
+      totalRows: rows.length,
+      skippedSample: skipped.slice(0, 20),
+    },
+  });
+
   res.json({ inserted, updated, skipped });
 }));
 

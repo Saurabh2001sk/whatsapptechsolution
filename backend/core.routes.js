@@ -155,6 +155,23 @@ function registerCoreRoutes(app, ctx) {
     handleCustomerQuoteInbound,
   } = ctx;
 
+    const ALLOWED_TENANT_PLANS = new Set(['starter', 'growth', 'business', 'enterprise', 'internal']);
+  const ALLOWED_TENANT_STATUSES = new Set(['active', 'inactive', 'suspended']);
+
+  function cleanPlatformText(value = '', maxLength = 120) {
+    return String(value || '').trim().slice(0, maxLength);
+  }
+
+  function cleanPlatformPlan(value = 'starter') {
+    const cleanValue = String(value || 'starter').trim().toLowerCase() || 'starter';
+    return ALLOWED_TENANT_PLANS.has(cleanValue) ? cleanValue : null;
+  }
+
+  function cleanPlatformStatus(value = 'active') {
+    const cleanValue = String(value || 'active').trim().toLowerCase() || 'active';
+    return ALLOWED_TENANT_STATUSES.has(cleanValue) ? cleanValue : null;
+  }
+
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
@@ -168,18 +185,20 @@ app.get('/health', (req, res) => {
 app.get('/ready', asyncHandler(async (req, res) => {
   const db = await healthCheck();
 
-  const ready = Boolean(
-    db.ok
-    && hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
+  const whatsappConfigured = Boolean(
+    hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
     && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN)
     && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)
     && (!isProduction || hasRealValue(process.env.WHATSAPP_APP_SECRET))
   );
 
+  const ready = Boolean(db.ok);
+
   return res.status(ready ? 200 : 503).json({
     ok: ready,
     service: 'bos-whatsapp-backend',
     databaseReady: Boolean(db.ok),
+    whatsappConfigured,
     timestamp: new Date().toISOString(),
   });
 }));
@@ -208,9 +227,36 @@ app.get('/api/test-db', asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/public/app-settings', asyncHandler(async (req, res) => {
-  const tenantId = await getDemoTenantId();
+  const requestedSlug = normalizeTenantSlug(req.query?.tenantSlug || req.query?.slug || '');
+
+  const tenantResult = await query(
+    `SELECT id
+     FROM tenants
+     WHERE slug = COALESCE(NULLIF($1, ''), 'demo')
+       AND status = 'active'
+     LIMIT 1`,
+    [requestedSlug],
+  );
+
+  const tenantId = tenantResult.rows[0]?.id;
+
+  if (!tenantId) {
+    return res.json({
+      appName: DEFAULT_APP_SETTINGS.appName,
+      companyName: DEFAULT_APP_SETTINGS.companyName,
+      industry: DEFAULT_APP_SETTINGS.industry,
+      primaryColor: DEFAULT_APP_SETTINGS.primaryColor,
+    });
+  }
+
   const settings = await getAppSettings(tenantId);
-  res.json({ appName: settings.appName, companyName: settings.companyName, industry: settings.industry, primaryColor: settings.primaryColor });
+
+  return res.json({
+    appName: settings.appName,
+    companyName: settings.companyName,
+    industry: settings.industry,
+    primaryColor: settings.primaryColor,
+  });
 }));
 
 // =========================================================
@@ -266,6 +312,18 @@ app.post('/api/auth/login', rateLimit({
   if (user.tenant_status !== 'active') {
     return res.status(403).json({ error: 'Company account is inactive' });
   }
+
+  await recordAudit({
+    tenantId: user.tenant_id,
+    actorUserId: user.id,
+    action: 'auth.login',
+    entityType: 'user',
+    entityId: user.id,
+    metadata: {
+      email: maskEmail(user.email),
+      role: user.role,
+    },
+  });
 
   setAuthCookie(res, user);
 
@@ -413,23 +471,27 @@ app.post('/api/platform/tenants', requireAuth, requireSuperAdmin, rateLimit({
   maxRequests: 20,
   windowMs: 60 * 60 * 1000,
 }), asyncHandler(async (req, res) => {
-  const cleanName = String(req.body?.name || '').trim();
-  const cleanIndustry = String(req.body?.industry || 'General').trim() || 'General';
-  const cleanPlan = String(req.body?.plan || 'starter').trim().toLowerCase() || 'starter';
-  const cleanStatus = String(req.body?.status || 'active').trim().toLowerCase() || 'active';
+  const cleanName = cleanPlatformText(req.body?.name, 120);
+  const cleanIndustry = cleanPlatformText(req.body?.industry || 'General', 80) || 'General';
+  const cleanPlan = cleanPlatformPlan(req.body?.plan || 'starter');
+  const cleanStatus = cleanPlatformStatus(req.body?.status || 'active');
   const cleanSlug = normalizeTenantSlug(req.body?.slug || cleanName);
 
-  const businessPhone = String(req.body?.businessPhone || '').trim();
-  const businessEmail = String(req.body?.businessEmail || '').trim().toLowerCase();
-  const logoUrl = String(req.body?.logoUrl || '').trim();
-  const metaBusinessId = String(req.body?.metaBusinessId || '').trim();
+  const businessPhone = cleanPlatformText(req.body?.businessPhone, 30).replace(/[^\d+ -]/g, '').slice(0, 30);
+  const businessEmail = cleanPlatformText(req.body?.businessEmail, 140).toLowerCase();
+  const logoUrl = cleanPlatformText(req.body?.logoUrl, 300);
+  const metaBusinessId = cleanPlatformText(req.body?.metaBusinessId, 120);
 
   if (!cleanName || !cleanSlug) {
     return res.status(400).json({ error: 'Client company name and slug are required' });
   }
 
-  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
+  if (!cleanStatus) {
     return res.status(400).json({ error: 'Invalid tenant status' });
+  }
+
+  if (!cleanPlan) {
+    return res.status(400).json({ error: 'Invalid tenant plan' });
   }
 
   if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
@@ -500,23 +562,33 @@ app.patch('/api/platform/tenants/:tenantId', requireAuth, requireSuperAdmin, rat
     return res.status(400).json({ error: 'Platform tenant cannot be edited from this route' });
   }
 
-  const cleanName = req.body?.name !== undefined ? String(req.body.name || '').trim() : existingTenant.name;
-  const cleanIndustry = req.body?.industry !== undefined ? String(req.body.industry || '').trim() : existingTenant.industry;
-  const cleanStatus = req.body?.status !== undefined ? String(req.body.status || '').trim().toLowerCase() : existingTenant.status;
-  const cleanPlan = req.body?.plan !== undefined ? String(req.body.plan || '').trim().toLowerCase() : existingTenant.plan;
+  const cleanName = req.body?.name !== undefined ? cleanPlatformText(req.body.name, 120) : existingTenant.name;
+  const cleanIndustry = req.body?.industry !== undefined ? cleanPlatformText(req.body.industry, 80) : existingTenant.industry;
+  const cleanStatus = req.body?.status !== undefined ? cleanPlatformStatus(req.body.status) : existingTenant.status;
+  const cleanPlan = req.body?.plan !== undefined ? cleanPlatformPlan(req.body.plan) : existingTenant.plan;
 
-  const businessPhone = req.body?.businessPhone !== undefined ? String(req.body.businessPhone || '').trim() : existingTenant.business_phone;
-  const businessEmail = req.body?.businessEmail !== undefined ? String(req.body.businessEmail || '').trim().toLowerCase() : existingTenant.business_email;
-  const logoUrl = req.body?.logoUrl !== undefined ? String(req.body.logoUrl || '').trim() : existingTenant.logo_url;
-  const metaBusinessId = req.body?.metaBusinessId !== undefined ? String(req.body.metaBusinessId || '').trim() : existingTenant.meta_business_id;
-  const onboardingStatus = req.body?.onboardingStatus !== undefined ? String(req.body.onboardingStatus || '').trim() : existingTenant.onboarding_status;
+  const businessPhone = req.body?.businessPhone !== undefined
+    ? cleanPlatformText(req.body.businessPhone, 30).replace(/[^\d+ -]/g, '').slice(0, 30)
+    : existingTenant.business_phone;
+
+  const businessEmail = req.body?.businessEmail !== undefined
+    ? cleanPlatformText(req.body.businessEmail, 140).toLowerCase()
+    : existingTenant.business_email;
+
+  const logoUrl = req.body?.logoUrl !== undefined ? cleanPlatformText(req.body.logoUrl, 300) : existingTenant.logo_url;
+  const metaBusinessId = req.body?.metaBusinessId !== undefined ? cleanPlatformText(req.body.metaBusinessId, 120) : existingTenant.meta_business_id;
+  const onboardingStatus = req.body?.onboardingStatus !== undefined ? cleanPlatformText(req.body.onboardingStatus, 80) : existingTenant.onboarding_status;
 
   if (!cleanName) {
     return res.status(400).json({ error: 'Client company name is required' });
   }
 
-  if (!['active', 'inactive', 'suspended'].includes(cleanStatus)) {
+  if (!cleanStatus) {
     return res.status(400).json({ error: 'Invalid tenant status' });
+  }
+
+  if (!cleanPlan) {
+    return res.status(400).json({ error: 'Invalid tenant plan' });
   }
 
   if (businessEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail)) {
@@ -648,11 +720,11 @@ app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin
 }), asyncHandler(async (req, res) => {
   const tenantId = req.params.tenantId;
 
-  const cleanName = String(req.body?.name || '').trim();
-  const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+  const cleanName = cleanPlatformText(req.body?.name, 100);
+  const cleanEmail = cleanPlatformText(req.body?.email, 140).toLowerCase();
   const cleanPassword = String(req.body?.password || '');
 
-  if (!cleanName || !cleanEmail || !cleanPassword) {
+  if (!cleanName || cleanName.length < 2 || !cleanEmail || !cleanPassword) {
     return res.status(400).json({ error: 'Admin name, email and password are required' });
   }
 
@@ -682,6 +754,10 @@ app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin
     return res.status(400).json({ error: 'Use platform super admin setup for platform users' });
   }
 
+  if (tenant.status !== 'active') {
+    return res.status(400).json({ error: 'Client company must be active before creating an admin user' });
+  }
+
   const existingUser = await query(
     `SELECT id
      FROM users
@@ -694,7 +770,7 @@ app.post('/api/platform/tenants/:tenantId/admin', requireAuth, requireSuperAdmin
     return res.status(409).json({ error: 'User with this email already exists' });
   }
 
-  const hash = await bcrypt.hash(cleanPassword, 10);
+  const hash = await bcrypt.hash(cleanPassword, 12);
 
   const result = await query(
     `INSERT INTO users (tenant_id, name, email, password_hash, role, active)
@@ -879,9 +955,87 @@ app.get('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
   res.json(await getAppSettings(req.user.tenantId));
 }));
 
-app.put('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
-  res.json(await saveAppSettings(req.user.tenantId, req.body || {}));
+app.put('/api/app-settings', requireAuth, rateLimit({
+  bucketName: 'app-settings-update',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const input = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+    ? req.body
+    : {};
+
+  const sensitiveSettingKeys = new Set([
+    'quoteApprovalEnabled',
+    'quoteApprovalManagerName',
+    'quoteApprovalManagerPhone',
+    'quoteApprovalTemplateName',
+    'quoteApprovalTemplateLanguage',
+    'customerQuoteTemplateName',
+    'customerQuoteTemplateLanguage',
+    'orderAcknowledgementTemplateName',
+    'orderAcknowledgementTemplateLanguage',
+    'ftpAccessEnabled',
+    'twoFactorEnabled',
+    'wabaMmLiteEnabled',
+    'wabaHealthyRetryEnabled',
+    'wabaConversionEventsEnabled',
+    'billingBusinessName',
+    'billingGstNumber',
+    'billingPanNumber',
+    'billingCountry',
+    'billingState',
+    'billingCity',
+    'billingAddress',
+    'billingPinCode',
+    'billingEmail',
+    'billingContactNumber',
+    'voiceCallsEnabled',
+    'voiceCallbackEnabled',
+    'voiceDisplayCallButtons',
+    'voiceCallHoursMode',
+    'voiceTimeZone',
+    'voiceWeeklyHours',
+    'voiceUnavailableHours',
+    'inboxAutoAssign',
+  ]);
+
+  if (req.user.role !== 'admin') {
+    const existingSettings = await getAppSettings(req.user.tenantId);
+
+    const changedSensitiveKeys = Object.keys(input).filter((key) => {
+      if (!sensitiveSettingKeys.has(key)) return false;
+
+      return JSON.stringify(input[key] ?? null) !== JSON.stringify(existingSettings[key] ?? null);
+    });
+
+    if (changedSensitiveKeys.length) {
+      return res.status(403).json({
+        error: `Admin only setting change blocked: ${changedSensitiveKeys.slice(0, 5).join(', ')}`,
+      });
+    }
+  }
+
+  const savedSettings = await saveAppSettings(req.user.tenantId, input);
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'settings.updated',
+    entityType: 'app_settings',
+    entityId: null,
+    metadata: {
+      changedKeys: Object.keys(input).slice(0, 80),
+      appName: savedSettings.appName,
+      companyName: savedSettings.companyName,
+      adminOnlyGuardApplied: req.user.role !== 'admin',
+    },
+  });
+
+  res.json(savedSettings);
 }));
 
 // =========================================================
