@@ -2365,6 +2365,49 @@ async function sendWhatsAppText(contact, text, tenantId) {
   return response.data?.messages?.[0]?.id || null;
 }
 
+function buildWhatsAppMediaPayload({ contact, mediaType, mediaUrl, caption = '', fileName = '' }) {
+  const cleanType = String(mediaType || '').trim().toLowerCase();
+  const cleanUrl = String(mediaUrl || '').trim();
+  const cleanCaption = String(caption || '').trim().slice(0, 1024);
+  const cleanFileName = String(fileName || '').trim().slice(0, 240);
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: contact.wa_id,
+    type: cleanType,
+    [cleanType]: {
+      link: cleanUrl,
+    },
+  };
+
+  if (['image', 'video', 'document'].includes(cleanType) && cleanCaption) {
+    payload[cleanType].caption = cleanCaption;
+  }
+
+  if (cleanType === 'document' && cleanFileName) {
+    payload.document.filename = cleanFileName;
+  }
+
+  return payload;
+}
+
+async function sendWhatsAppMedia(contact, mediaPayload, tenantId) {
+  const config = await getWhatsAppSendConfig(tenantId);
+
+  if (!config) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Media message was not sent.');
+  }
+
+  const response = await postWhatsAppMessage(
+    config,
+    mediaPayload,
+    { tenantId, type: mediaPayload.type || 'media' },
+  );
+
+  return response.data?.messages?.[0]?.id || null;
+}
+
 async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
   const config = await getWhatsAppSendConfig(tenantId);
 
@@ -3379,6 +3422,7 @@ const routeContext = {
   isRetryableWhatsAppError,
   postWhatsAppMessage,
   sendWhatsAppText,
+  sendWhatsAppMedia,
   sendWhatsAppInteractiveList,
   sendWhatsAppTemplate,
   sendWhatsAppTemplateToNumber,

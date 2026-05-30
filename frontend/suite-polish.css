@@ -2497,3 +2497,23 @@ html[data-theme='dark'] .suite-type-tabs button.active {
     text-align: left;
   }
 }
+
+.send-media-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.send-message-body-card label small {
+  color: var(--muted);
+  display: block;
+  margin-top: 6px;
+  text-align: right;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .send-media-grid {
+    grid-template-columns: 1fr;
+  }
+}

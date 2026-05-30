@@ -137,6 +137,7 @@ function registerCrmRoutes(app, ctx) {
     isRetryableWhatsAppError,
     postWhatsAppMessage,
     sendWhatsAppText,
+    sendWhatsAppMedia,
     sendWhatsAppInteractiveList,
     sendWhatsAppTemplate,
     sendWhatsAppTemplateToNumber,
@@ -701,7 +702,15 @@ app.post('/api/conversations/:id/messages', rateLimit({
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
 }), requireAuth, asyncHandler(async (req, res) => {
-  const { text, templateName, language } = req.body;
+  const {
+    text,
+    templateName,
+    language,
+    mediaType,
+    mediaUrl,
+    caption,
+    fileName,
+  } = req.body;
 
   const contact = await findContact(req.params.id, req.user.tenantId);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
@@ -719,24 +728,34 @@ app.post('/api/conversations/:id/messages', rateLimit({
   const cleanText = String(text || '').trim();
   const cleanTemplateName = String(templateName || '').trim();
   const cleanLanguage = String(language || 'en').trim() || 'en';
+  const cleanMediaType = String(mediaType || '').trim().toLowerCase();
+  const cleanMediaUrl = String(mediaUrl || '').trim();
+  const cleanCaption = String(caption || '').trim();
+  const cleanFileName = String(fileName || '').trim();
 
-  if (!cleanText && !cleanTemplateName) {
-    return res.status(400).json({ error: 'Message text or template is required' });
+  const hasText = Boolean(cleanText);
+  const hasTemplate = Boolean(cleanTemplateName);
+  const hasMedia = Boolean(cleanMediaType || cleanMediaUrl);
+
+  const sendModeCount = [hasText, hasTemplate, hasMedia].filter(Boolean).length;
+
+  if (sendModeCount === 0) {
+    return res.status(400).json({ error: 'Message text, template, or media is required' });
   }
 
-  if (cleanText && !cleanTemplateName && cleanText.length > MAX_WHATSAPP_TEXT_LENGTH) {
+  if (sendModeCount > 1) {
+    return res.status(400).json({ error: 'Send only one message type at a time: text, template, or media' });
+  }
+
+  if (hasText && cleanText.length > MAX_WHATSAPP_TEXT_LENGTH) {
     return res.status(400).json({
       error: `WhatsApp text message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
     });
   }
 
-  if (cleanText && cleanTemplateName) {
-    return res.status(400).json({ error: 'Send either text or template, not both' });
-  }
-
   const replyWindowOpen = isReplyWindowOpen(contact);
 
-  if (!replyWindowOpen && !cleanTemplateName) {
+  if (!replyWindowOpen && !hasTemplate) {
     return res.status(400).json({
       error: '24-hour reply window expired. Use an approved WhatsApp template.',
     });
@@ -744,7 +763,7 @@ app.post('/api/conversations/:id/messages', rateLimit({
 
   let templateRecord = null;
 
-  if (cleanTemplateName) {
+  if (hasTemplate) {
     const templateResult = await query(
       `SELECT id, name, language, body, meta_status
        FROM whatsapp_templates
@@ -768,35 +787,111 @@ app.post('/api/conversations/:id/messages', rateLimit({
     }
   }
 
+  const allowedMediaTypes = new Set(['image', 'document', 'video', 'audio']);
+  let safeMediaUrl = '';
+
+  if (hasMedia) {
+    if (!allowedMediaTypes.has(cleanMediaType)) {
+      return res.status(400).json({
+        error: 'Invalid media type. Allowed types: image, document, video, audio.',
+      });
+    }
+
+    if (!cleanMediaUrl) {
+      return res.status(400).json({ error: 'Media URL is required' });
+    }
+
+    if (cleanMediaUrl.length > 2000) {
+      return res.status(400).json({ error: 'Media URL is too long' });
+    }
+
+    let parsedUrl;
+
+    try {
+      parsedUrl = new URL(cleanMediaUrl);
+    } catch {
+      return res.status(400).json({ error: 'Media URL must be a valid HTTPS URL' });
+    }
+
+    if (parsedUrl.protocol !== 'https:') {
+      return res.status(400).json({ error: 'Media URL must use HTTPS' });
+    }
+
+    const host = parsedUrl.hostname.toLowerCase();
+
+    if (
+      host === 'localhost'
+      || host.endsWith('.local')
+      || host === '127.0.0.1'
+      || host === '0.0.0.0'
+      || host.startsWith('10.')
+      || host.startsWith('192.168.')
+      || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+    ) {
+      return res.status(400).json({
+        error: 'Private or localhost media URLs are not allowed. Use a public HTTPS media URL.',
+      });
+    }
+
+    if (cleanCaption.length > 1024) {
+      return res.status(400).json({ error: 'Media caption maximum 1024 characters allowed' });
+    }
+
+    if (cleanMediaType === 'audio' && cleanCaption) {
+      return res.status(400).json({ error: 'Audio messages do not support captions in this composer' });
+    }
+
+    if (cleanFileName.length > 240) {
+      return res.status(400).json({ error: 'File name maximum 240 characters allowed' });
+    }
+
+    safeMediaUrl = parsedUrl.toString();
+  }
+
   let waMessageId = null;
   let body = cleanText;
   let type = 'text';
+  let outboundPayload = null;
 
-  const outboundPayload = cleanTemplateName
-    ? {
-        messaging_product: 'whatsapp',
-        to: contact.wa_id,
-        type: 'template',
-        template: {
-          name: cleanTemplateName,
-          language: { code: cleanLanguage },
-        },
-      }
-    : {
-        messaging_product: 'whatsapp',
-        to: contact.wa_id,
-        type: 'text',
-        text: { body: cleanText },
-      };
+  if (hasTemplate) {
+    type = 'template';
+    body = `[Template] ${cleanTemplateName}`;
+    outboundPayload = {
+      messaging_product: 'whatsapp',
+      to: contact.wa_id,
+      type: 'template',
+      template: {
+        name: cleanTemplateName,
+        language: { code: cleanLanguage },
+      },
+    };
+  } else if (hasMedia) {
+    type = cleanMediaType;
+    body = cleanCaption || `[${cleanMediaType}] ${cleanFileName || safeMediaUrl}`;
+    outboundPayload = buildWhatsAppMediaPayload({
+      contact,
+      mediaType: cleanMediaType,
+      mediaUrl: safeMediaUrl,
+      caption: cleanCaption,
+      fileName: cleanFileName,
+    });
+  } else {
+    outboundPayload = {
+      messaging_product: 'whatsapp',
+      to: contact.wa_id,
+      type: 'text',
+      text: { body: cleanText },
+    };
+  }
 
   const outboundRecord = await createOutboundMessageRecord({
     tenantId: req.user.tenantId,
     contactId: contact.id,
     toPhone: contact.wa_id || contact.phone,
-    messageType: cleanTemplateName ? 'template' : 'text',
+    messageType: type,
     templateName: cleanTemplateName || null,
-    language: cleanTemplateName ? cleanLanguage : null,
-    body: cleanTemplateName ? `[Template] ${cleanTemplateName}` : cleanText,
+    language: hasTemplate ? cleanLanguage : null,
+    body,
     payload: outboundPayload,
     createdBy: req.user.id,
   });
@@ -804,10 +899,10 @@ app.post('/api/conversations/:id/messages', rateLimit({
   await markOutboundSending(outboundRecord?.id, req.user.tenantId);
 
   try {
-    if (cleanTemplateName) {
+    if (hasTemplate) {
       waMessageId = await sendWhatsAppTemplate(contact, cleanTemplateName, cleanLanguage, req.user.tenantId);
-      body = `[Template] ${cleanTemplateName}`;
-      type = 'template';
+    } else if (hasMedia) {
+      waMessageId = await sendWhatsAppMedia(contact, outboundPayload, req.user.tenantId);
     } else {
       waMessageId = await sendWhatsAppText(contact, cleanText, req.user.tenantId);
     }
@@ -837,13 +932,17 @@ app.post('/api/conversations/:id/messages', rateLimit({
     body,
     status,
     templateName: cleanTemplateName || null,
+    rawPayload: outboundPayload,
+    mediaUrl: hasMedia ? safeMediaUrl : null,
+    caption: hasMedia ? cleanCaption : null,
+    fileName: hasMedia ? cleanFileName : null,
     normalizedText: body,
   });
 
   await recordAudit({
     tenantId: req.user.tenantId,
     actorUserId: req.user.id,
-    action: 'message.sent',
+    action: hasMedia ? 'message.media_sent' : 'message.sent',
     entityType: 'message',
     entityId: message?.id,
     metadata: {
@@ -852,6 +951,9 @@ app.post('/api/conversations/:id/messages', rateLimit({
       type,
       replyWindowOpen,
       templateId: templateRecord?.id || null,
+      mediaType: hasMedia ? cleanMediaType : null,
+      hasCaption: Boolean(cleanCaption),
+      outboundMessageId: outboundRecord?.id || null,
     },
   });
 

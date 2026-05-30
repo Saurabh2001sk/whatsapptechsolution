@@ -1976,24 +1976,52 @@ async function sendMessage(event) {
     return
   }
 
+  const formData = event?.currentTarget ? new FormData(event.currentTarget) : null
+  const formMessageType = String(formData?.get('messageType') || '').trim()
+  const mediaType = String(formData?.get('mediaType') || '').trim()
+  const mediaUrl = String(formData?.get('mediaUrl') || '').trim()
+  const caption = String(formData?.get('caption') || '').trim()
+  const fileName = String(formData?.get('fileName') || '').trim()
+
   const cleanText = draft.trim()
   const selectedTemplate = templates.find((template) => (
-  template.id === templateName || template.name === templateName
-))
+    template.id === templateName || template.name === templateName
+  ))
 
   setSendError('')
 
-  if (!selected.reply_window_open && !templateName) {
+  if (!selected.reply_window_open && !selectedTemplate) {
     setSendError('24-hour reply window expired. Use an approved WhatsApp template.')
     return
   }
 
-const payload = selectedTemplate
-  ? { templateName: selectedTemplate.name, language: selectedTemplate.language || 'en' }
-  : { text: cleanText }
+  let payload = {}
 
-  if (!payload.templateName && !payload.text) {
-    setSendError('Message text required hai, ya template select karo.')
+  if (formMessageType === 'media') {
+    if (!selected.reply_window_open) {
+      setSendError('24-hour reply window expired. Media messages require an open customer service window. Use an approved template.')
+      return
+    }
+
+    if (!mediaType || !mediaUrl) {
+      setSendError('Media type and public HTTPS media URL are required.')
+      return
+    }
+
+    payload = {
+      mediaType,
+      mediaUrl,
+      caption,
+      fileName,
+    }
+  } else {
+    payload = selectedTemplate
+      ? { templateName: selectedTemplate.name, language: selectedTemplate.language || 'en' }
+      : { text: cleanText }
+  }
+
+  if (!payload.templateName && !payload.text && !payload.mediaUrl) {
+    setSendError('Message text required hai, template select karo, ya media URL add karo.')
     return
   }
 
@@ -2003,7 +2031,7 @@ const payload = selectedTemplate
     await api.post(`/api/conversations/${selected.id}/messages`, payload)
     setDraft('')
     setTemplateName('')
-    notify('Message queued/sent')
+    notify(payload.mediaUrl ? 'Media message queued/sent' : 'Message queued/sent')
     await Promise.all([loadMessages(selected.id), loadAll()])
   } catch (err) {
     setSendError(apiErrorMessage(err, 'Message send failed'))
