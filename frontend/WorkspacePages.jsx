@@ -1233,12 +1233,12 @@ export function BulkMessagePage({ templates, contacts }) {
   const [campaignName, setCampaignName] = useState('')
   const [templateName, setTemplateName] = useState('')
   const [rows, setRows] = useState([])
-  const [schedule, setSchedule] = useState(false)
-  const [scheduledAt, setScheduledAt] = useState('')
-  const [drip, setDrip] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+
+  const disabledTabs = new Set(['manual', 'filters', 'retargeting'])
+
   function csvPhone(row = {}) {
     return String(row.phone || row.Phone || row.mobile || row.Mobile || row.whatsapp || row.WhatsApp || '').replace(/\D/g, '')
   }
@@ -1247,30 +1247,48 @@ export function BulkMessagePage({ templates, contacts }) {
     return String(row.opt_in_proof || row['Opt In Proof'] || row.proof || row.Proof || '').trim()
   }
 
+  function csvOptInSource(row = {}) {
+    return String(row.opt_in_source || row['Opt In Source'] || row.source || row.Source || '').trim()
+  }
+
   const selectedTemplate = templates.find((template) => (
-  template.id === templateName || template.name === templateName
-))
+    template.id === templateName || template.name === templateName
+  ))
+
   const contactPhoneMap = new Map(contacts.map((contact) => [String(contact.phone || '').replace(/\D/g, ''), contact]))
   const csvPhones = rows.map(csvPhone).filter(Boolean)
+
   const phoneCounts = csvPhones.reduce((acc, phone) => {
     acc.set(phone, (acc.get(phone) || 0) + 1)
     return acc
   }, new Map())
+
   const duplicatePhones = [...phoneCounts.entries()].filter(([, count]) => count > 1).map(([phone]) => phone)
   const matchedRows = rows.map((row) => contactPhoneMap.get(csvPhone(row))).filter(Boolean)
   const unknownRows = rows.filter((row) => csvPhone(row) && !contactPhoneMap.get(csvPhone(row)))
+  const blankPhoneRows = rows.filter((row) => !csvPhone(row))
   const blockedRows = matchedRows.filter((contact) => contact.opted_out)
+
+  const missingConsentRows = rows.filter((row) => {
+    const phone = csvPhone(row)
+    const contact = contactPhoneMap.get(phone)
+    if (!phone || !contact || contact.opted_out) return false
+    return !csvOptInSource(row) || !csvProof(row)
+  })
+
   const weakProofRows = rows.filter((row) => {
     const proof = csvProof(row)
     return proof && proof.length < 8
   })
-const csvValidationError =
+
+  const csvValidationError =
+    activeTab !== 'csv' ? 'This builder is coming soon. Use CSV Upload for now.' :
+    blankPhoneRows.length ? 'CSV contains a row without phone number.' :
     duplicatePhones.length ? `Duplicate phone found: ${duplicatePhones[0]}` :
     unknownRows.length ? `Unknown contact found: ${csvPhone(unknownRows[0])}. Add/contact sync this customer before campaign sending.` :
     blockedRows.length ? `Opted-out contact found: ${blockedRows[0].phone}. Remove opted-out customers before campaign sending.` :
+    missingConsentRows.length ? `Consent source/proof missing for ${csvPhone(missingConsentRows[0])}` :
     weakProofRows.length ? `Opt-in proof too short for ${csvPhone(weakProofRows[0])}` :
-    schedule ? 'Scheduling is not enabled yet. Use Send Now only.' :
-    drip ? 'Drip campaigns are not enabled yet.' :
     ''
 
   async function uploadCsv(event) {
@@ -1279,7 +1297,16 @@ const csvValidationError =
 
     setError('')
     setResult(null)
-    setRows(parseCsv(await file.text()))
+
+    try {
+      const parsedRows = parseCsv(await file.text())
+      setRows(parsedRows)
+    } catch (err) {
+      setRows([])
+      setError('CSV file could not be read. Please upload a valid CSV file.')
+    } finally {
+      event.target.value = ''
+    }
   }
 
   async function submitCampaign() {
@@ -1288,13 +1315,8 @@ const csvValidationError =
       return
     }
 
-    if (!matchedRows.length) {
-      setError('CSV contacts must match existing tenant contacts before campaign sending.')
-      return
-    }
-
-    if (unknownRows.length || blockedRows.length) {
-      setError('Campaign blocked. Remove unknown and opted-out contacts before sending.')
+    if (!campaignName.trim()) {
+      setError('Campaign name is required.')
       return
     }
 
@@ -1303,12 +1325,23 @@ const csvValidationError =
       return
     }
 
+    if (!matchedRows.length) {
+      setError('CSV contacts must match existing tenant contacts before campaign sending.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Send this WhatsApp template campaign now?\n\nCampaign: ${campaignName.trim()}\nTemplate: ${selectedTemplate.name}\nRecipients: ${matchedRows.length}\n\nOnly opted-in tenant contacts will be sent.`
+    )
+
+    if (!confirmed) return
+
     setSubmitting(true)
     setError('')
     setResult(null)
 
     try {
-const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone || '').replace(/\D/g, '')))
+      const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone || '').replace(/\D/g, '')))
       const safeRows = rows.filter((row) => allowedPhones.has(csvPhone(row)))
 
       const res = await api.post('/api/campaigns', {
@@ -1316,8 +1349,8 @@ const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone 
         templateName: selectedTemplate.name,
         language: selectedTemplate.language || 'en',
         rows: safeRows,
-        sendNow: !schedule,
-        scheduledAt: schedule ? scheduledAt : null,
+        sendNow: true,
+        scheduledAt: null,
       })
 
       setResult(res.data)
@@ -1331,42 +1364,77 @@ const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone 
   return (
     <section className="suite-page">
       <h2>Send Bulk Messages</h2>
+
       <div className="suite-subtabs">
         {[
           ['csv', Upload, 'CSV Upload'],
           ['manual', Boxes, 'Manual Grid'],
           ['filters', Search, 'Contact Filters'],
           ['retargeting', Megaphone, 'Re-Targeting'],
-        ].map(([id, Icon, label]) => (
-          <button className={activeTab === id ? 'active' : ''} key={id} type="button" onClick={() => setActiveTab(id)}>
-            <Icon size={17} />{label}
-          </button>
-        ))}
+        ].map(([id, Icon, label]) => {
+          const disabled = disabledTabs.has(id)
+
+          return (
+            <button
+              className={`${activeTab === id ? 'active' : ''} ${disabled ? 'is-disabled' : ''}`}
+              key={id}
+              type="button"
+              onClick={() => {
+                if (disabled) {
+                  setActiveTab(id)
+                  setError(`${label} is coming soon. Use CSV Upload for production-safe campaign sending.`)
+                  return
+                }
+
+                setActiveTab(id)
+                setError('')
+              }}
+              aria-disabled={disabled}
+            >
+              <Icon size={17} />{label}
+            </button>
+          )
+        })}
       </div>
+
+      {activeTab !== 'csv' && (
+        <div className="suite-policy-note">
+          This builder is coming soon. CSV Upload is the only production-safe bulk campaign flow currently enabled.
+        </div>
+      )}
+
       <div className="suite-compose-layout bulk-layout">
         <div className="suite-send-form">
           <div className="suite-guide-toggle static"><ChevronDown size={17} /> How to use CSV Upload?</div>
-          {activeTab !== 'csv' && (
-            <div className="suite-policy-note">
-              This campaign engine currently accepts CSV contacts only. Manual/filter/retargeting builders will use the same consent-backed queue.
-            </div>
-          )}
+
           <label>
             <span className="required">*</span> Campaign Name
-            <input value={campaignName} onChange={(event) => setCampaignName(event.target.value)} placeholder="Campaign Name" />
+            <input
+              value={campaignName}
+              onChange={(event) => setCampaignName(event.target.value)}
+              placeholder="Campaign Name"
+              disabled={activeTab !== 'csv'}
+            />
           </label>
+
           <label>
             <span className="required">*</span> Select Template
-            <select value={templateName} onChange={(event) => setTemplateName(event.target.value)}>
+            <select
+              value={templateName}
+              onChange={(event) => setTemplateName(event.target.value)}
+              disabled={activeTab !== 'csv'}
+            >
               <option value="">Select an approved template</option>
               {templates.map((template) => (
-  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
-))}
+                <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
+              ))}
             </select>
           </label>
+
           <div className="suite-inline-actions">
             <button
               type="button"
+              disabled={activeTab !== 'csv'}
               onClick={() => downloadCsv(
                 'bulk-message-template.csv',
                 ['phone', 'name', 'opt_in_source', 'opt_in_proof'],
@@ -1375,38 +1443,33 @@ const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone 
             >
               Download Sample CSV
             </button>
-            <label className="suite-file-button">
+
+            <label className={`suite-file-button ${activeTab !== 'csv' ? 'is-disabled' : ''}`}>
               Upload CSV
-              <input type="file" accept=".csv,text/csv" onChange={uploadCsv} />
+              <input type="file" accept=".csv,text/csv" onChange={uploadCsv} disabled={activeTab !== 'csv'} />
             </label>
           </div>
+
           {!!rows.length && (
             <div className="suite-validation">
               <strong>{rows.length} CSV row(s) loaded</strong>
               <span>{matchedRows.length} matched; {unknownRows.length} unknown; {blockedRows.length} opted-out; {duplicatePhones.length} duplicate.</span>
+              {missingConsentRows.length > 0 && <span>{missingConsentRows.length} row(s) missing consent source/proof.</span>}
               {weakProofRows.length > 0 && <span>{weakProofRows.length} row(s) have weak opt-in proof.</span>}
               {csvValidationError && <span className="danger">{csvValidationError}</span>}
             </div>
           )}
-          <label className="suite-toggle">
-            <input type="checkbox" checked={false} disabled /> Schedule
-          </label>
+
           <div className="suite-policy-note">
-            Scheduling will be enabled after the queue worker is connected. Use Send Campaign for now.
+            Schedule and drip are intentionally locked until the queue worker is connected. Use Send Campaign now.
           </div>
 
-          <label className="suite-toggle">
-            <input type="checkbox" checked={false} disabled /> Add Drip to this Campaign
-          </label>
-          {drip && (
-            <div className="suite-policy-note">
-              Drip sequence builder will be connected after base campaign sending records stable consent, template, and delivery history.
-            </div>
-          )}
           <div className="suite-policy-note">
-            Only existing tenant contacts with marketing opt-in proof will be sent. Opted-out and unknown contacts are skipped.
+            Meta safety: campaign sends only to existing tenant contacts with consent proof. Unknown and opted-out contacts are blocked before sending.
           </div>
+
           {error && <div className="suite-policy-note danger">{error}</div>}
+
           {result?.summary && (
             <div className="suite-validation">
               <strong>Campaign {result.campaign?.status}</strong>
@@ -1415,15 +1478,17 @@ const allowedPhones = new Set(matchedRows.map((contact) => String(contact.phone 
               </span>
             </div>
           )}
+
           <button
             className="suite-primary-button"
             type="button"
-                        disabled={submitting || !campaignName || !selectedTemplate || !rows.length || Boolean(csvValidationError) || !matchedRows.length}
+            disabled={submitting || activeTab !== 'csv' || !campaignName.trim() || !selectedTemplate || !rows.length || Boolean(csvValidationError) || !matchedRows.length}
             onClick={submitCampaign}
           >
-            {submitting ? 'Submitting...' : schedule ? 'Save Scheduled Campaign' : 'Send Campaign'}
+            {submitting ? 'Submitting...' : 'Send Campaign'}
           </button>
         </div>
+
         <MessagePreview body={selectedTemplate?.body} emptyText="Select a template to preview campaign message" />
       </div>
     </section>
@@ -1444,62 +1509,96 @@ export function CannedMessagePage({
   sending,
 }) {
   const [tab, setTab] = useState('single')
+  const disabledTabs = new Set(['csv', 'manual', 'filters'])
+
   const selectedTemplate = templates.find((template) => (
-  template.id === templateName || template.name === templateName
-))
+    template.id === templateName || template.name === templateName
+  ))
 
   function chooseTemplate(event) {
     setDraft('')
     setTemplateName(event.target.value)
   }
 
+  function handleTabClick(id, label) {
+    setTab(id)
+
+    if (disabledTabs.has(id)) {
+      setDraft('')
+      setTemplateName('')
+    }
+  }
+
+  const lockedBatchMode = tab !== 'single'
+
   return (
     <section className="suite-page">
       <h2>Send Canned Messages</h2>
+
       <div className="suite-subtabs">
         {[
           ['single', PhoneCall, 'Single Number'],
           ['csv', Upload, 'CSV Upload'],
           ['manual', Boxes, 'Manual Grid'],
           ['filters', Search, 'Contact Filters'],
-        ].map(([id, Icon, label]) => (
-          <button className={tab === id ? 'active' : ''} key={id} type="button" onClick={() => setTab(id)}>
-            <Icon size={17} />{label}
-          </button>
-        ))}
+        ].map(([id, Icon, label]) => {
+          const disabled = disabledTabs.has(id)
+
+          return (
+            <button
+              className={`${tab === id ? 'active' : ''} ${disabled ? 'is-disabled' : ''}`}
+              key={id}
+              type="button"
+              onClick={() => handleTabClick(id, label)}
+              aria-disabled={disabled}
+            >
+              <Icon size={17} />{label}
+            </button>
+          )
+        })}
       </div>
+
+      {lockedBatchMode && (
+        <div className="suite-policy-note">
+          {tab === 'csv' && 'CSV canned sending is coming soon. Use Bulk Messages for consent-backed template campaigns.'}
+          {tab === 'manual' && 'Manual grid sending is coming soon. Use Single Number for safe one-to-one sending.'}
+          {tab === 'filters' && 'Contact filter sending is coming soon. Use Bulk Messages after consent-backed audience filtering is enabled.'}
+        </div>
+      )}
+
       <div className="suite-compose-layout bulk-layout">
         <form className="suite-send-form" onSubmit={onSend}>
           <div className="suite-guide-toggle static"><ChevronDown size={17} /> How to send canned messages?</div>
-          {tab !== 'single' && (
-            <div className="suite-policy-note">
-              Batch canned messages remain locked until marketing consent and campaign audit storage are implemented.
-            </div>
-          )}
+
           <label>
             <span className="required">*</span> Phone Number
-            <select value={selectedId} onChange={(event) => onSelectContact(event.target.value)} required disabled={tab !== 'single'}>
+            <select value={selectedId} onChange={(event) => onSelectContact(event.target.value)} required disabled={lockedBatchMode}>
               <option value="">Select tenant contact</option>
               {contacts.map((contact) => (
                 <option key={contact.id} value={contact.id}>{contact.phone} - {contact.name || 'Customer'}</option>
               ))}
             </select>
           </label>
+
           <label>
             <span className="required">*</span> Select Canned Message
-            <select value={templateName} onChange={chooseTemplate} disabled={tab !== 'single' || !selected || selected.opted_out}>
+            <select value={templateName} onChange={chooseTemplate} disabled={lockedBatchMode || !selected || selected.opted_out}>
               <option value="">Choose an approved canned message</option>
-             {templates.map((template) => (
-  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
-))}
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
+              ))}
             </select>
           </label>
+
           {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
+          {lockedBatchMode && <div className="suite-policy-note danger">This mode is locked to prevent non-compliant bulk/canned sending.</div>}
           {sendError && <div className="suite-policy-note danger">{sendError}</div>}
-          <button className="suite-primary-button" type="submit" disabled={tab !== 'single' || !selected || !templateName || selected.opted_out || sending}>
+
+          <button className="suite-primary-button" type="submit" disabled={lockedBatchMode || !selected || !templateName || selected.opted_out || sending}>
             {sending ? 'Sending...' : 'Send Message'}
           </button>
         </form>
+
         <MessagePreview selected={selected} body={selectedTemplate?.body} emptyText="Select a canned message to see preview" />
       </div>
     </section>

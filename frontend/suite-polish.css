@@ -3103,3 +3103,23 @@ html[data-theme='dark'] .suite-type-tabs button.active {
     grid-template-columns: 1fr;
   }
 }
+.suite-subtabs button.is-disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.suite-subtabs button.is-disabled.active {
+  border-style: dashed;
+}
+
+.suite-file-button.is-disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.suite-send-form input:disabled,
+.suite-send-form select:disabled,
+.suite-send-form button:disabled {
+  cursor: not-allowed;
+}

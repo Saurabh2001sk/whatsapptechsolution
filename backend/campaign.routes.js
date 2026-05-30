@@ -13,6 +13,16 @@ function rowValue(row = {}, keys = []) {
   return '';
 }
 
+function getCampaignDailyLimit() {
+  const value = Number(process.env.WHATSAPP_CAMPAIGN_DAILY_LIMIT || 1000);
+
+  if (!Number.isFinite(value) || value < 1) {
+    return 1000;
+  }
+
+  return Math.min(Math.floor(value), 10000);
+}
+
 function registerCampaignRoutes(app, ctx) {
   const {
     query,
@@ -38,9 +48,9 @@ function registerCampaignRoutes(app, ctx) {
          AND name = $2
          AND language = $3
          AND active = true
-         AND ($4::boolean = false OR meta_status = 'approved')
+         AND lower(COALESCE(meta_status, '')) = 'approved'
        LIMIT 1`,
-      [tenantId, templateName, language, isProduction],
+      [tenantId, templateName, language],
     );
 
     return result.rows[0] || null;
@@ -96,15 +106,25 @@ function registerCampaignRoutes(app, ctx) {
       return res.status(400).json({ error: 'Campaign contacts CSV required' });
     }
 
-    if (rows.length > 200) {
-      return res.status(400).json({ error: 'Maximum 200 rows allowed per campaign batch' });
+    const campaignDailyLimit = getCampaignDailyLimit();
+
+    if (rows.length > campaignDailyLimit) {
+      return res.status(400).json({
+        error: `Maximum ${campaignDailyLimit} rows allowed per campaign for this tenant limit.`,
+      });
+    }
+
+    if (!sendNow) {
+      return res.status(400).json({
+        error: 'Draft/scheduled campaigns are locked until the campaign queue worker is connected. Use Send Now only.',
+      });
     }
 
     if (scheduledAt && Number.isNaN(scheduledAt.getTime())) {
       return res.status(400).json({ error: 'Invalid scheduled time' });
     }
 
-    if (scheduledAt && !sendNow) {
+    if (scheduledAt) {
       return res.status(400).json({
         error: 'Campaign scheduling is not enabled yet. Use Send Now only until the queue worker is connected.',
       });
@@ -114,15 +134,13 @@ function registerCampaignRoutes(app, ctx) {
 
     if (!template) {
       return res.status(400).json({
-        error: isProduction
-          ? 'Template is not approved by Meta for this company. Sync approved templates before campaign sending.'
-          : 'Template is not active or not found for this company',
+        error: 'Only active Meta-approved WhatsApp templates can be used for bulk campaigns. Sync approved templates before sending.',
       });
     }
 
-const cleanRows = rows.map((row) => ({
+    const cleanRows = rows.map((row) => ({
       phone: normalizeCampaignPhone(rowValue(row, ['phone', 'Phone', 'mobile', 'Mobile', 'whatsapp', 'WhatsApp'])),
-      optInSource: rowValue(row, ['opt_in_source', 'Opt In Source', 'source', 'Source']).slice(0, 80) || 'campaign_csv',
+      optInSource: rowValue(row, ['opt_in_source', 'Opt In Source', 'source', 'Source']).slice(0, 80),
       optInProof: rowValue(row, ['opt_in_proof', 'Opt In Proof', 'proof', 'Proof']).slice(0, 500),
     }));
 
@@ -161,11 +179,43 @@ const cleanRows = rows.map((row) => ({
       });
     }
 
-        const weakProofRow = cleanRows.find((row) => row.optInProof && row.optInProof.length < 8);
+    const missingConsentRow = cleanRows.find((row) => !row.optInSource || !row.optInProof);
+
+    if (missingConsentRow) {
+      return res.status(400).json({
+        error: `Opt-in source and proof are required for ${missingConsentRow.phone}.`,
+      });
+    }
+
+    const weakProofRow = cleanRows.find((row) => row.optInProof.length < 8);
 
     if (weakProofRow) {
       return res.status(400).json({
         error: `Opt-in proof is too short for ${weakProofRow.phone}. Add clear proof like "Customer replied START on WhatsApp".`,
+      });
+    }
+
+        const dailyUsageResult = await query(
+      `SELECT COUNT(*)::int AS sent_today
+       FROM campaign_recipients
+       WHERE tenant_id = $1
+         AND status = 'sent'
+         AND sent_at >= date_trunc('day', now())`,
+      [req.user.tenantId],
+    );
+
+    const sentToday = Number(dailyUsageResult.rows[0]?.sent_today || 0);
+    const remainingToday = Math.max(campaignDailyLimit - sentToday, 0);
+
+    if (remainingToday <= 0) {
+      return res.status(429).json({
+        error: `Daily WhatsApp campaign limit reached. Limit: ${campaignDailyLimit}, sent today: ${sentToday}.`,
+      });
+    }
+
+    if (cleanRows.length > remainingToday) {
+      return res.status(429).json({
+        error: `This campaign has ${cleanRows.length} rows, but only ${remainingToday} sends are remaining today. Reduce CSV size or increase verified WhatsApp messaging limit.`,
       });
     }
 
@@ -215,10 +265,10 @@ const cleanRows = rows.map((row) => ({
       } else if (contact.opted_out) {
         status = 'skipped';
         skipReason = 'contact_opted_out';
-      } else if (!contact.marketing_opted_in && !row.optInProof) {
-        status = 'skipped';
-        skipReason = 'marketing_opt_in_missing';
-      }
+             } else if (!contact.marketing_opted_in && (!row.optInSource || !row.optInProof)) {
+          status = 'skipped';
+          skipReason = 'marketing_opt_in_missing';
+        }
 
       if (contact && !contact.marketing_opted_in && row.optInProof && status === 'pending') {
         await query(
@@ -278,7 +328,7 @@ const cleanRows = rows.map((row) => ({
     let failedCount = 0;
 
     if (sendNow) {
-      const sendableRecipients = recipients.filter((recipient) => recipient.status === 'pending').slice(0, 50);
+      const sendableRecipients = recipients.filter((recipient) => recipient.status === 'pending');
 
       if (!sendableRecipients.length) {
             if (sendNow && skipped.length > 0) {
@@ -384,7 +434,7 @@ const cleanRows = rows.map((row) => ({
             direction: 'outbound',
             type: 'template',
             body: `[Campaign Template] ${template.name}`,
-            status: waMessageId ? 'sent' : 'queued-local',
+            status: waMessageId ? 'sent' : 'accepted',
             templateName: template.name,
             normalizedText: `[Campaign Template] ${template.name}`,
           });
@@ -426,13 +476,13 @@ const cleanRows = rows.map((row) => ({
     }
 
     const skippedCount = skipped.length;
-    const finalStatus = sendNow
-      ? failedCount && sentCount
-        ? 'partial_failed'
-        : sentCount
-          ? 'sent'
-          : 'failed'
-      : campaignStatus;
+    const pendingCount = Math.max(recipients.length - skippedCount - sentCount - failedCount, 0);
+
+    const finalStatus = failedCount && sentCount
+      ? 'partial_failed'
+      : sentCount
+        ? 'sent'
+        : 'failed';
 
     const updatedCampaignResult = await query(
       `UPDATE campaigns
@@ -479,7 +529,7 @@ const cleanRows = rows.map((row) => ({
         sent: sentCount,
         failed: failedCount,
         skipped: skippedCount,
-        pending: recipients.filter((recipient) => recipient.status === 'pending').length,
+        pending: pendingCount,
       },
     });
   }));
