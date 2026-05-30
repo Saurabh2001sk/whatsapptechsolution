@@ -686,17 +686,38 @@ export function WorkspaceTabs({ tabs, activeTab, onChangeTab }) {
   )
 }
 
-export function MessagePreview({ selected, body, emptyText = 'Select content to see preview' }) {
+export function MessagePreview({
+  selected,
+  body,
+  emptyText = 'Select content to see preview',
+  type = 'text',
+  statusText = '',
+}) {
+  const cleanBody = String(body || '').trim()
+  const label = type === 'template'
+    ? 'Template'
+    : type === 'text'
+      ? 'Text'
+      : type
+
   return (
-    <aside className="suite-preview-card">
-      <h3>Message Preview</h3>
-      <div className="suite-preview-phone">
-        {body ? (
-          <>
-            <small>Today</small>
-            <p>{body}</p>
+    <aside className="suite-preview-card suite-preview-card-pro">
+      <div className="suite-preview-head">
+        <div>
+          <h3>WhatsApp Preview</h3>
+          <span>{selected ? `To: ${selected.name || selected.phone}` : 'Select a contact'}</span>
+        </div>
+        <b>{label}</b>
+      </div>
+
+      <div className="suite-preview-phone suite-preview-phone-pro">
+        <small>Today</small>
+
+        {cleanBody ? (
+          <div className="suite-preview-bubble">
+            <p>{cleanBody}</p>
             <time>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
-          </>
+          </div>
         ) : (
           <div className="suite-preview-empty">
             <MessageCircle size={45} />
@@ -704,7 +725,21 @@ export function MessagePreview({ selected, body, emptyText = 'Select content to 
           </div>
         )}
       </div>
-      {selected && <small className="suite-preview-contact">To: {selected.name || selected.phone} ({selected.phone})</small>}
+
+      <div className="suite-preview-footer">
+        {selected ? (
+          <>
+            <span>{selected.phone}</span>
+            <span className={selected.opted_out ? 'danger' : selected.reply_window_open ? 'ok' : 'warn'}>
+              {selected.opted_out ? 'Opted out' : selected.reply_window_open ? '24h open' : 'Template only'}
+            </span>
+          </>
+        ) : (
+          <span>No customer selected</span>
+        )}
+      </div>
+
+      {statusText && <div className="suite-preview-status">{statusText}</div>}
     </aside>
   )
 }
@@ -724,105 +759,323 @@ export function SingleMessagePage({
   sending,
 }) {
   const [messageType, setMessageType] = useState('text')
-  const [guideOpen, setGuideOpen] = useState(true)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [contactSearch, setContactSearch] = useState('')
+
   const selectedTemplate = templates.find((template) => (
-  template.id === templateName || template.name === templateName
-))
-  const messageTypes = ['template', 'text', 'media', 'interactive', 'payment', 'catalog', 'location']
-  const supportedType = ['template', 'text'].includes(messageType)
-  const previewBody = messageType === 'template' ? selectedTemplate?.body : messageType === 'text' ? draft : ''
+    template.id === templateName || template.name === templateName
+  ))
+
+  const cleanSearch = contactSearch.trim().toLowerCase()
+
+  const filteredContacts = contacts.filter((contact) => {
+    if (!cleanSearch) return true
+
+    return [
+      contact.name,
+      contact.phone,
+      contact.company,
+      contact.label,
+      contact.stage,
+    ].some((value) => String(value || '').toLowerCase().includes(cleanSearch))
+  })
+
+  const messageTypes = [
+    {
+      id: 'text',
+      label: 'Text',
+      enabled: true,
+      helper: 'Free-form message. Allowed only inside the WhatsApp 24-hour customer service window.',
+    },
+    {
+      id: 'template',
+      label: 'Template',
+      enabled: true,
+      helper: 'Approved WhatsApp template. Required outside the 24-hour customer service window.',
+    },
+    {
+      id: 'media',
+      label: 'Media',
+      enabled: false,
+      helper: 'Needs backend media upload/download route and Meta media send integration.',
+    },
+    {
+      id: 'interactive',
+      label: 'Interactive',
+      enabled: false,
+      helper: 'Needs backend interactive list/button payload support.',
+    },
+    {
+      id: 'payment',
+      label: 'Payment',
+      enabled: false,
+      helper: 'Needs Meta payment/commercial setup and backend order/payment route.',
+    },
+    {
+      id: 'catalog',
+      label: 'Catalog',
+      enabled: false,
+      helper: 'Needs Meta Commerce catalog/product IDs connected to this tenant.',
+    },
+    {
+      id: 'location',
+      label: 'Location',
+      enabled: false,
+      helper: 'Needs backend location payload send route.',
+    },
+  ]
+
+  const activeType = messageTypes.find((type) => type.id === messageType) || messageTypes[0]
+  const previewBody = messageType === 'template' ? selectedTemplate?.body : draft
+  const textLocked = !selected || selected.opted_out || !selected.reply_window_open
+  const templateLocked = !selected || selected.opted_out
+  const canSubmit = Boolean(selected)
+    && !selected.opted_out
+    && !sending
+    && activeType.enabled
+    && (
+      (messageType === 'text' && selected.reply_window_open && draft.trim())
+      || (messageType === 'template' && selectedTemplate)
+    )
 
   function switchType(type) {
+    const nextType = messageTypes.find((item) => item.id === type)
+
+    if (!nextType?.enabled) return
+
     setMessageType(type)
-    if (type === 'text') setTemplateName('')
-    if (type === 'template') setDraft('')
+    setSendSafeState(type)
+  }
+
+  function setSendSafeState(type) {
+    if (type === 'text') {
+      setTemplateName('')
+    }
+
+    if (type === 'template') {
+      setDraft('')
+    }
+  }
+
+  function chooseContact(event) {
+    onSelectContact(event.target.value)
+  }
+
+  function chooseTemplate(event) {
+    setDraft('')
+    setTemplateName(event.target.value)
+  }
+
+  function changeText(event) {
+    setTemplateName('')
+    setDraft(event.target.value.slice(0, 4096))
   }
 
   return (
-    <section className="suite-page">
-      <h2>Send Messages</h2>
-      <button className="suite-guide-toggle" type="button" onClick={() => setGuideOpen((open) => !open)}>
+    <section className="suite-page send-single-pro">
+      <div className="send-single-title">
+        <div>
+          <span className="workspace-eyebrow">Send Message</span>
+          <h2>Single WhatsApp Message</h2>
+          <p>Send a policy-safe text reply or approved template to one tenant contact.</p>
+        </div>
+
+        <div className="send-single-status">
+          <span className={selected?.opted_out ? 'danger' : selected?.reply_window_open ? 'ok' : 'warn'}>
+            {selected
+              ? selected.opted_out
+                ? 'Sending locked'
+                : selected.reply_window_open
+                  ? '24h window open'
+                  : 'Template required'
+              : 'Select contact'}
+          </span>
+        </div>
+      </div>
+
+      <button className="suite-guide-toggle send-guide-toggle" type="button" onClick={() => setGuideOpen((open) => !open)}>
         <ChevronDown size={17} />
         How to use? Click to expand
       </button>
+
       {guideOpen && (
-        <div className="suite-guide">
+        <div className="suite-guide send-guide-panel">
           <div>
-            <p>Send messages to tenant-authorised contacts in three ways:</p>
+            <p>Use this screen only for one-to-one customer communication.</p>
             <ul>
-              <li><strong>Single Message</strong> - send a text reply inside the 24-hour window or an approved Meta template.</li>
-              <li><strong>Bulk Message</strong> - prepare opted-in template campaigns after consent-backed sending is enabled.</li>
-              <li><strong>Canned Message</strong> - quickly send an active approved template to one contact.</li>
+              <li><strong>Text:</strong> allowed only when the customer has messaged inside the last 24 hours.</li>
+              <li><strong>Template:</strong> use an approved Meta template when the 24-hour window is closed.</li>
+              <li><strong>Opt-out:</strong> opted-out contacts are blocked from all sends.</li>
             </ul>
-            <p>Free-form text is blocked outside the WhatsApp customer service window.</p>
+            <p>Media, payment, catalog, location and interactive messages will be enabled only after their backend routes are connected.</p>
           </div>
           <div className="suite-guide-visual">
-            <MessageCircle size={42} />
-            <strong>WhatsApp Cloud API</strong>
-            <span>Policy-aware delivery</span>
+            <Shield size={42} />
+            <strong>Policy guarded</strong>
+            <span>Tenant-safe WhatsApp delivery</span>
           </div>
         </div>
       )}
-      <div className="suite-compose-layout">
-        <form className="suite-send-form" onSubmit={onSend}>
-          <label>
-            Phone Number:
-            <select value={selectedId} onChange={(event) => onSelectContact(event.target.value)} required>
-              <option value="">Select tenant contact</option>
-              {contacts.map((contact) => (
-                <option key={contact.id} value={contact.id}>{contact.phone} - {contact.name || 'Customer'}</option>
-              ))}
-            </select>
-          </label>
-          <span className="suite-field-title">Message Type:</span>
-          <div className="suite-type-tabs">
-            {messageTypes.map((type) => (
-              <button className={messageType === type ? 'active' : ''} key={type} type="button" onClick={() => switchType(type)}>
-                {type[0].toUpperCase() + type.slice(1)}
-              </button>
-            ))}
-          </div>
-          {messageType === 'text' && (
-            <label>
-              Message:
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={selected?.reply_window_open ? 'Type your message' : 'Free-form text requires an open 24-hour window'}
-                disabled={!selected || !selected.reply_window_open || selected.opted_out}
-              />
-            </label>
-          )}
-          {messageType === 'template' && (
-            <label>
-              Approved Template:
-              <select value={templateName} onChange={(event) => setTemplateName(event.target.value)} disabled={!selected || selected.opted_out}>
-                <option value="">Select approved template</option>
-{templates.map((template) => (
-  <option key={template.id} value={template.id}>{template.name} ({template.language})</option>
-))}
-              </select>
-            </label>
-          )}
-          {!supportedType && (
-            <div className="suite-policy-note">
-              {messageType} message sending is not connected in the current secure backend route. Use Text or Template.
+
+      <div className="suite-compose-layout send-single-layout">
+        <form className="suite-send-form send-single-form" onSubmit={onSend}>
+          <section className="send-card">
+            <div className="send-card-head">
+              <h3>Customer</h3>
+              <span>Tenant contacts only</span>
             </div>
-          )}
-          {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
-          {!selected?.opted_out && selected && messageType === 'text' && !selected.reply_window_open && (
-            <div className="suite-policy-note">24-hour window expired. Select Template to send an approved message.</div>
-          )}
-          {sendError && <div className="suite-policy-note danger">{sendError}</div>}
-          <button
-            className="suite-primary-button"
-            type="submit"
-            disabled={!selected || selected.opted_out || sending || !supportedType || (messageType === 'text' && !selected.reply_window_open) || (messageType === 'template' && !templateName)}
-          >
-            {sending ? 'Sending...' : 'Submit'}
-          </button>
+
+            <div className="send-contact-grid">
+              <label>
+                Search Contact
+                <input
+                  value={contactSearch}
+                  onChange={(event) => setContactSearch(event.target.value)}
+                  placeholder="Search by name, phone, company, label"
+                />
+              </label>
+
+              <label>
+                Phone Number / Contact
+                <select value={selectedId || ''} onChange={chooseContact} required>
+                  <option value="">Select tenant contact</option>
+                  {filteredContacts.map((contact) => (
+                    <option key={contact.id} value={contact.id}>
+                      {contact.phone} - {contact.name || 'Customer'}{contact.opted_out ? ' - Opted out' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {selected && (
+              <div className="send-contact-summary">
+                <div>
+                  <strong>{selected.name || 'Customer'}</strong>
+                  <span>{selected.phone}</span>
+                </div>
+                <b className={selected.opted_out ? 'danger' : selected.reply_window_open ? 'ok' : 'warn'}>
+                  {selected.opted_out ? 'Opted out' : selected.reply_window_open ? 'Text allowed' : 'Template only'}
+                </b>
+              </div>
+            )}
+          </section>
+
+          <section className="send-card">
+            <div className="send-card-head">
+              <h3>Message Type</h3>
+              <span>{activeType.helper}</span>
+            </div>
+
+            <div className="suite-type-tabs send-type-tabs">
+              {messageTypes.map((type) => (
+                <button
+                  className={`${messageType === type.id ? 'active' : ''} ${!type.enabled ? 'locked' : ''}`}
+                  key={type.id}
+                  type="button"
+                  onClick={() => switchType(type.id)}
+                  disabled={!type.enabled}
+                  title={type.helper}
+                >
+                  {type.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="send-locked-note">
+              <Info size={16} />
+              <span>
+                We are not showing fake send flows. Locked types will be enabled only after backend + Meta payload support is added.
+              </span>
+            </div>
+          </section>
+
+          <section className="send-card send-message-body-card">
+            {messageType === 'text' && (
+              <>
+                <div className="send-card-head">
+                  <h3>Text Message</h3>
+                  <span>{draft.length}/4096</span>
+                </div>
+
+                <label>
+                  Message
+                  <textarea
+                    value={draft}
+                    onChange={changeText}
+                    placeholder={selected?.reply_window_open ? 'Type your WhatsApp reply...' : 'Free-form text requires an open 24-hour window'}
+                    disabled={textLocked}
+                    rows={6}
+                  />
+                </label>
+
+                {!selected && <div className="suite-policy-note">Select a contact before typing a message.</div>}
+                {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
+                {!selected?.opted_out && selected && !selected.reply_window_open && (
+                  <div className="suite-policy-note">24-hour window expired. Switch to Template to send an approved WhatsApp template.</div>
+                )}
+              </>
+            )}
+
+            {messageType === 'template' && (
+              <>
+                <div className="send-card-head">
+                  <h3>Approved Template</h3>
+                  <span>{templates.length} available</span>
+                </div>
+
+                <label>
+                  Select Template
+                  <select value={templateName} onChange={chooseTemplate} disabled={templateLocked}>
+                    <option value="">Select approved template</option>
+                    {templates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} ({template.language})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedTemplate && (
+                  <div className="send-template-preview">
+                    <strong>{selectedTemplate.name}</strong>
+                    <span>{selectedTemplate.language || 'en'} · {selectedTemplate.category || 'template'}</span>
+                    <p>{selectedTemplate.body}</p>
+                  </div>
+                )}
+
+                {!selected && <div className="suite-policy-note">Select a contact before choosing a template.</div>}
+                {selected?.opted_out && <div className="suite-policy-note danger">This contact is opted out. Sending is locked.</div>}
+              </>
+            )}
+
+            {sendError && <div className="suite-policy-note danger">{sendError}</div>}
+          </section>
+
+          <div className="send-actions-bar">
+            <div>
+              <strong>Compliance check</strong>
+              <span>
+                {messageType === 'text'
+                  ? 'Text requires open 24h customer service window.'
+                  : 'Template must be approved for this tenant.'}
+              </span>
+            </div>
+
+            <button className="suite-primary-button send-submit-button" type="submit" disabled={!canSubmit}>
+              <Send size={16} />
+              {sending ? 'Sending...' : messageType === 'template' ? 'Send Template' : 'Send Text'}
+            </button>
+          </div>
         </form>
-        <MessagePreview selected={selected} body={previewBody} />
+
+        <MessagePreview
+          selected={selected}
+          body={previewBody}
+          type={messageType}
+          emptyText={messageType === 'template' ? 'Select a template to preview' : 'Type a message to preview'}
+          statusText={activeType.helper}
+        />
       </div>
     </section>
   )
