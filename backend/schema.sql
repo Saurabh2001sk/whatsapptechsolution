@@ -1372,3 +1372,97 @@ ON campaign_recipients (tenant_id, campaign_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_contact_consents_tenant_contact_recorded_desc
 ON contact_consents (tenant_id, contact_id, recorded_at DESC);
+
+-- =========================================================
+-- 19. TALLY INTEGRATION
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS tally_settings (
+  tenant_id UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  product_type TEXT NOT NULL DEFAULT 'tallyprime',
+  gateway_url TEXT NOT NULL DEFAULT '',
+  company_name TEXT NOT NULL DEFAULT '',
+  sales_voucher_type TEXT NOT NULL DEFAULT 'Sales',
+  sales_ledger_name TEXT NOT NULL DEFAULT 'Sales',
+  sales_ledger_parent TEXT NOT NULL DEFAULT 'Sales Accounts',
+  customer_ledger_parent TEXT NOT NULL DEFAULT 'Sundry Debtors',
+  last_tested_at TIMESTAMPTZ,
+  last_test_status TEXT,
+  last_error TEXT,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS product_type TEXT NOT NULL DEFAULT 'tallyprime';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS gateway_url TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS sales_voucher_type TEXT NOT NULL DEFAULT 'Sales';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS sales_ledger_name TEXT NOT NULL DEFAULT 'Sales';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS sales_ledger_parent TEXT NOT NULL DEFAULT 'Sales Accounts';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS customer_ledger_parent TEXT NOT NULL DEFAULT 'Sundry Debtors';
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMPTZ;
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS last_test_status TEXT;
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE tally_settings
+ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS tally_sync_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  entity_id UUID,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  tally_reference TEXT,
+  request_xml TEXT,
+  response_xml TEXT,
+  error TEXT,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE tally_sync_logs
+ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
+
+UPDATE tally_sync_logs
+SET tenant_id = (SELECT id FROM tenants WHERE slug = 'demo')
+WHERE tenant_id IS NULL;
+
+ALTER TABLE tally_sync_logs
+ALTER COLUMN tenant_id SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tally_sync_logs_tenant_created_desc
+ON tally_sync_logs (tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tally_sync_logs_tenant_entity
+ON tally_sync_logs (tenant_id, entity_type, entity_id, status);

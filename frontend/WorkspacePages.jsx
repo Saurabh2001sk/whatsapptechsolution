@@ -1146,7 +1146,7 @@ export function FeatureGatePage({ title, text, actionLabel, actionPage, onOpenPa
   )
 }
 
-export function SalesWorkspacePage({ activeTab, onChangeTab, quotations, orders, activeOrders, onQuoteStatus, onConvertQuote, onDownloadQuote, onSendManagerApproval, onSendCustomer, onUpdateOrder }) {
+export function SalesWorkspacePage({ activeTab, onChangeTab, quotations, orders, activeOrders, onQuoteStatus, onConvertQuote, onDownloadQuote, onSendManagerApproval, onSendCustomer, onUpdateOrder, onSyncTallyOrder, tallySyncingOrderId, tallyEnabled }) {
   const tabs = [
     { id: 'quotes', label: 'Quotations', icon: ClipboardList, count: quotations.length },
     { id: 'orders', label: 'All Orders', icon: ShoppingCart, count: orders.length },
@@ -1163,8 +1163,8 @@ export function SalesWorkspacePage({ activeTab, onChangeTab, quotations, orders,
       {activeTab === 'quotes' && (
         <QuotesPage quotations={quotations} onStatus={onQuoteStatus} onConvert={onConvertQuote} onDownload={onDownloadQuote} onSendManagerApproval={onSendManagerApproval} onSendCustomer={onSendCustomer} />
       )}
-      {activeTab === 'orders' && <OrdersPage orders={orders} onUpdate={onUpdateOrder} />}
-      {activeTab === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={onUpdateOrder} title="Active Orders" />}
+      {activeTab === 'orders' && <OrdersPage orders={orders} onUpdate={onUpdateOrder} onSyncTallyOrder={onSyncTallyOrder} tallySyncingOrderId={tallySyncingOrderId} tallyEnabled={tallyEnabled} />}
+      {activeTab === 'activeOrders' && <OrdersPage orders={activeOrders} onUpdate={onUpdateOrder} onSyncTallyOrder={onSyncTallyOrder} tallySyncingOrderId={tallySyncingOrderId} tallyEnabled={tallyEnabled} title="Active Orders" />}
     </section>
   )
 }
@@ -1386,7 +1386,7 @@ export function QuotesPage({ quotations, onStatus, onConvert, onDownload, onSend
   )
 }
 
-export function OrdersPage({ orders, onUpdate, title = 'Orders' }) {
+export function OrdersPage({ orders, onUpdate, onSyncTallyOrder, tallySyncingOrderId, tallyEnabled, title = 'Orders' }) {
   return (
     <section className="table-module">
       <div className="module-title"><PackageCheck size={18} /><h3>{title}</h3></div>
@@ -1400,9 +1400,120 @@ export function OrdersPage({ orders, onUpdate, title = 'Orders' }) {
             <button type="button" onClick={() => onUpdate(order, { payment_status: 'paid' })}>Paid</button>
             <button type="button" onClick={() => onUpdate(order, { dispatch_status: 'dispatched' })}>Dispatch</button>
             <button type="button" onClick={() => onUpdate(order, { status: 'closed' })}>Close</button>
+            {onSyncTallyOrder && (
+              <button type="button" onClick={() => onSyncTallyOrder(order.id)} disabled={!tallyEnabled || tallySyncingOrderId === order.id}>
+                {tallySyncingOrderId === order.id ? 'Syncing...' : 'Sync Tally'}
+              </button>
+            )}
           </div>
         </div>
       ))}
+    </section>
+  )
+}
+
+export function TallyIntegrationPage({
+  settings,
+  logs,
+  orders,
+  onSave,
+  onTest,
+  onSyncOrder,
+  saving,
+  testing,
+  syncingOrderId,
+  userRole,
+}) {
+  const [form, setForm] = useState(settings)
+  const isAdmin = userRole === 'admin'
+
+  useEffect(() => {
+    setForm(settings)
+  }, [settings])
+
+  function patchForm(patch) {
+    setForm((current) => ({ ...current, ...patch }))
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    onSave(form)
+  }
+
+  return (
+    <section className="workspace-page workspace-hub-page">
+      <WorkspaceHeading
+        title="Tally Integration"
+        description="Connect tenant orders with TallyPrime or Tally ERP 9 sales vouchers through a secure backend gateway."
+      />
+
+      <div className="dashboard-grid">
+        <section className="settings-card">
+          <div className="settings-card-title"><Activity size={22} /><h3>Connection</h3></div>
+          <form className="settings-form" onSubmit={submit}>
+            <label className="settings-switch-row large">
+              <span>
+                <strong>Enable Tally sync</strong>
+                <small>{form.enabled ? 'Enabled for this company' : 'Disabled'}</small>
+              </span>
+              <input type="checkbox" checked={Boolean(form.enabled)} disabled={!isAdmin} onChange={(e) => patchForm({ enabled: e.target.checked })} />
+            </label>
+
+            <label>Tally Product<select disabled={!isAdmin} value={form.productType || 'tallyprime'} onChange={(e) => patchForm({ productType: e.target.value })}><option value="tallyprime">TallyPrime</option><option value="tally_erp9">Tally ERP 9 / Tally</option><option value="other">Other Tally XML Gateway</option></select></label>
+            <label>Gateway URL<input disabled={!isAdmin} placeholder="https://your-tally-bridge.example.com or http://office-ip:9000" value={form.gatewayUrl || ''} onChange={(e) => patchForm({ gatewayUrl: e.target.value })} /></label>
+            <label>Tally Company Name<input disabled={!isAdmin} placeholder="Exact company name in Tally" value={form.companyName || ''} onChange={(e) => patchForm({ companyName: e.target.value })} /></label>
+
+            <div className="settings-grid two">
+              <label>Sales Voucher Type<input disabled={!isAdmin} value={form.salesVoucherType || 'Sales'} onChange={(e) => patchForm({ salesVoucherType: e.target.value })} /></label>
+              <label>Sales Ledger<input disabled={!isAdmin} value={form.salesLedgerName || 'Sales'} onChange={(e) => patchForm({ salesLedgerName: e.target.value })} /></label>
+              <label>Sales Ledger Parent<input disabled={!isAdmin} value={form.salesLedgerParent || 'Sales Accounts'} onChange={(e) => patchForm({ salesLedgerParent: e.target.value })} /></label>
+              <label>Customer Ledger Parent<input disabled={!isAdmin} value={form.customerLedgerParent || 'Sundry Debtors'} onChange={(e) => patchForm({ customerLedgerParent: e.target.value })} /></label>
+            </div>
+
+            <div className="settings-form-actions">
+              {isAdmin && <button className="settings-primary-button" type="submit" disabled={saving}><Save size={17} /> {saving ? 'Saving...' : 'Save'}</button>}
+              {isAdmin && <button className="settings-outline-button" type="button" onClick={() => onTest(form)} disabled={testing}><RefreshCw size={17} /> {testing ? 'Testing...' : 'Test'}</button>}
+            </div>
+          </form>
+
+          <div className="setup-grid">
+            <span className={settings.enabled ? 'ok' : 'warn'}>{settings.enabled ? 'Enabled' : 'Disabled'}</span>
+            <span className={settings.lastTestStatus === 'connected' ? 'ok' : 'warn'}>{settings.lastTestStatus || 'Not Tested'}</span>
+          </div>
+          {settings.lastTestedAt && <small className="settings-muted">Last tested: {new Date(settings.lastTestedAt).toLocaleString()}</small>}
+          {settings.lastError && <small className="danger-text">{settings.lastError}</small>}
+        </section>
+
+        <section className="table-module">
+          <div className="module-title"><PackageCheck size={18} /><h3>Orders To Sync</h3></div>
+          {orders.slice(0, 8).map((order) => (
+            <div className="doc-row" key={order.id}>
+              <strong>{order.order_no}</strong>
+              <span>{order.contact_name || 'Customer'} - {order.status}</span>
+              <b>{formatMoney(order.amount)}</b>
+              <div className="doc-actions">
+                <button type="button" onClick={() => onSyncOrder(order.id)} disabled={!settings.enabled || syncingOrderId === order.id}>
+                  {syncingOrderId === order.id ? 'Syncing...' : 'Sync Tally'}
+                </button>
+              </div>
+            </div>
+          ))}
+          {!orders.length && <EmptyState title="No orders" text="Converted quotations and confirmed orders will appear here." />}
+        </section>
+      </div>
+
+      <section className="table-module">
+        <div className="module-title"><ClipboardList size={18} /><h3>Tally Sync Logs</h3></div>
+        {logs.map((log) => (
+          <div className="audit-row" key={log.id}>
+            <strong>{log.action} - {log.status}</strong>
+            <span>{log.tally_reference || log.entity_type}</span>
+            <small>{new Date(log.created_at).toLocaleString()}</small>
+            {log.error && <small className="danger-text">{log.error}</small>}
+          </div>
+        ))}
+        {!logs.length && <EmptyState title="No Tally sync logs" text="Connection tests and order sync results will appear here." />}
+      </section>
     </section>
   )
 }

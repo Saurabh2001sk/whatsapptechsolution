@@ -41,6 +41,7 @@ const { registerWhatsAppRoutes } = require('./whatsapp.routes');
 const { registerCrmRoutes } = require('./crm.routes');
 const { registerSalesRoutes } = require('./sales.routes');
 const { registerCampaignRoutes } = require('./campaign.routes');
+const { registerTallyRoutes } = require('./tally.routes');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
@@ -3401,6 +3402,7 @@ registerWhatsAppRoutes(app, routeContext);
 registerCrmRoutes(app, routeContext);
 registerSalesRoutes(app, routeContext);
 registerCampaignRoutes(app, routeContext);
+registerTallyRoutes(app, routeContext);
 
 // =========================================================
 // ERROR HANDLER

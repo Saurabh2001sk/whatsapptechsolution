@@ -70,6 +70,7 @@ import {
   ProfilePanel,
   SalesWorkspacePage,
   SingleMessagePage,
+  TallyIntegrationPage,
   UsersPage,
   WorkspaceHeading,
 } from './WorkspacePages'
@@ -832,6 +833,19 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 }
 
 function App() {
+  const defaultTallySettings = {
+    enabled: false,
+    productType: 'tallyprime',
+    gatewayUrl: '',
+    companyName: '',
+    salesVoucherType: 'Sales',
+    salesLedgerName: 'Sales',
+    salesLedgerParent: 'Sales Accounts',
+    customerLedgerParent: 'Sundry Debtors',
+    lastTestedAt: null,
+    lastTestStatus: '',
+    lastError: '',
+  }
   const [user, setUser] = useState(null)
 const [authChecking, setAuthChecking] = useState(true)
   const [activePage, setActivePage] = useState('inbox')
@@ -853,6 +867,11 @@ const [authChecking, setAuthChecking] = useState(true)
   const [products, setProducts] = useState([])
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
+  const [tallySettings, setTallySettings] = useState(defaultTallySettings)
+  const [tallyLogs, setTallyLogs] = useState([])
+  const [tallySaving, setTallySaving] = useState(false)
+  const [tallyTesting, setTallyTesting] = useState(false)
+  const [tallySyncingOrderId, setTallySyncingOrderId] = useState('')
   const [whatsappConfig, setWhatsappConfig] = useState(null)
   const [whatsappOnboarding, setWhatsappOnboarding] = useState(null)
   const [whatsappHealth, setWhatsappHealth] = useState(null)
@@ -1345,6 +1364,80 @@ function apiErrorMessage(err, fallback = 'Request failed') {
   return err.message || fallback
 }
 
+async function loadTallyIntegration() {
+  if (!canMonitor) return
+
+  const [settingsRes, logsRes] = await Promise.all([
+    api.get('/api/tally/settings', { silentError: true }).catch(() => ({ data: defaultTallySettings })),
+    api.get('/api/tally/logs', { silentError: true }).catch(() => ({ data: [] })),
+  ])
+
+  setTallySettings({ ...defaultTallySettings, ...settingsRes.data })
+  setTallyLogs(logsRes.data)
+}
+
+async function saveTallySettings(form) {
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    return
+  }
+
+  setTallySaving(true)
+  try {
+    const res = await api.put('/api/tally/settings', form)
+    setTallySettings({ ...defaultTallySettings, ...res.data })
+    notify('Tally settings saved')
+    await loadTallyIntegration()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Tally settings save failed'), 'error')
+  } finally {
+    setTallySaving(false)
+  }
+}
+
+async function testTallyConnection(form) {
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    return
+  }
+
+  setTallyTesting(true)
+  try {
+    const res = await api.post('/api/tally/test', form)
+    notify(res.data?.message || 'Tally gateway connected')
+    await loadTallyIntegration()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Tally connection test failed'), 'error')
+    await loadTallyIntegration()
+  } finally {
+    setTallyTesting(false)
+  }
+}
+
+async function syncTallyOrder(orderId, force = false) {
+  if (!orderId) return
+
+  setTallySyncingOrderId(orderId)
+  try {
+    await api.post(`/api/tally/orders/${orderId}/sync`, { force })
+    notify('Order synced to Tally')
+    await loadTallyIntegration()
+  } catch (err) {
+    if (err.response?.status === 409 && !force) {
+      const confirmed = window.confirm(`${err.response.data?.error || 'Order already synced.'}\n\nForce sync can create duplicate vouchers in Tally. Continue?`)
+      if (confirmed) {
+        await syncTallyOrder(orderId, true)
+        return
+      }
+    } else {
+      notify(apiErrorMessage(err, 'Tally sync failed'), 'error')
+      await loadTallyIntegration()
+    }
+  } finally {
+    setTallySyncingOrderId('')
+  }
+}
+
   async function loadAll(overrides = {}) {
     if (!user?.id) return
     if (isSuperAdminUser) return
@@ -1477,6 +1570,12 @@ async function loadMessages(contactId, markRead = false, options = {}) {
   }, [user?.id, filter, windowFilter])
 
   useEffect(() => {
+    if (!user?.id || activePage !== 'integrations') return
+    loadTallyIntegration()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, activePage])
+
+  useEffect(() => {
     if (!user?.id || !isSuperAdminUser) return
 
     if (!['platformTenants', 'platformStatus'].includes(activePage)) {
@@ -1543,6 +1642,9 @@ function logout() {
   setPlatformStatus(null)
   setSelectedPlatformTenantId('')
   setPlatformError('')
+  setTallySettings(defaultTallySettings)
+  setTallyLogs([])
+  setTallySyncingOrderId('')
 }
 
 useEffect(() => {
@@ -2493,12 +2595,6 @@ async function sendTestMessage(event) {
       title: 'WhatsApp Groups',
       text: 'WhatsApp Business Cloud API customer messaging does not use unauthorised group broadcasting.',
     },
-    integrations: {
-      title: 'Integrations',
-      text: 'No external integration credentials are configured in this module.',
-      actionLabel: 'Open Settings',
-      actionPage: 'settings',
-    },
     openaiIntegration: {
       title: 'ChatGPT / OpenAI',
       text: 'AI automation remains off until data handling and tenant configuration are defined.',
@@ -2823,6 +2919,20 @@ async function sendTestMessage(event) {
             }}
           />
         )}
+        {!isSuperAdminUser && activePage === 'integrations' && canMonitor && (
+          <TallyIntegrationPage
+            settings={tallySettings}
+            logs={tallyLogs}
+            orders={orders}
+            onSave={saveTallySettings}
+            onTest={testTallyConnection}
+            onSyncOrder={syncTallyOrder}
+            saving={tallySaving}
+            testing={tallyTesting}
+            syncingOrderId={tallySyncingOrderId}
+            userRole={user.role}
+          />
+        )}
         {!isSuperAdminUser && featureGate && <FeatureGatePage title={featureGate.title} text={featureGate.text} actionLabel={featureGate.actionLabel} actionPage={featureGate.actionPage} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && (
@@ -2845,6 +2955,9 @@ async function sendTestMessage(event) {
             onSendManagerApproval={sendQuoteForManagerApproval}
             onSendCustomer={sendQuoteToCustomer}
             onUpdateOrder={updateOrder}
+            onSyncTallyOrder={syncTallyOrder}
+            tallySyncingOrderId={tallySyncingOrderId}
+            tallyEnabled={tallySettings.enabled}
           />
         )}
         {!isSuperAdminUser && activePage === 'users' && user.role === 'admin' && (
@@ -2920,7 +3033,7 @@ async function sendTestMessage(event) {
             auditEvents={auditEvents}
           />
         )}
-        {!isSuperAdminUser && !chatPages && !featureGate && !['sendSingle', 'sendBulk', 'sendCanned', 'contactsList', 'dashboard', 'inventory', 'bot', 'salesWorkspace', 'users', 'connectWhatsApp', 'controlCenter'].includes(activePage) && (
+        {!isSuperAdminUser && !chatPages && !featureGate && !['sendSingle', 'sendBulk', 'sendCanned', 'contactsList', 'dashboard', 'inventory', 'bot', 'salesWorkspace', 'users', 'connectWhatsApp', 'controlCenter', 'integrations'].includes(activePage) && (
   <EmptyState
     title="Page not available"
     text="Select a valid page from the sidebar."
