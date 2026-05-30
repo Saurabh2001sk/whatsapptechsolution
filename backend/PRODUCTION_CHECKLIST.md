@@ -9,6 +9,13 @@
 - PUBLIC_BASE_URL set to the production backend origin
 - WHATSAPP_APP_SECRET set
 - META_TOKEN_ENCRYPTION_KEY set to a 64-character hex key
+- MEDIA_STORAGE_DRIVER=s3 for production media storage
+- MEDIA_STORAGE_BUCKET set to the S3/R2/Spaces bucket name
+- MEDIA_STORAGE_REGION set; use auto for Cloudflare R2 if required
+- MEDIA_STORAGE_ENDPOINT set for R2/Spaces/S3-compatible providers
+- MEDIA_STORAGE_ACCESS_KEY_ID set
+- MEDIA_STORAGE_SECRET_ACCESS_KEY set
+- MEDIA_STORAGE_FORCE_PATH_STYLE=true for most S3-compatible providers
 
 ## WhatsApp policy
 
@@ -47,4 +54,4 @@
 - Test opt-out flow
 - Test 24-hour window enforcement
 - Test approved template send
-- Test webhook signature verificationokay i 
+- Test webhook signature verification

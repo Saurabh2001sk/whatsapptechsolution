@@ -48,6 +48,46 @@ const displaySrc = src
   return <img src={displaySrc} alt={alt || 'WhatsApp media'} />
 }
 
+export function ProtectedMedia({ url, type, className, title }) {
+  const [src, setSrc] = useState('')
+
+  useEffect(() => {
+    setSrc('')
+
+    if (!url || !isSafeWhatsAppMediaUrl(url)) return undefined
+
+    let objectUrl = ''
+    let cancelled = false
+
+    api.get(url, { responseType: 'blob', silentError: true })
+      .then((res) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(res.data)
+        setSrc(objectUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setSrc('')
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [url])
+
+  if (!src) return <span>Loading media...</span>
+
+  if (type === 'video') {
+    return <video className={className} src={src} controls preload="metadata" title={title || 'WhatsApp video'} />
+  }
+
+  if (type === 'audio') {
+    return <audio className={className} src={src} controls preload="metadata" title={title || 'WhatsApp audio'} />
+  }
+
+  return null
+}
+
 export function ProtectedMediaLink({ url, children, className }) {
   async function openMedia(event) {
     event.preventDefault()
@@ -70,4 +110,3 @@ if (!isSafeWhatsAppMediaUrl(url)) {
     </a>
   )
 }
-

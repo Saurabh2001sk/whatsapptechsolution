@@ -49,7 +49,7 @@ import {
   X,
 } from 'lucide-react'
 import { api, formatApiIssue, isProduction } from './apiClient'
-import { ProtectedImage, ProtectedMediaLink } from './ProtectedMedia'
+import { ProtectedImage, ProtectedMedia, ProtectedMediaLink } from './ProtectedMedia'
 import {
   buildAppSettingsPayload,
   defaultAppSettings,
@@ -897,6 +897,13 @@ const [authChecking, setAuthChecking] = useState(true)
   const [templateName, setTemplateName] = useState('')
   const [sendError, setSendError] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [composerMode, setComposerMode] = useState('text')
+  const [composerMediaType, setComposerMediaType] = useState('image')
+  const [composerMediaFileName, setComposerMediaFileName] = useState('')
+  const [composerMediaPreviewUrl, setComposerMediaPreviewUrl] = useState('')
+  const [composerUploadProgress, setComposerUploadProgress] = useState(0)
+  const composerFileInputRef = useRef(null)
+  const composerMediaPreviewRef = useRef('')
   const [leadForm, setLeadForm] = useState({ name: '', company: '', stage: 'new', notes: '', label: 'New Enquiry', assigned_to: '', assignment_reason: '' })
   const emptyUser = { name: '', email: '', password: '', role: 'sales' }
   const [newUser, setNewUser] = useState(emptyUser)
@@ -1025,123 +1032,52 @@ const [authChecking, setAuthChecking] = useState(true)
     return groups
   }, [canMonitor, isSuperAdminUser, user?.role])
 
-  const suiteNavigation = useMemo(() => [
-    { id: 'connectedAccounts', label: 'Connected Accounts', icon: Link2, page: user?.role === 'admin' ? 'connectWhatsApp' : 'connectedAccounts' },
-    { id: 'inbox', label: 'Inbox', icon: Inbox, page: 'inbox' },
-    {
-      id: 'sendMessage',
-      label: 'Send Message',
-      icon: MessageCircle,
-      children: [
-        { id: 'sendSingle', label: 'Single', icon: Send },
-        { id: 'sendBulk', label: 'Bulk Message', icon: Megaphone },
-        { id: 'sendCanned', label: 'Canned Message', icon: Inbox },
-      ],
-    },
-    {
-      id: 'reports',
-      label: 'Reports',
-      icon: ClipboardList,
-      children: [
-        { id: 'dashboard', label: 'Messages', icon: MessageCircle },
-        { id: 'campaignReports', label: 'Campaigns', icon: Megaphone },
-        { id: 'callingReports', label: 'Calling Reports', icon: PhoneCall },
-        { id: 'chatbotReports', label: 'Chatbot Executions', icon: Bot },
-        { id: 'orders', label: 'Catalog Orders', icon: ShoppingCart },
-        { id: 'paymentTransactions', label: 'Payment Transactions', icon: CreditCard },
-        {
-          id: 'scheduledItems',
-          label: 'Scheduled Items',
-          icon: CalendarClock,
-          children: [
-            { id: 'scheduledSingleMessages', label: 'Single Messages', icon: MessageCircle },
-            { id: 'scheduledCampaigns', label: 'Campaigns', icon: Megaphone },
-            { id: 'scheduledChatbots', label: 'Chatbots', icon: Bot },
-          ],
-        },
-        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-      ],
-    },
-    {
-      id: 'money',
-      label: 'Money',
-      icon: Wallet,
-      children: [
-        { id: 'creditCenter', label: 'Credit Center', icon: CreditCard },
-        { id: 'subscriptionPlan', label: 'Subscription Plan', icon: ClipboardList },
-        { id: 'whatsappCredits', label: 'WhatsApp Credits', icon: MessageCircle },
-        { id: 'aiCredits', label: 'AI Credits', icon: Sparkles },
-      ],
-    },
-    {
-      id: 'automation',
-      label: 'Automation',
-      icon: Bot,
-      children: [
-        { id: 'bot', label: 'Advanced Chatbot', icon: Bot },
-        { id: 'basicChatbot', label: 'Basic Chatbot', icon: MessageCircle },
-        { id: 'drips', label: 'Drips', icon: Megaphone, badge: 'New' },
-        { id: 'settings', label: 'Canned Messages', icon: Inbox },
-      ],
-    },
-    {
-      id: 'contact',
-      label: 'Contact',
-      icon: Users,
-      children: [
-        { id: 'contactsList', label: 'Contacts List', icon: Users },
-        { id: 'settings', label: 'Contact Settings', icon: Settings },
-        { id: 'optOuts', label: 'Blocked Contacts', icon: Shield },
-        { id: 'contactAddresses', label: 'Contact Addresses', icon: Building2 },
-      ],
-    },
-    {
-      id: 'whatsappItems',
-      label: 'WhatsApp Items',
-      icon: MessageCircle,
-      children: [
-        { id: 'settings', label: 'Templates', icon: FileText },
-        {
-          id: 'catalogs',
-          label: 'Catalogs',
-          icon: ShoppingCart,
-          children: [
-            { id: 'inventory', label: 'Products / Items', icon: Boxes },
-            { id: 'catalogSettings', label: 'Catalog Settings', icon: Settings },
-            { id: 'catalogManager', label: 'Catalog Manager (Beta)', icon: ShoppingCart },
-          ],
-        },
-        { id: 'flows', label: 'Flows', icon: Activity },
-        { id: 'paymentConfigurations', label: 'Payment Configurations', icon: CreditCard },
-        { id: 'whatsappGroups', label: 'WhatsApp Groups', icon: Users },
-      ],
-    },
-    {
-      id: 'integrationsUtilities',
-      label: 'Integrations & Utilities',
-      icon: Sparkles,
-      children: [
-        { id: 'integrations', label: 'Integrations', icon: Sparkles },
-        { id: 'openaiIntegration', label: 'ChatGPT / OpenAI', icon: Bot },
-        { id: 'googleSheets', label: 'Google Sheets', icon: ClipboardList },
-        {
-          id: 'developer',
-          label: 'Developer',
-          icon: Code2,
-          children: [
-            { id: 'apiKeys', label: 'API Keys', icon: Code2 },
-            { id: 'webhooks', label: 'Webhooks', icon: Activity },
-            { id: 'apiDocumentation', label: 'API Documentation', icon: FileText },
-          ],
-        },
-        { id: 'cloneItems', label: 'Clone Items', icon: Copy },
-        { id: 'chatLink', label: 'WhatsApp Chat Link', icon: Link2 },
-        { id: 'widget', label: 'WhatsApp Widget', icon: MessageCircle },
-        { id: 'templateMatchLogs', label: 'Template Match Logs', icon: ClipboardList },
-      ],
-    },
-    { id: 'controlCenter', label: 'Settings', icon: Settings, page: 'settings' },
-  ], [user?.role])
+  const suiteNavigation = useMemo(() => {
+    const items = [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'inbox', label: 'Inbox', icon: Inbox },
+      {
+        id: 'sendMessage',
+        label: 'Messaging',
+        icon: MessageCircle,
+        children: [
+          { id: 'sendSingle', label: 'Single Message', icon: Send },
+          { id: 'sendBulk', label: 'Bulk Campaigns', icon: Megaphone },
+        ],
+      },
+      {
+        id: 'salesSuite',
+        label: 'Sales',
+        icon: ShoppingCart,
+        children: [
+          { id: 'new', label: 'Enquiries', icon: Bell },
+          { id: 'sales', label: 'Pipeline', icon: Activity },
+          { id: 'quotes', label: 'Quotations', icon: FileText },
+          { id: 'orders', label: 'Orders', icon: ClipboardList },
+          { id: 'inventory', label: 'Products', icon: Boxes },
+        ],
+      },
+      {
+        id: 'contactsSuite',
+        label: 'Contacts',
+        icon: Users,
+        children: [
+          { id: 'contactsList', label: 'All Contacts', icon: Users },
+          { id: 'optOuts', label: 'Opt-outs', icon: Shield },
+        ],
+      },
+      { id: 'bot', label: 'Automation', icon: Bot },
+      { id: 'integrations', label: 'Integrations', icon: Sparkles },
+      { id: 'controlCenter', label: 'Control Center', icon: Settings },
+    ]
+
+    if (user?.role === 'admin') {
+      items.splice(2, 0, { id: 'connectWhatsApp', label: 'WhatsApp Setup', icon: Link2 })
+      items.push({ id: 'users', label: 'Team & Roles', icon: Users })
+    }
+
+    return items
+  }, [user?.role])
 
  useEffect(() => {
   api.get('/api/me', { silentError: true })
@@ -1637,8 +1573,16 @@ async function loadMessages(contactId, markRead = false, options = {}) {
       assigned_to: selected.assigned_to || '',
       assignment_reason: '',
     })
+    setComposerMode('text')
+    clearComposerMedia()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
+
+useEffect(() => () => {
+  if (composerMediaPreviewRef.current) {
+    URL.revokeObjectURL(composerMediaPreviewRef.current)
+  }
+}, [])
 
 function logout() {
   api.post('/api/auth/logout', {}, { silentError: true }).catch(() => {})
@@ -1856,9 +1800,10 @@ if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={ap
       'optOuts',
       'audit',
       'users',
+      'integrations',
     ]
 const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit', 'sendBulk', 'integrations', 'billing', 'voice', 'automation']
-const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing', 'integrations']
+const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing']
     const salesSubPages = ['quotes', 'orders', 'activeOrders']
     const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
 
@@ -1966,6 +1911,63 @@ const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing', 'inte
   }
 }
 
+function clearComposerMedia(options = {}) {
+  const { clearInput = true } = options
+
+  if (composerMediaPreviewRef.current) {
+    URL.revokeObjectURL(composerMediaPreviewRef.current)
+    composerMediaPreviewRef.current = ''
+  }
+
+  setComposerMediaFileName('')
+  setComposerMediaPreviewUrl('')
+  setComposerUploadProgress(0)
+
+  if (clearInput && composerFileInputRef.current) {
+    composerFileInputRef.current.value = ''
+  }
+}
+
+function handleComposerModeChange(event) {
+  const nextMode = event.target.value
+  setComposerMode(nextMode)
+  setSendError('')
+
+  if (nextMode !== 'template') {
+    setTemplateName('')
+  }
+
+  if (nextMode !== 'text') {
+    setDraft('')
+  }
+
+  if (nextMode !== 'media') {
+    clearComposerMedia()
+  }
+}
+
+function handleComposerMediaFileChange(event) {
+  const file = event.target.files?.[0]
+  clearComposerMedia({ clearInput: false })
+
+  if (!file) return
+
+  setComposerMediaFileName(file.name)
+
+  if (file.type?.startsWith('image/') || file.type?.startsWith('video/') || file.type?.startsWith('audio/')) {
+    const previewUrl = URL.createObjectURL(file)
+    composerMediaPreviewRef.current = previewUrl
+    setComposerMediaPreviewUrl(previewUrl)
+  }
+}
+
+function getComposerMediaAccept(type) {
+  if (type === 'image') return 'image/jpeg,image/png,image/webp'
+  if (type === 'video') return 'video/mp4,video/3gpp'
+  if (type === 'audio') return 'audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg'
+  return '.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation'
+}
+
 async function sendMessage(event) {
   event.preventDefault()
 
@@ -1977,7 +1979,7 @@ async function sendMessage(event) {
   }
 
   const formData = event?.currentTarget ? new FormData(event.currentTarget) : null
-  const formMessageType = String(formData?.get('messageType') || '').trim()
+  const formMessageType = String(formData?.get('messageType') || composerMode || 'text').trim()
   const mediaType = String(formData?.get('mediaType') || '').trim()
   const mediaUrl = String(formData?.get('mediaUrl') || '').trim()
   const caption = String(formData?.get('caption') || '').trim()
@@ -1986,14 +1988,40 @@ async function sendMessage(event) {
 
   const hasMediaFile = mediaFile instanceof File && mediaFile.size > 0
 
+  const maxMediaUploadBytes = 16 * 1024 * 1024
+
+  const allowedMediaMimeTypes = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'video/mp4',
+    'video/3gpp',
+    'audio/aac',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/amr',
+    'audio/ogg',
+    'application/pdf',
+    'text/plain',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ])
+
   const cleanText = draft.trim()
-  const selectedTemplate = templates.find((template) => (
-    template.id === templateName || template.name === templateName
-  ))
+  const selectedTemplate = formMessageType === 'template'
+    ? templates.find((template) => (
+      template.id === templateName || template.name === templateName
+    ))
+    : null
 
   setSendError('')
+  setComposerUploadProgress(0)
 
-  if (!selected.reply_window_open && !selectedTemplate) {
+  if (!selected.reply_window_open && formMessageType !== 'template') {
     setSendError('24-hour reply window expired. Use an approved WhatsApp template.')
     return
   }
@@ -2013,13 +2041,38 @@ async function sendMessage(event) {
       }
 
       if (hasMediaFile) {
+        if (mediaFile.size > maxMediaUploadBytes) {
+          setSendError('Media file is too large. Maximum 16 MB is allowed for this composer.')
+          return
+        }
+
+        if (mediaFile.type && !allowedMediaMimeTypes.has(mediaFile.type)) {
+          setSendError(`Unsupported file type: ${mediaFile.type}. Choose image, video, audio, PDF, document, sheet, presentation, or text file.`)
+          return
+        }
+
         const uploadPayload = new FormData()
         uploadPayload.append('mediaType', mediaType)
         uploadPayload.append('mediaFile', mediaFile)
         uploadPayload.append('caption', caption)
         uploadPayload.append('fileName', fileName || mediaFile.name || '')
 
-        await api.post(`/api/conversations/${selected.id}/messages/media-upload`, uploadPayload)
+        setComposerUploadProgress(1)
+
+        await api.post(
+          `/api/conversations/${selected.id}/messages/media-upload`,
+          uploadPayload,
+          {
+            timeout: 90_000,
+            onUploadProgress: (progressEvent) => {
+              if (!progressEvent.total) return
+              const percent = Math.min(99, Math.round((progressEvent.loaded * 100) / progressEvent.total))
+              setComposerUploadProgress(percent)
+            },
+          },
+        )
+
+        setComposerUploadProgress(100)
         notify('Uploaded media message queued/sent')
       } else {
         if (!mediaUrl) {
@@ -2051,9 +2104,12 @@ async function sendMessage(event) {
 
     setDraft('')
     setTemplateName('')
+    setComposerMode('text')
+    clearComposerMedia()
     await Promise.all([loadMessages(selected.id), loadAll()])
   } catch (err) {
     setSendError(apiErrorMessage(err, 'Message send failed'))
+    setComposerUploadProgress(0)
   } finally {
     setSendingMessage(false)
   }
@@ -3142,7 +3198,7 @@ async function sendTestMessage(event) {
     <b>{message.direction === 'inbound' ? 'Incoming' : 'Outgoing'}</b>
 
     {message.type === 'image' && message.media_url ? (
-      <div className="media-message">
+      <div className="media-message whatsapp-media-card">
        <ProtectedImage url={message.media_url} alt={message.caption || 'WhatsApp image'} />
         {(message.caption || message.body) && <span>{message.caption || message.body}</span>}
       </div>
@@ -3153,19 +3209,37 @@ async function sendTestMessage(event) {
         <small>Preview unavailable. Check Meta token/media download.</small>
       </div>
     ) : message.type === 'document' && message.media_url ? (
-<ProtectedMediaLink className="doc-message" url={message.media_url}>
-  {message.file_name || message.body || 'Open document'}
-</ProtectedMediaLink>
+      <div className="whatsapp-media-card doc-media-card">
+        <FileText size={22} />
+        <div>
+          <strong>{message.file_name || 'Document'}</strong>
+          <span>{message.caption || message.body || 'WhatsApp document'}</span>
+        </div>
+        <ProtectedMediaLink className="doc-message" url={message.media_url}>
+          Open
+        </ProtectedMediaLink>
+      </div>
     ) : message.type === 'document' ? (
       <div className="media-placeholder">
         <FileText size={18} />
         <span>{message.file_name || message.body || 'Document received'}</span>
         <small>Download unavailable. Check Meta token/media download.</small>
       </div>
-    ) : ['audio', 'video', 'sticker'].includes(message.type) && message.media_url ? (
-<ProtectedMediaLink className="doc-message" url={message.media_url}>
-  {message.file_name || message.body || `Open ${message.type}`}
-</ProtectedMediaLink>
+    ) : message.type === 'video' && message.media_url ? (
+      <div className="whatsapp-media-card video-media-card">
+        <ProtectedMedia url={message.media_url} type="video" className="whatsapp-video" title={message.caption || message.body || 'WhatsApp video'} />
+        {(message.caption || message.body) && <span>{message.caption || message.body}</span>}
+      </div>
+    ) : message.type === 'audio' && message.media_url ? (
+      <div className="whatsapp-media-card audio-media-card">
+        <ProtectedMedia url={message.media_url} type="audio" className="whatsapp-audio" title={message.body || 'WhatsApp audio'} />
+      </div>
+    ) : ['video', 'audio', 'sticker'].includes(message.type) ? (
+      <div className="media-placeholder">
+        <PackageCheck size={18} />
+        <span>{message.file_name || message.body || `${message.type} received`}</span>
+        <small>Preview unavailable. Check Meta token/media download.</small>
+      </div>
     ) : message.type === 'interactive' && message.interactive_payload ? (
       <div className="interactive-message">
         <strong>{message.interactive_payload?.header?.text || 'Menu'}</strong>
@@ -3185,42 +3259,108 @@ async function sendTestMessage(event) {
 ))}
               {!messages.length && <div className="empty-chat"><strong>Select a conversation</strong><span>Customer messages, reply-window status, and profile details will appear here.</span></div>}
             </div>
-<form className="composer" onSubmit={sendMessage}>
+<form className="composer upgraded-composer" onSubmit={sendMessage}>
   {selected?.opted_out && (
     <p>Customer has opted out. WhatsApp sending is locked for this contact.</p>
   )}
 
-  {!selected?.opted_out && selected && !selected.reply_window_open && !templateName && (
-    <p>24-hour window expired. Select approved template before sending.</p>
+  {!selected?.opted_out && selected && !selected.reply_window_open && composerMode !== 'template' && (
+    <p>24-hour window expired. Switch to approved template before sending.</p>
   )}
 
   {sendError && <p>{sendError}</p>}
 
-  <input
-    value={draft}
-    onChange={(e) => setDraft(e.target.value)}
-    placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Template required after 24h'}
-    disabled={!selected || selected.opted_out || Boolean(templateName) || sendingMessage || !selected.reply_window_open}
-  />
-
-  <select
-    value={templateName}
-    onChange={(e) => {
-      setTemplateName(e.target.value)
-      setDraft('')
-      setSendError('')
-    }}
-    disabled={!selected || selected.opted_out || sendingMessage}
-  >
-    <option value="">Text Reply</option>
-{templates.map((template) => (
-  <option key={template.id} value={template.id}>
-    {template.name}{template.language ? ` (${template.language})` : ''}
-  </option>
-))}
+  <select name="messageType" className="composer-mode-select" value={composerMode} onChange={handleComposerModeChange} disabled={!selected || selected.opted_out || sendingMessage}>
+    <option value="text">Text</option>
+    <option value="template">Template</option>
+    <option value="media">Media</option>
   </select>
 
-  <button type="submit" disabled={!selected || selected.opted_out || sendingMessage || (!selected.reply_window_open && !templateName)}>
+  {composerMode === 'text' && (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      placeholder={selected?.reply_window_open ? 'Type WhatsApp reply' : 'Template required after 24h'}
+      disabled={!selected || selected.opted_out || sendingMessage || !selected.reply_window_open}
+    />
+  )}
+
+  {composerMode === 'template' && (
+    <select
+      value={templateName}
+      onChange={(e) => {
+        setTemplateName(e.target.value)
+        setDraft('')
+        setSendError('')
+      }}
+      disabled={!selected || selected.opted_out || sendingMessage}
+    >
+      <option value="">Select approved template</option>
+      {templates.map((template) => (
+        <option key={template.id} value={template.id}>
+          {template.name}{template.language ? ` (${template.language})` : ''}
+        </option>
+      ))}
+    </select>
+  )}
+
+  {composerMode === 'media' && (
+    <div className="composer-media-panel">
+      <select name="mediaType" value={composerMediaType} onChange={(event) => {
+        setComposerMediaType(event.target.value)
+        clearComposerMedia()
+      }} disabled={!selected || selected.opted_out || sendingMessage || !selected.reply_window_open}>
+        <option value="image">Image</option>
+        <option value="video">Video</option>
+        <option value="audio">Audio</option>
+        <option value="document">Document</option>
+      </select>
+      <input
+        ref={composerFileInputRef}
+        type="file"
+        name="mediaFile"
+        accept={getComposerMediaAccept(composerMediaType)}
+        onChange={handleComposerMediaFileChange}
+        disabled={!selected || selected.opted_out || sendingMessage || !selected.reply_window_open}
+      />
+      <input
+        name="caption"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder={composerMediaType === 'document' ? 'Optional document caption' : 'Optional caption'}
+        disabled={!selected || selected.opted_out || sendingMessage || !selected.reply_window_open}
+      />
+      <input type="hidden" name="fileName" value={composerMediaFileName} />
+      {composerMediaFileName && (
+        <div className="composer-media-preview">
+          {composerMediaPreviewUrl && composerMediaType === 'image' && <img src={composerMediaPreviewUrl} alt={composerMediaFileName} />}
+          {composerMediaPreviewUrl && composerMediaType === 'video' && <video src={composerMediaPreviewUrl} controls />}
+          {composerMediaPreviewUrl && composerMediaType === 'audio' && <audio src={composerMediaPreviewUrl} controls />}
+          {!composerMediaPreviewUrl && <FileText size={18} />}
+          <span>{composerMediaFileName}</span>
+          <button type="button" onClick={() => clearComposerMedia()} disabled={sendingMessage} aria-label="Clear selected file"><X size={15} /></button>
+        </div>
+      )}
+      {composerUploadProgress > 0 && (
+        <div className="composer-upload-progress" aria-label={`Upload progress ${composerUploadProgress}%`}>
+          <span style={{ width: `${composerUploadProgress}%` }} />
+        </div>
+      )}
+      <small>Max 16 MB. Allowed: JPG, PNG, WebP, MP4, 3GP, audio, PDF and Office documents.</small>
+    </div>
+  )}
+
+  <button
+    type="submit"
+    disabled={
+      !selected
+      || selected.opted_out
+      || sendingMessage
+      || (composerMode === 'text' && (!selected.reply_window_open || !draft.trim()))
+      || (composerMode === 'template' && !templateName)
+      || (composerMode === 'media' && (!selected.reply_window_open || !composerMediaFileName))
+    }
+  >
     {sendingMessage ? 'Sending' : <Send size={18} />}
   </button>
 </form>

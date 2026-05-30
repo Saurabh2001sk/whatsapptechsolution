@@ -1841,6 +1841,263 @@ html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover {
   position: relative;
 }
 
+/* Final professional visibility pass: simpler navigation, stable scrolling, and WhatsApp media cards */
+.suite-shell,
+.suite-shell.workspace-mode {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: #f5f7f9;
+}
+
+.suite-shell {
+  grid-template-columns: 252px minmax(360px, 410px) minmax(0, 1fr);
+}
+
+.suite-shell.workspace-mode {
+  grid-template-columns: 252px minmax(0, 1fr);
+}
+
+.suite-shell .workspace-sidebar {
+  padding: 12px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.suite-shell .sidebar-navigation {
+  gap: 5px;
+}
+
+.suite-shell .suite-nav-item > button,
+.suite-shell .suite-subnav button,
+.suite-shell .suite-thirdnav button {
+  min-height: 42px;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.suite-shell .suite-nav-item > button.active,
+.suite-shell .suite-nav-item > button:hover,
+.suite-shell .suite-subnav button.active,
+.suite-shell .suite-subnav button:hover {
+  margin: 0;
+  color: #0b63ce;
+  background: #edf5ff;
+  box-shadow: inset 3px 0 0 #0b63ce;
+}
+
+.suite-subnav {
+  padding: 3px 0;
+  background: transparent;
+}
+
+.suite-shell .suite-subnav button {
+  padding-left: 34px;
+  background: transparent;
+}
+
+.suite-shell .suite-thirdnav {
+  display: none;
+}
+
+.suite-topbar {
+  min-height: 64px;
+  padding: 0 18px;
+}
+
+.suite-shell .module-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  scroll-padding: 18px;
+}
+
+.workspace-page,
+.suite-page {
+  min-width: 0;
+  padding: 18px;
+}
+
+.workspace-page .workspace-head,
+.workspace-head-structured {
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+
+.workspace-page .workspace-head h2,
+.workspace-head-structured h2 {
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.workspace-alert {
+  margin: 14px 18px 0;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.load-error {
+  margin: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  padding: 10px 18px;
+  font-size: 13px;
+}
+
+.workspace-tabs,
+.settings-reference-tabs,
+.settings-subtabs,
+.suite-subtabs {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.workspace-tabs button,
+.settings-reference-tabs button,
+.settings-subtabs button,
+.suite-subtabs button {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.dashboard-grid,
+.settings-grid,
+.settings-stack,
+.suite-compose-layout {
+  min-width: 0;
+}
+
+.settings-card,
+.table-module,
+.suite-table-card {
+  max-width: 100%;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.settings-card-title,
+.settings-form-actions,
+.inline-actions,
+.doc-actions,
+.inventory-toolbar {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.settings-card label,
+.settings-card input,
+.settings-card select,
+.settings-card textarea,
+.table-module input,
+.table-module select,
+.table-module textarea {
+  min-width: 0;
+}
+
+.suite-shell .chat-shell {
+  min-width: 0;
+  min-height: 0;
+  margin: 18px 18px 18px 0;
+  border-radius: 8px;
+}
+
+.suite-shell .chat-header {
+  min-height: 66px;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(135px, max-content) max-content 40px;
+}
+
+.suite-shell .message-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  background: #f4f6f8;
+}
+
+.suite-shell .message {
+  max-width: min(680px, 82%);
+  border-radius: 8px;
+}
+
+.whatsapp-media-card {
+  display: grid;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.whatsapp-media-card img,
+.whatsapp-video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #101418;
+}
+
+.whatsapp-audio {
+  width: min(330px, 100%);
+}
+
+.doc-media-card {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: min(360px, 100%);
+  border: 1px solid #dce4ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.doc-media-card div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.doc-media-card strong,
+.doc-media-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-media-card .doc-message {
+  min-height: 34px;
+  border-radius: 6px;
+  padding: 0 12px;
+}
+
+.audio-media-card {
+  min-width: min(340px, 100%);
+}
+
+@media (max-width: 1180px) {
+  .suite-shell {
+    grid-template-columns: 76px minmax(330px, 390px) minmax(0, 1fr);
+  }
+
+  .suite-shell.workspace-mode {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .suite-shell .suite-nav-item > button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .suite-shell .suite-nav-item > button span,
+  .suite-shell .suite-chevron,
+  .suite-shell .suite-subnav,
+  .suite-shell .sidebar-account span {
+    display: none;
+  }
+}
+
 .suite-page > h2 {
   margin-bottom: 2px;
   font-weight: 750;
@@ -2556,4 +2813,293 @@ html[data-theme='dark'] .suite-type-tabs button.active {
   padding: 8px 10px;
   margin-right: 10px;
   cursor: pointer;
+}
+
+.send-selected-file {
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  border-radius: 12px;
+  background: rgba(52, 211, 153, 0.07);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  align-self: end;
+}
+
+.send-selected-file strong {
+  color: #34d399;
+  font-size: 12px;
+}
+
+.send-selected-file span {
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+/* Last-pass workspace overrides kept at file end so older module styles cannot hide content. */
+.suite-shell,
+.suite-shell.workspace-mode {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.suite-shell {
+  grid-template-columns: 252px minmax(360px, 410px) minmax(0, 1fr);
+}
+
+.suite-shell.workspace-mode {
+  grid-template-columns: 252px minmax(0, 1fr);
+}
+
+.suite-shell .workspace-sidebar {
+  padding: 12px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.suite-shell .suite-nav-item > button,
+.suite-shell .suite-subnav button,
+.suite-shell .suite-thirdnav button {
+  min-height: 42px;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.suite-shell .module-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-page,
+.suite-page {
+  min-width: 0;
+  padding: 18px;
+}
+
+.workspace-page .workspace-head,
+.workspace-head-structured,
+.settings-card,
+.table-module,
+.suite-table-card {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.settings-card,
+.table-module,
+.suite-table-card {
+  overflow-x: auto;
+}
+
+.workspace-tabs,
+.settings-reference-tabs,
+.settings-subtabs,
+.suite-subtabs {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.workspace-tabs button,
+.settings-reference-tabs button,
+.settings-subtabs button,
+.suite-subtabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.suite-shell .chat-shell {
+  min-width: 0;
+  min-height: 0;
+  margin: 18px 18px 18px 0;
+  border-radius: 8px;
+}
+
+.suite-shell .message-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.whatsapp-media-card {
+  display: grid;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.whatsapp-media-card img,
+.whatsapp-video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #101418;
+}
+
+.whatsapp-audio {
+  width: min(330px, 100%);
+}
+
+.doc-media-card {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: min(360px, 100%);
+  border: 1px solid #dce4ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.doc-media-card div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.doc-media-card strong,
+.doc-media-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suite-shell .upgraded-composer {
+  grid-template-columns: 136px minmax(0, 1fr) 54px;
+  align-items: stretch;
+}
+
+.upgraded-composer > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9f1239;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-mode-select {
+  min-width: 0;
+}
+
+.composer-media-panel {
+  display: grid;
+  grid-template-columns: 130px minmax(190px, 1fr) minmax(190px, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-media-panel input[type="file"] {
+  min-width: 0;
+  border: 1px solid #d7dee5;
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.composer-media-panel small,
+.composer-media-preview,
+.composer-upload-progress {
+  grid-column: 1 / -1;
+}
+
+.composer-media-panel small {
+  color: #65717b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.composer-media-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d7dee5;
+  border-radius: 7px;
+  padding: 8px;
+  background: #f8fafb;
+}
+
+.composer-media-preview img,
+.composer-media-preview video {
+  width: 52px;
+  height: 38px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #111827;
+}
+
+.composer-media-preview audio {
+  width: 160px;
+  max-width: 100%;
+}
+
+.composer-media-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #172026;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-media-preview button {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #eef2f5;
+  color: #172026;
+}
+
+.composer-upload-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3e8ed;
+}
+
+.composer-upload-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0f8f7a;
+  transition: width 160ms ease;
+}
+
+@media (max-width: 1180px) {
+  .suite-shell {
+    grid-template-columns: 76px minmax(330px, 390px) minmax(0, 1fr);
+  }
+
+  .suite-shell.workspace-mode {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .suite-shell .suite-nav-item > button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .suite-shell .suite-nav-item > button span,
+  .suite-shell .suite-chevron,
+  .suite-shell .suite-subnav,
+  .suite-shell .sidebar-account span {
+    display: none;
+  }
+
+  .suite-shell .upgraded-composer {
+    grid-template-columns: 1fr 52px;
+  }
+
+  .composer-mode-select,
+  .composer-media-panel {
+    grid-column: 1 / -1;
+  }
+
+  .composer-media-panel {
+    grid-template-columns: 1fr;
+  }
 }

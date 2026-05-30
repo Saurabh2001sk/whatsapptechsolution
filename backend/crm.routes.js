@@ -29,6 +29,7 @@ function registerCrmRoutes(app, ctx) {
     cleanVoiceWeeklyHours,
     cleanUnavailableHours,
     mediaRoot,
+    mediaStorage,
     port,
     isProduction,
     jwtSecret,
@@ -1024,6 +1025,14 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
     return res.status(400).json({ error: 'Audio messages do not support captions in this composer' });
   }
 
+  const storedMedia = await mediaStorage.putTenantMediaObject({
+    tenantId: req.user.tenantId,
+    buffer: file.buffer,
+    fileName,
+    mimeType: file.mimetype,
+    source: 'whatsapp-outbound',
+  });
+
   const mediaId = await uploadWhatsAppMedia({
     tenantId: req.user.tenantId,
     buffer: file.buffer,
@@ -1087,6 +1096,10 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
     status,
     rawPayload: outboundPayload,
     mediaId,
+    mediaUrl: storedMedia.mediaUrl,
+    mediaLocalPath: storedMedia.mediaLocalPath,
+    mediaStorageProvider: storedMedia.provider,
+    mediaStorageKey: storedMedia.storageKey,
     caption,
     mimeType: file.mimetype,
     fileName,
@@ -1109,6 +1122,7 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
       fileName,
       mimeType: file.mimetype,
       fileSize: file.size,
+      storageProvider: storedMedia.provider,
       outboundMessageId: outboundRecord?.id || null,
     },
   });

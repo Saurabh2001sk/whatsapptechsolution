@@ -44,6 +44,7 @@ const { registerCrmRoutes } = require('./crm.routes');
 const { registerSalesRoutes } = require('./sales.routes');
 const { registerCampaignRoutes } = require('./campaign.routes');
 const { registerTallyRoutes } = require('./tally.routes');
+const { createMediaStorage } = require('./media.storage');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
@@ -52,6 +53,7 @@ if (!process.env.DATABASE_URL) {
 
 const mediaRoot = path.resolve(process.env.WHATSAPP_MEDIA_DIR || path.join(__dirname, '.media'));
 if (!fs.existsSync(mediaRoot)) fs.mkdirSync(mediaRoot, { recursive: true });
+const mediaStorage = createMediaStorage({ mediaRoot });
 
 const ALLOWED_OUTBOUND_MEDIA_MIME = new Set([
   'image/jpeg',
@@ -241,14 +243,18 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
   }
 
   const mediaUrl = `/media/whatsapp/${fileName}`;
+  const decodedStorageKey = mediaStorage.decodeStorageKey(fileName);
 
   const result = await query(
-    `SELECT id, media_id, mime_type
+    `SELECT id, media_id, mime_type, media_local_path, media_storage_provider, media_storage_key
      FROM messages
      WHERE tenant_id = $1
-       AND media_url = $2
+       AND (
+         media_url = $2
+         OR media_storage_key = $3
+       )
      LIMIT 1`,
-    [req.user.tenantId, mediaUrl],
+    [req.user.tenantId, mediaUrl, decodedStorageKey || fileName],
   );
 
   const mediaMessage = result.rows[0];
@@ -257,7 +263,23 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
     return res.status(404).json({ error: 'Media not found' });
   }
 
-  const filePath = path.join(mediaRoot, fileName);
+  if (mediaMessage.media_storage_provider === 's3' && mediaMessage.media_storage_key) {
+    if (req.query?.signed === '1') {
+      const signedUrl = await mediaStorage.getSignedTenantMediaUrl(mediaMessage.media_storage_key);
+      if (!signedUrl) return res.status(404).json({ error: 'Media object missing' });
+      return res.json({ url: signedUrl, expiresIn: 300 });
+    }
+
+    const objectStream = await mediaStorage.getTenantMediaStream(mediaMessage.media_storage_key);
+    if (!objectStream?.body) return res.status(404).json({ error: 'Media object missing' });
+
+    res.setHeader('Content-Type', objectStream.contentType || mediaMessage.mime_type || 'application/octet-stream');
+    if (objectStream.contentLength) res.setHeader('Content-Length', String(objectStream.contentLength));
+    return objectStream.body.pipe(res);
+  }
+
+  const localFileName = mediaMessage.media_storage_key || fileName;
+  const filePath = mediaMessage.media_local_path || path.join(mediaRoot, localFileName);
 
   if (!filePath.startsWith(mediaRoot)) {
     return res.status(400).json({ error: 'Invalid media path' });
@@ -273,7 +295,10 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
 
   const restoredMedia = await downloadWhatsAppMedia(mediaMessage.media_id, mediaMessage.mime_type || '', req.user.tenantId);
 
-  if (!restoredMedia.mediaUrl || !restoredMedia.mediaLocalPath || !fs.existsSync(restoredMedia.mediaLocalPath)) {
+  const restoredToObjectStorage = restoredMedia.mediaStorageProvider === 's3' && restoredMedia.mediaStorageKey;
+  const restoredToLocalStorage = restoredMedia.mediaLocalPath && fs.existsSync(restoredMedia.mediaLocalPath);
+
+  if (!restoredMedia.mediaUrl || (!restoredToObjectStorage && !restoredToLocalStorage)) {
     return res.status(404).json({ error: 'Media file missing' });
   }
 
@@ -281,8 +306,10 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
     `UPDATE messages
      SET media_url = $3,
          media_local_path = $4,
-         mime_type = COALESCE($5, mime_type),
-         file_size = COALESCE($6, file_size)
+         media_storage_provider = $5,
+         media_storage_key = $6,
+         mime_type = COALESCE($7, mime_type),
+         file_size = COALESCE($8, file_size)
      WHERE id = $1
        AND tenant_id = $2`,
     [
@@ -290,10 +317,21 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
       req.user.tenantId,
       restoredMedia.mediaUrl,
       restoredMedia.mediaLocalPath,
+      restoredMedia.mediaStorageProvider,
+      restoredMedia.mediaStorageKey,
       restoredMedia.mimeType,
       restoredMedia.fileSize,
     ],
   );
+
+  if (restoredMedia.mediaStorageProvider === 's3' && restoredMedia.mediaStorageKey) {
+    const objectStream = await mediaStorage.getTenantMediaStream(restoredMedia.mediaStorageKey);
+    if (!objectStream?.body) return res.status(404).json({ error: 'Media object missing' });
+
+    res.setHeader('Content-Type', objectStream.contentType || restoredMedia.mimeType || 'application/octet-stream');
+    if (objectStream.contentLength) res.setHeader('Content-Length', String(objectStream.contentLength));
+    return objectStream.body.pipe(res);
+  }
 
   return res.sendFile(restoredMedia.mediaLocalPath);
 }));
@@ -1506,7 +1544,7 @@ function extensionFromMime(mimeType = '') {
 async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = null) {
   if (!mediaId) {
     console.warn('WA media skipped: mediaId missing');
-    return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
+    return { mediaUrl: null, mediaLocalPath: null, mediaStorageProvider: null, mediaStorageKey: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
 
   const config = tenantId ? await getWhatsAppSendConfig(tenantId) : null;
@@ -1514,7 +1552,7 @@ async function downloadWhatsAppMedia(mediaId, fallbackMimeType = '', tenantId = 
 
   if (!hasRealValue(accessToken)) {
     console.warn('WA media skipped: WhatsApp token not configured for tenant');
-    return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
+    return { mediaUrl: null, mediaLocalPath: null, mediaStorageProvider: null, mediaStorageKey: null, mimeType: fallbackMimeType || null, fileSize: null };
   }
 
   const apiVersion = config?.apiVersion || process.env.WHATSAPP_API_VERSION || 'v24.0';
@@ -1544,13 +1582,12 @@ console.warn('WA media download URL missing:', {
   fileSize,
 });
 
-        return { mediaUrl: null, mediaLocalPath: null, mimeType: mimeType || null, fileSize };
+        return { mediaUrl: null, mediaLocalPath: null, mediaStorageProvider: null, mediaStorageKey: null, mimeType: mimeType || null, fileSize };
       }
 
       const extension = extensionFromMime(mimeType);
       const safeMediaId = String(mediaId).replace(/[^a-zA-Z0-9_-]/g, '_') || crypto.randomUUID();
       const fileName = `${safeMediaId}-${Date.now()}.${extension}`;
-      const localPath = path.join(mediaRoot, fileName);
 
       const fileRes = await axios.get(downloadUrl, {
         responseType: 'arraybuffer',
@@ -1560,20 +1597,27 @@ console.warn('WA media download URL missing:', {
         maxBodyLength: Number(process.env.WHATSAPP_MEDIA_MAX_BYTES || 25 * 1024 * 1024),
       });
 
-      fs.writeFileSync(localPath, Buffer.from(fileRes.data));
-
-      const mediaUrl = `/media/whatsapp/${fileName}`;
+      const storedMedia = await mediaStorage.putTenantMediaObject({
+        tenantId,
+        buffer: Buffer.from(fileRes.data),
+        fileName,
+        mimeType,
+        source: 'whatsapp-inbound',
+      });
 
      console.log('WA media downloaded:', {
   mediaId: maskId(mediaId),
-  mediaUrl: isProduction ? '[protected-media-url]' : mediaUrl,
+  mediaUrl: isProduction ? '[protected-media-url]' : storedMedia.mediaUrl,
   mimeType,
   fileSize,
+  storageProvider: storedMedia.provider,
 });
 
       return {
-        mediaUrl,
-        mediaLocalPath: localPath,
+        mediaUrl: storedMedia.mediaUrl,
+        mediaLocalPath: storedMedia.mediaLocalPath,
+        mediaStorageProvider: storedMedia.provider,
+        mediaStorageKey: storedMedia.storageKey,
         mimeType: mimeType || null,
         fileSize,
       };
@@ -1600,7 +1644,7 @@ console.error('WA media download failed:', {
   ...safeMetaError(lastError),
 });
 
-  return { mediaUrl: null, mediaLocalPath: null, mimeType: fallbackMimeType || null, fileSize: null };
+  return { mediaUrl: null, mediaLocalPath: null, mediaStorageProvider: null, mediaStorageKey: null, mimeType: fallbackMimeType || null, fileSize: null };
 }
 
 // =========================================================
@@ -1643,7 +1687,7 @@ async function upsertContact({ tenantId, waId, name, phone, label, touchInbound 
 async function addMessage({
   tenantId, contactId, waMessageId, direction, type = 'text', body, status = 'received',
   rawPayload, templateName, waSenderId, waRecipientId, caption, mediaId, mediaUrl,
-  mediaLocalPath, mimeType, fileName, fileSize, sha256, contextWaMessageId,
+  mediaLocalPath, mediaStorageProvider, mediaStorageKey, mimeType, fileName, fileSize, sha256, contextWaMessageId,
   interactivePayload, buttonPayload, locationPayload, contactsPayload,
   reactionPayload, referralPayload, unsupportedPayload, normalizedText,
 }) {
@@ -1651,18 +1695,18 @@ async function addMessage({
     `INSERT INTO messages (
        tenant_id, contact_id, wa_message_id, direction, type, body, status, raw_payload,
        template_name, wa_sender_id, wa_recipient_id, caption, media_id, media_url,
-       media_local_path, mime_type, file_name, file_size, sha256, context_wa_message_id,
+       media_local_path, media_storage_provider, media_storage_key, mime_type, file_name, file_size, sha256, context_wa_message_id,
        interactive_payload, button_payload, location_payload, contacts_payload,
        reaction_payload, referral_payload, unsupported_payload, normalized_text
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
      ON CONFLICT (tenant_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
      RETURNING *`,
     [
       tenantId, contactId, waMessageId || null, direction, type, body || '', status,
       rawPayload || null, templateName || null, waSenderId || null, waRecipientId || null,
       caption || null, mediaId || null, mediaUrl || null, mediaLocalPath || null,
-      mimeType || null, fileName || null, fileSize || null, sha256 || null,
+      mediaStorageProvider || null, mediaStorageKey || null, mimeType || null, fileName || null, fileSize || null, sha256 || null,
       contextWaMessageId || null, interactivePayload || null, buttonPayload || null,
       locationPayload || null, contactsPayload || null, reactionPayload || null,
       referralPayload || null, unsupportedPayload || null, normalizedText || body || '',
@@ -1951,7 +1995,10 @@ if (isOptOut) {
     type: normalized.type, body: normalized.body, status: 'received', rawPayload,
     waSenderId: waId, caption: normalized.caption,
     mediaId: normalized.mediaId, mediaUrl: downloadedMedia.mediaUrl,
-    mediaLocalPath: downloadedMedia.mediaLocalPath, mimeType: downloadedMedia.mimeType || normalized.mimeType,
+    mediaLocalPath: downloadedMedia.mediaLocalPath,
+    mediaStorageProvider: downloadedMedia.mediaStorageProvider,
+    mediaStorageKey: downloadedMedia.mediaStorageKey,
+    mimeType: downloadedMedia.mimeType || normalized.mimeType,
     fileName: normalized.fileName, fileSize: downloadedMedia.fileSize,
     sha256: normalized.sha256, contextWaMessageId: normalized.contextWaMessageId,
     interactivePayload: normalized.interactivePayload, buttonPayload: normalized.buttonPayload,
@@ -3411,6 +3458,7 @@ const routeContext = {
   cleanVoiceWeeklyHours,
   cleanUnavailableHours,
   mediaRoot,
+  mediaStorage,
   port,
   isProduction,
   jwtSecret,

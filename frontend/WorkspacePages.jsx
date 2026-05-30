@@ -802,7 +802,7 @@ const [mediaFileName, setMediaFileName] = useState('')
       id: 'media',
       label: 'Media',
       enabled: true,
-      helper: 'Send image, video, document, or audio using a public HTTPS media URL.',
+      helper: 'Send image, video, document, or audio by device upload or public HTTPS media URL.',
     },
     {
       id: 'interactive',
@@ -831,9 +831,9 @@ const [mediaFileName, setMediaFileName] = useState('')
   ]
 
   const activeType = messageTypes.find((type) => type.id === messageType) || messageTypes[0]
-const mediaSourceLabel = mediaFileName || mediaUrl
+  const mediaSourceLabel = mediaFileName || mediaUrl
 
-const mediaPreviewText = mediaSourceLabel
+  const mediaPreviewText = mediaSourceLabel
     ? `[${mediaType.toUpperCase()}] ${caption || fileName || mediaSourceLabel}`
     : `[${mediaType.toUpperCase()}] Upload a file or add a public HTTPS URL`
   const previewBody = messageType === 'template'
@@ -846,7 +846,7 @@ const mediaPreviewText = mediaSourceLabel
   const templateLocked = !selected || selected.opted_out
   const mediaLocked = !selected || selected.opted_out || !selected.reply_window_open
 
-const canSubmit = Boolean(selected)
+  const canSubmit = Boolean(selected)
     && !selected.opted_out
     && !sending
     && activeType.enabled
@@ -1114,6 +1114,13 @@ const canSubmit = Boolean(selected)
   }}
 />
       </label>
+
+      {mediaFileName && (
+        <div className="send-selected-file">
+          <strong>Selected file</strong>
+          <span>{mediaFileName}</span>
+        </div>
+      )}
     </div>
 
     <div className="send-or-divider">
@@ -1185,7 +1192,7 @@ const canSubmit = Boolean(selected)
                 {messageType === 'template'
                   ? 'Template must be active and approved for this tenant.'
                   : messageType === 'media'
-                    ? 'Media requires open 24h window and public HTTPS URL.'
+                    ? 'Media requires open 24h window and a device file or public HTTPS URL.'
                     : 'Text requires open 24h customer service window.'}
               </span>
             </div>

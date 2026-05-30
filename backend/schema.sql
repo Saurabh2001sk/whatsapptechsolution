@@ -244,6 +244,16 @@ ALTER TABLE messages
 ADD COLUMN IF NOT EXISTS media_local_path TEXT;
 
 ALTER TABLE messages
+ADD COLUMN IF NOT EXISTS media_storage_provider TEXT;
+
+ALTER TABLE messages
+ADD COLUMN IF NOT EXISTS media_storage_key TEXT;
+
+CREATE INDEX IF NOT EXISTS messages_tenant_media_storage_idx
+ON messages (tenant_id, media_storage_key)
+WHERE media_storage_key IS NOT NULL;
+
+ALTER TABLE messages
 ADD COLUMN IF NOT EXISTS mime_type TEXT;
 
 ALTER TABLE messages
