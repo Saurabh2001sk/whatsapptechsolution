@@ -37,6 +37,7 @@ function createAuthService({
       httpOnly: true,
       secure: cookieNeedsCrossSiteMode,
       sameSite: cookieNeedsCrossSiteMode ? 'none' : 'lax',
+      partitioned: cookieNeedsCrossSiteMode || undefined,
       maxAge: 12 * 60 * 60 * 1000,
       path: '/',
     };
@@ -59,6 +60,7 @@ function createAuthService({
       httpOnly: true,
       secure: cookieNeedsCrossSiteMode,
       sameSite: cookieNeedsCrossSiteMode ? 'none' : 'lax',
+      partitioned: cookieNeedsCrossSiteMode || undefined,
       path: '/',
     });
   }
