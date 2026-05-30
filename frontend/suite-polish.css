@@ -790,3 +790,1348 @@
     order: 0;
   }
 }
+/* =========================================================
+   Authenticated Workspace Dark Theme v2
+   Clean WhatsApp-style dark mode for all SaaS pages
+   ========================================================= */
+
+/* Light-safe sidebar collapse and profile dropdown */
+.suite-shell.sidebar-collapsed {
+  grid-template-columns: 76px 420px minmax(0, 1fr);
+}
+
+.suite-shell.workspace-mode.sidebar-collapsed {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+.suite-shell.sidebar-collapsed .workspace-sidebar {
+  padding-inline: 8px;
+}
+
+.suite-shell.sidebar-collapsed .suite-nav-item > button,
+.suite-shell.sidebar-collapsed .nav-group button {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding-inline: 0;
+}
+
+.suite-shell.sidebar-collapsed .suite-nav-item > button span,
+.suite-shell.sidebar-collapsed .nav-group button span,
+.suite-shell.sidebar-collapsed .suite-chevron,
+.suite-shell.sidebar-collapsed .suite-subnav,
+.suite-shell.sidebar-collapsed .suite-thirdnav,
+.suite-shell.sidebar-collapsed .sidebar-account span,
+.suite-shell.sidebar-collapsed .nav-group-label {
+  display: none;
+}
+
+.suite-shell.sidebar-collapsed .logout-btn {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.workspace-status {
+  border: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.workspace-status.attention {
+  color: #8a5600;
+  background: #fff1d6;
+}
+
+.workspace-status.ready {
+  color: #087443;
+  background: #dff7ea;
+}
+
+.suite-theme-toggle {
+  min-height: 38px;
+  border: 1px solid #dde3e8;
+  border-radius: 999px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #33404a;
+  background: #ffffff;
+  font-weight: 700;
+}
+
+.suite-theme-toggle:hover {
+  background: #f3f6f9;
+}
+
+.suite-profile-card {
+  width: 292px;
+  padding: 10px;
+  border: 1px solid #dde3e8;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+}
+
+.suite-profile-head {
+  padding: 12px;
+  border-radius: 14px;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  background: linear-gradient(135deg, #eaf7f6, #f6fbff);
+}
+
+.profile-avatar {
+  width: 54px;
+  height: 54px;
+  font-size: 18px;
+}
+
+.suite-profile-head div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.suite-profile-head strong,
+.suite-profile-head small,
+.suite-profile-head em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suite-profile-head strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.suite-profile-head small {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.suite-profile-head em {
+  color: #0f766e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.suite-profile-card button {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  color: #1f2937;
+  background: transparent;
+  font-weight: 700;
+}
+
+.suite-profile-card button:hover {
+  background: #f3f6f9;
+}
+
+.suite-profile-card button:last-child {
+  color: #b42318;
+}
+
+.profile-panel {
+  width: min(430px, 94vw);
+  border-left: 1px solid #d9e1e7;
+  background: #ffffff;
+  box-shadow: -22px 0 54px rgba(15, 23, 42, 0.18);
+}
+
+.drawer-close {
+  min-height: 40px;
+  margin: 14px 16px 0;
+  border-radius: 999px;
+  padding: 0 16px;
+  background: #e8f0f2;
+  color: #23313a;
+  font-weight: 800;
+}
+
+.profile-content {
+  padding: 18px;
+  gap: 18px;
+}
+
+.profile-head {
+  margin: -18px -18px 0;
+  padding: 30px 20px 22px;
+  border-bottom: 1px solid #d9e1e7;
+  background: linear-gradient(180deg, #d7f4ef, #ffffff);
+}
+
+.profile-head .avatar.xl {
+  width: 86px;
+  height: 86px;
+  border: 4px solid #ffffff;
+  background: #00a884;
+  box-shadow: 0 12px 28px rgba(0, 168, 132, 0.22);
+  font-size: 28px;
+}
+
+.profile-head h3 {
+  margin: 8px 0 0;
+  color: #111827;
+  font-size: 22px;
+}
+
+.profile-head span:not(.avatar) {
+  color: #667085;
+}
+
+.profile-form,
+.profile-section {
+  padding: 16px;
+  border: 1px solid #e2e8ee;
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.profile-form label {
+  gap: 7px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.profile-form input,
+.profile-form select,
+.profile-form textarea {
+  min-height: 42px;
+  border: 1px solid #d9e1e7;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fbfcfd;
+}
+
+.profile-form textarea {
+  min-height: 96px;
+}
+
+.profile-form button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  color: #ffffff;
+  background: #00a884;
+  font-weight: 800;
+}
+
+.profile-section h4 {
+  color: #101828;
+  font-size: 15px;
+}
+
+.profile-section p {
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+
+/* =========================================================
+   Dark theme tokens
+   ========================================================= */
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+
+  --green: #00a884;
+  --green-strong: #008f72;
+  --green-2: rgba(0, 168, 132, 0.16);
+  --cyan: #53bdeb;
+  --blue: #53bdeb;
+  --ink: #e9edef;
+  --muted: #8696a0;
+  --line: #2a3942;
+  --line-strong: #3b4a54;
+  --surface: #111b21;
+  --surface-soft: #202c33;
+  --wash: #0b141a;
+  --bubble-in: #202c33;
+  --bubble-out: #005c4b;
+  --warn: rgba(255, 193, 7, 0.14);
+  --danger: #ff6b6b;
+  --nav: #111b21;
+  --nav-soft: #202c33;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --focus: 0 0 0 3px rgba(0, 168, 132, 0.24);
+
+  --wa-bg: #0b141a;
+  --wa-sidebar: #111b21;
+  --wa-panel: #202c33;
+  --wa-panel-soft: #1b252b;
+  --wa-panel-deep: #0f1a20;
+  --wa-hover: #2a3942;
+  --wa-active: #233447;
+  --wa-border: #2a3942;
+  --wa-text: #e9edef;
+  --wa-text-soft: #d1d7db;
+  --wa-muted: #8696a0;
+  --wa-primary: #00a884;
+  --wa-primary-hover: #06cf9c;
+  --wa-blue: #53bdeb;
+  --wa-warning-bg: rgba(255, 193, 7, 0.12);
+  --wa-warning-border: rgba(255, 193, 7, 0.36);
+  --wa-warning-text: #ffd166;
+  --wa-danger: #ff6b6b;
+}
+
+/* =========================================================
+   Dark foundation: app shell, pages, sidebar, topbar
+   ========================================================= */
+
+html[data-theme='dark'],
+html[data-theme='dark'] body,
+html[data-theme='dark'] #root {
+  background: var(--wa-bg) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .app-shell,
+html[data-theme='dark'] .suite-shell,
+html[data-theme='dark'] .connect-gate {
+  background: var(--wa-bg) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .workspace-sidebar,
+html[data-theme='dark'] .nav-rail,
+html[data-theme='dark'] .suite-topbar,
+html[data-theme='dark'] .workspace-topbar {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] .module-panel,
+html[data-theme='dark'] .workspace-page,
+html[data-theme='dark'] .suite-page,
+html[data-theme='dark'] .platform-page {
+  background: var(--wa-bg) !important;
+  color: var(--wa-text) !important;
+}
+
+/* =========================================================
+   Dark text system
+   ========================================================= */
+
+html[data-theme='dark'] h1,
+html[data-theme='dark'] h2,
+html[data-theme='dark'] h3,
+html[data-theme='dark'] h4,
+html[data-theme='dark'] h5,
+html[data-theme='dark'] h6,
+html[data-theme='dark'] strong,
+html[data-theme='dark'] label,
+html[data-theme='dark'] .module-title,
+html[data-theme='dark'] .module-title h3,
+html[data-theme='dark'] .workspace-head h2,
+html[data-theme='dark'] .workspace-head-structured h2,
+html[data-theme='dark'] .settings-card-title h3,
+html[data-theme='dark'] .suite-page h2,
+html[data-theme='dark'] .suite-preview-card h3,
+html[data-theme='dark'] .suite-gate-card h3,
+html[data-theme='dark'] .user-module-head,
+html[data-theme='dark'] .health-head h3,
+html[data-theme='dark'] .outbound-monitor-head,
+html[data-theme='dark'] .webhook-monitor-head {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] p,
+html[data-theme='dark'] span,
+html[data-theme='dark'] small,
+html[data-theme='dark'] em,
+html[data-theme='dark'] time,
+html[data-theme='dark'] .muted,
+html[data-theme='dark'] .help-text,
+html[data-theme='dark'] .text-muted,
+html[data-theme='dark'] .subtitle,
+html[data-theme='dark'] .description,
+html[data-theme='dark'] .module-helper,
+html[data-theme='dark'] .settings-muted,
+html[data-theme='dark'] .settings-card small,
+html[data-theme='dark'] .suite-guide span,
+html[data-theme='dark'] .suite-preview-contact {
+  color: var(--wa-text-soft) !important;
+}
+
+/* =========================================================
+   Dark cards, panels, empty states
+   ========================================================= */
+
+html[data-theme='dark'] .card,
+html[data-theme='dark'] .panel,
+html[data-theme='dark'] .module-card,
+html[data-theme='dark'] .workspace-card,
+html[data-theme='dark'] .workspace-head,
+html[data-theme='dark'] .workspace-head-structured,
+html[data-theme='dark'] .settings-card,
+html[data-theme='dark'] .settings-reference-shell,
+html[data-theme='dark'] .settings-agent-form,
+html[data-theme='dark'] .settings-agent-table,
+html[data-theme='dark'] .settings-role-grid div,
+html[data-theme='dark'] .settings-empty-panel,
+html[data-theme='dark'] .table-module,
+html[data-theme='dark'] .compact-module,
+html[data-theme='dark'] .suite-table-card,
+html[data-theme='dark'] .dashboard-launchpad,
+html[data-theme='dark'] .dashboard-card,
+html[data-theme='dark'] .kpi-card,
+html[data-theme='dark'] .kpi-grid button,
+html[data-theme='dark'] .chat-stats button,
+html[data-theme='dark'] .platform-grid,
+html[data-theme='dark'] .platform-status-grid,
+html[data-theme='dark'] .platform-tenant-list,
+html[data-theme='dark'] .platform-tenant-row,
+html[data-theme='dark'] .setup-card,
+html[data-theme='dark'] .health-card,
+html[data-theme='dark'] .whatsapp-health-card,
+html[data-theme='dark'] .health-grid div,
+html[data-theme='dark'] .health-webhook,
+html[data-theme='dark'] .billing-card,
+html[data-theme='dark'] .subscription-card,
+html[data-theme='dark'] .locked-card,
+html[data-theme='dark'] .locked-state,
+html[data-theme='dark'] .empty-card,
+html[data-theme='dark'] .empty-state,
+html[data-theme='dark'] .suite-compose-layout,
+html[data-theme='dark'] .user-form-panel,
+html[data-theme='dark'] .product-form,
+html[data-theme='dark'] .knowledge-form,
+html[data-theme='dark'] .knowledge-row,
+html[data-theme='dark'] .custom-form,
+html[data-theme='dark'] .import-panel,
+html[data-theme='dark'] .approval-settings-box,
+html[data-theme='dark'] .connect-card {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+/* =========================================================
+   Dark forms
+   ========================================================= */
+
+html[data-theme='dark'] input,
+html[data-theme='dark'] select,
+html[data-theme='dark'] textarea {
+  background: var(--wa-panel-deep) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] input::placeholder,
+html[data-theme='dark'] textarea::placeholder {
+  color: var(--wa-muted) !important;
+}
+
+html[data-theme='dark'] input:focus,
+html[data-theme='dark'] select:focus,
+html[data-theme='dark'] textarea:focus {
+  border-color: var(--wa-primary) !important;
+  outline: 3px solid rgba(0, 168, 132, 0.18) !important;
+}
+
+/* Fix white search icon box in inbox */
+html[data-theme='dark'] .search-box {
+  background: var(--wa-panel-deep) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .search-box input {
+  background: transparent !important;
+}
+
+/* =========================================================
+   Dark buttons
+   ========================================================= */
+
+html[data-theme='dark'] button {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] button:not(:disabled):hover {
+  filter: brightness(1.06);
+}
+
+html[data-theme='dark'] button[type='submit']:not(:disabled),
+html[data-theme='dark'] .public-primary:not(:disabled),
+html[data-theme='dark'] .settings-primary-button:not(:disabled),
+html[data-theme='dark'] .suite-primary-button:not(:disabled),
+html[data-theme='dark'] .primary-button:not(:disabled),
+html[data-theme='dark'] .submit-button:not(:disabled),
+html[data-theme='dark'] .workspace-head button:not(:disabled),
+html[data-theme='dark'] .template-sync-head button:not(:disabled),
+html[data-theme='dark'] .webhook-monitor-actions button:not(:disabled),
+html[data-theme='dark'] .outbound-monitor-actions button:not(:disabled),
+html[data-theme='dark'] .empty-list button:not(:disabled) {
+  background: var(--wa-primary) !important;
+  border-color: var(--wa-primary) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] .suite-inline-actions button,
+html[data-theme='dark'] .suite-file-button,
+html[data-theme='dark'] .public-ghost,
+html[data-theme='dark'] .settings-outline-button,
+html[data-theme='dark'] .suite-outline-button,
+html[data-theme='dark'] .outline-button,
+html[data-theme='dark'] .ghost-button,
+html[data-theme='dark'] .doc-actions button,
+html[data-theme='dark'] .inline-actions button,
+html[data-theme='dark'] .user-actions button,
+html[data-theme='dark'] .platform-tenant-row button,
+html[data-theme='dark'] .platform-status-toolbar button,
+html[data-theme='dark'] .launchpad-actions button,
+html[data-theme='dark'] .settings-row-actions button {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] button:disabled,
+html[data-theme='dark'] .suite-primary-button:disabled,
+html[data-theme='dark'] .suite-file-button:disabled,
+html[data-theme='dark'] .settings-primary-button:disabled,
+html[data-theme='dark'] .disabled,
+html[data-theme='dark'] [aria-disabled='true'] {
+  background: #1d2a31 !important;
+  border-color: #31434d !important;
+  color: #7f8c94 !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
+
+/* =========================================================
+   Dark sidebar navigation
+   ========================================================= */
+
+html[data-theme='dark'] .suite-nav-item > button,
+html[data-theme='dark'] .nav-group button,
+html[data-theme='dark'] .suite-subnav button,
+html[data-theme='dark'] .suite-thirdnav button,
+html[data-theme='dark'] .logout-btn,
+html[data-theme='dark'] .sidebar-account {
+  background: transparent !important;
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .suite-subnav,
+html[data-theme='dark'] .suite-thirdnav {
+  background: transparent !important;
+}
+
+html[data-theme='dark'] .suite-nav-item > button:hover,
+html[data-theme='dark'] .nav-group button:hover,
+html[data-theme='dark'] .suite-subnav button:hover,
+html[data-theme='dark'] .suite-thirdnav button:hover {
+  background: var(--wa-hover) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-nav-item > button.active,
+html[data-theme='dark'] .suite-subnav button.active,
+html[data-theme='dark'] .suite-thirdnav button.active,
+html[data-theme='dark'] .nav-group button.active {
+  background: var(--wa-active) !important;
+  color: var(--wa-blue) !important;
+  box-shadow: inset 3px 0 0 var(--wa-blue) !important;
+}
+
+/* =========================================================
+   Dark topbar controls
+   ========================================================= */
+
+html[data-theme='dark'] .suite-icon-button,
+html[data-theme='dark'] .suite-refresh,
+html[data-theme='dark'] .suite-theme-toggle,
+html[data-theme='dark'] .suite-account-trigger {
+  background: transparent !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-theme-toggle {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-muted) !important;
+}
+
+html[data-theme='dark'] .suite-icon-button:hover,
+html[data-theme='dark'] .suite-refresh:hover,
+html[data-theme='dark'] .suite-theme-toggle:hover,
+html[data-theme='dark'] .suite-account-trigger:hover {
+  background: var(--wa-hover) !important;
+}
+
+html[data-theme='dark'] .suite-account-copy strong {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-account-copy span,
+html[data-theme='dark'] .suite-account-copy small {
+  color: var(--wa-muted) !important;
+}
+
+html[data-theme='dark'] .workspace-status.attention {
+  background: rgba(255, 193, 7, 0.16) !important;
+  color: var(--wa-warning-text) !important;
+}
+
+html[data-theme='dark'] .workspace-status.ready {
+  background: rgba(0, 168, 132, 0.16) !important;
+  color: #7ee7c8 !important;
+}
+
+/* =========================================================
+   Dark inbox/chat
+   ========================================================= */
+
+html[data-theme='dark'] .filter-toolbar,
+html[data-theme='dark'] .conversation-list,
+html[data-theme='dark'] .chat-shell,
+html[data-theme='dark'] .chat-header,
+html[data-theme='dark'] .message-list,
+html[data-theme='dark'] .composer,
+html[data-theme='dark'] .chat-mode-head {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] .chat-shell {
+  background: var(--wa-sidebar) !important;
+}
+
+html[data-theme='dark'] .message-list {
+  background:
+    linear-gradient(rgba(11, 20, 26, 0.96), rgba(11, 20, 26, 0.96)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 24px) !important;
+}
+
+html[data-theme='dark'] .empty-chat,
+html[data-theme='dark'] .empty-profile,
+html[data-theme='dark'] .empty-list {
+  background: var(--wa-panel-deep) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .empty-chat strong,
+html[data-theme='dark'] .empty-list strong {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .avatar,
+html[data-theme='dark'] .profile-toggle {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-blue) !important;
+}
+
+html[data-theme='dark'] .reply-window-badge,
+html[data-theme='dark'] .status-pill,
+html[data-theme='dark'] .label-pill,
+html[data-theme='dark'] .badge,
+html[data-theme='dark'] .chip,
+html[data-theme='dark'] .connection-pill {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .composer input,
+html[data-theme='dark'] .composer select {
+  background: var(--wa-panel-deep) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .composer button:not(:disabled) {
+  background: var(--wa-primary) !important;
+  color: #ffffff !important;
+}
+
+/* =========================================================
+   Dark send-message pages and previews
+   ========================================================= */
+
+html[data-theme='dark'] .suite-guide-toggle,
+html[data-theme='dark'] .suite-guide,
+html[data-theme='dark'] .suite-guide-visual,
+html[data-theme='dark'] .suite-compose-layout,
+html[data-theme='dark'] .suite-send-form,
+html[data-theme='dark'] .suite-preview-card,
+html[data-theme='dark'] .suite-preview-card h3,
+html[data-theme='dark'] .suite-preview-empty,
+html[data-theme='dark'] .suite-preview-contact,
+html[data-theme='dark'] .message-preview,
+html[data-theme='dark'] .preview-card,
+html[data-theme='dark'] .preview-panel,
+html[data-theme='dark'] .preview-body,
+html[data-theme='dark'] .preview-empty,
+html[data-theme='dark'] .phone-preview,
+html[data-theme='dark'] .template-preview,
+html[data-theme='dark'] .suite-compose-preview {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone {
+  background:
+    linear-gradient(rgba(11, 20, 26, 0.94), rgba(11, 20, 26, 0.94)),
+    repeating-linear-gradient(35deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 25px) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone > small {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone p {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text) !important;
+  border: 1px solid var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone time {
+  color: var(--wa-muted) !important;
+}
+
+html[data-theme='dark'] .suite-type-tabs {
+  background: var(--wa-panel-deep) !important;
+  border: 1px solid var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-type-tabs button {
+  background: transparent !important;
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .suite-type-tabs button.active {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='dark'] .suite-field-title,
+html[data-theme='dark'] .suite-send-form label {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-policy-note,
+html[data-theme='dark'] .warning-list,
+html[data-theme='dark'] .connect-setup-warning {
+  background: var(--wa-warning-bg) !important;
+  border-color: var(--wa-warning-border) !important;
+  color: var(--wa-warning-text) !important;
+}
+
+html[data-theme='dark'] .suite-policy-note.danger {
+  background: rgba(255, 107, 107, 0.12) !important;
+  border-color: rgba(255, 107, 107, 0.32) !important;
+  color: var(--wa-danger) !important;
+}
+
+html[data-theme='dark'] .suite-validation {
+  background: rgba(0, 168, 132, 0.14) !important;
+  border: 1px solid rgba(0, 168, 132, 0.28) !important;
+  color: #7ee7c8 !important;
+}
+
+/* Fix old white preview area by force */
+html[data-theme='dark'] .suite-preview-card *,
+html[data-theme='dark'] .message-preview *,
+html[data-theme='dark'] .preview-card *,
+html[data-theme='dark'] .preview-panel *,
+html[data-theme='dark'] .preview-body *,
+html[data-theme='dark'] .preview-empty *,
+html[data-theme='dark'] .phone-preview *,
+html[data-theme='dark'] .template-preview *,
+html[data-theme='dark'] .suite-compose-preview * {
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-preview-empty svg,
+html[data-theme='dark'] .message-preview svg,
+html[data-theme='dark'] .preview-card svg,
+html[data-theme='dark'] .preview-panel svg,
+html[data-theme='dark'] .preview-empty svg {
+  color: var(--wa-muted) !important;
+  opacity: 1 !important;
+}
+
+/* =========================================================
+   Dark tables, rows, tabs
+   ========================================================= */
+
+html[data-theme='dark'] table,
+html[data-theme='dark'] thead,
+html[data-theme='dark'] tbody,
+html[data-theme='dark'] tr,
+html[data-theme='dark'] th,
+html[data-theme='dark'] td,
+html[data-theme='dark'] .user-table,
+html[data-theme='dark'] .settings-agent-table,
+html[data-theme='dark'] .suite-table-head,
+html[data-theme='dark'] .suite-table-row,
+html[data-theme='dark'] .user-table-head,
+html[data-theme='dark'] .user-row,
+html[data-theme='dark'] .settings-agent-head,
+html[data-theme='dark'] .settings-agent-row,
+html[data-theme='dark'] .platform-tenant-row,
+html[data-theme='dark'] .outbound-event-table,
+html[data-theme='dark'] .outbound-event-row,
+html[data-theme='dark'] .outbound-event-head,
+html[data-theme='dark'] .webhook-event-table,
+html[data-theme='dark'] .webhook-event-row,
+html[data-theme='dark'] .webhook-event-head,
+html[data-theme='dark'] .optout-table,
+html[data-theme='dark'] .optout-row,
+html[data-theme='dark'] .optout-table-head,
+html[data-theme='dark'] .doc-row,
+html[data-theme='dark'] .product-row,
+html[data-theme='dark'] .mini-row,
+html[data-theme='dark'] .draft-row,
+html[data-theme='dark'] .audit-row {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-table-row:hover,
+html[data-theme='dark'] .user-row:hover,
+html[data-theme='dark'] .settings-agent-row:hover,
+html[data-theme='dark'] .platform-tenant-row:hover,
+html[data-theme='dark'] .doc-row:hover,
+html[data-theme='dark'] .product-row:hover,
+html[data-theme='dark'] .mini-row:hover,
+html[data-theme='dark'] .draft-row:hover,
+html[data-theme='dark'] .audit-row:hover {
+  background: var(--wa-hover) !important;
+}
+
+html[data-theme='dark'] .tabs,
+html[data-theme='dark'] .tab-list,
+html[data-theme='dark'] .settings-tabs,
+html[data-theme='dark'] .suite-tabs,
+html[data-theme='dark'] .workspace-tabs,
+html[data-theme='dark'] .settings-reference-tabs,
+html[data-theme='dark'] .settings-subtabs,
+html[data-theme='dark'] .suite-subtabs {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .tabs button,
+html[data-theme='dark'] .tab-list button,
+html[data-theme='dark'] .settings-tabs button,
+html[data-theme='dark'] .suite-tabs button,
+html[data-theme='dark'] .workspace-tabs button,
+html[data-theme='dark'] .settings-reference-tabs button,
+html[data-theme='dark'] .settings-subtabs button,
+html[data-theme='dark'] .suite-subtabs button {
+  background: transparent !important;
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .tabs button.active,
+html[data-theme='dark'] .tab-list button.active,
+html[data-theme='dark'] .settings-tabs button.active,
+html[data-theme='dark'] .suite-tabs button.active,
+html[data-theme='dark'] .workspace-tabs button.active,
+html[data-theme='dark'] .settings-reference-tabs button.active,
+html[data-theme='dark'] .settings-subtabs button.active,
+html[data-theme='dark'] .suite-subtabs button.active {
+  color: var(--wa-blue) !important;
+  border-color: var(--wa-blue) !important;
+}
+
+/* =========================================================
+   Dark status/meta pills
+   ========================================================= */
+
+html[data-theme='dark'] .meta-status-pill.approved,
+html[data-theme='dark'] .webhook-status-pill.processed,
+html[data-theme='dark'] .outbound-status-pill.sent,
+html[data-theme='dark'] .health-pill.ok,
+html[data-theme='dark'] .status-active {
+  background: rgba(0, 168, 132, 0.16) !important;
+  color: #7ee7c8 !important;
+}
+
+html[data-theme='dark'] .meta-status-pill.pending,
+html[data-theme='dark'] .meta-status-pill.in_review,
+html[data-theme='dark'] .webhook-status-pill.processing,
+html[data-theme='dark'] .outbound-status-pill.pending,
+html[data-theme='dark'] .outbound-status-pill.sending,
+html[data-theme='dark'] .health-pill.warn {
+  background: rgba(255, 193, 7, 0.16) !important;
+  color: var(--wa-warning-text) !important;
+}
+
+html[data-theme='dark'] .meta-status-pill.rejected,
+html[data-theme='dark'] .meta-status-pill.paused,
+html[data-theme='dark'] .meta-status-pill.disabled,
+html[data-theme='dark'] .webhook-status-pill.failed,
+html[data-theme='dark'] .outbound-status-pill.failed,
+html[data-theme='dark'] .health-pill.danger,
+html[data-theme='dark'] .status-inactive {
+  background: rgba(255, 107, 107, 0.14) !important;
+  color: var(--wa-danger) !important;
+}
+
+html[data-theme='dark'] .meta-status-pill.manual,
+html[data-theme='dark'] .meta-status-pill.unknown,
+html[data-theme='dark'] .webhook-status-pill.received,
+html[data-theme='dark'] .outbound-type-pill,
+html[data-theme='dark'] .role-badge {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text-soft) !important;
+}
+
+/* =========================================================
+   Dark profile menu and drawer
+   ========================================================= */
+
+html[data-theme='dark'] .suite-account-dropdown,
+html[data-theme='dark'] .suite-profile-card,
+html[data-theme='dark'] .profile-panel,
+html[data-theme='dark'] .drawer-panel {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-border) !important;
+  color: var(--wa-text) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32) !important;
+}
+
+html[data-theme='dark'] .suite-profile-head,
+html[data-theme='dark'] .profile-head {
+  background: linear-gradient(180deg, #14342d, var(--wa-panel)) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-profile-head strong,
+html[data-theme='dark'] .profile-head h3,
+html[data-theme='dark'] .profile-section h4 {
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-profile-head small,
+html[data-theme='dark'] .profile-head span:not(.avatar) {
+  color: var(--wa-muted) !important;
+}
+
+html[data-theme='dark'] .suite-profile-card button {
+  background: transparent !important;
+  color: var(--wa-text) !important;
+}
+
+html[data-theme='dark'] .suite-profile-card button:hover {
+  background: var(--wa-hover) !important;
+}
+
+html[data-theme='dark'] .profile-form,
+html[data-theme='dark'] .profile-section {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .profile-section p {
+  background: var(--wa-panel-deep) !important;
+}
+
+html[data-theme='dark'] .drawer-backdrop {
+  background: rgba(0, 0, 0, 0.62) !important;
+}
+
+/* =========================================================
+   Dark icons, media, scrollbars
+   ========================================================= */
+
+html[data-theme='dark'] svg {
+  color: currentColor;
+}
+
+html[data-theme='dark'] img {
+  opacity: 0.96;
+}
+
+html[data-theme='dark'] hr,
+html[data-theme='dark'] .divider,
+html[data-theme='dark'] .section-divider,
+html[data-theme='dark'] .settings-section-divider {
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] * {
+  scrollbar-color: #3b4a54 var(--wa-bg);
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar-track {
+  background: var(--wa-bg);
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar-thumb {
+  background: #3b4a54;
+  border-radius: 999px;
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover {
+  background: #51616b;
+}
+
+/* Mobile collapse safety */
+@media (max-width: 920px) {
+  .suite-shell.sidebar-collapsed,
+  .suite-shell.workspace-mode.sidebar-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .suite-shell.sidebar-collapsed .workspace-sidebar {
+    width: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+  }
+
+  .suite-theme-toggle span {
+    display: none;
+  }
+}
+/* =========================================================
+   Send Message Module Polish v1
+   Fixes tab clickability, layout overlap, preview quality
+   ========================================================= */
+
+/* Send module page spacing */
+.suite-page {
+  position: relative;
+}
+
+.suite-page > h2 {
+  margin-bottom: 2px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+/* Make subpage tabs reliably clickable */
+.suite-subtabs {
+  position: relative;
+  z-index: 5;
+  min-height: 58px;
+  border-radius: 12px 12px 0 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.suite-subtabs button {
+  position: relative;
+  z-index: 6;
+  min-width: max-content;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Remove old negative overlap from bulk layout */
+.suite-compose-layout.bulk-layout {
+  margin-top: 0 !important;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Professional send form layout */
+.suite-compose-layout {
+  align-items: start;
+}
+
+.suite-send-form {
+  min-width: 0;
+}
+
+.suite-send-form label {
+  min-width: 0;
+}
+
+.suite-send-form label > span.required {
+  display: inline-flex;
+  margin-right: 4px;
+}
+
+/* Make guide/accordion look like a clean module section */
+.suite-guide-toggle {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  padding-inline: 14px;
+  font-weight: 700;
+}
+
+.suite-guide-toggle.static {
+  border-radius: 10px;
+}
+
+/* Better forms */
+.suite-send-form input,
+.suite-send-form select,
+.suite-send-form textarea {
+  min-height: 46px;
+  border-radius: 10px;
+}
+
+.suite-send-form textarea {
+  min-height: 104px;
+}
+
+/* Message type tabs should not look disabled unless actually disabled */
+.suite-type-tabs {
+  min-height: 46px;
+  border-radius: 11px;
+  padding: 4px;
+}
+
+.suite-type-tabs button {
+  min-height: 38px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+/* Action row polish */
+.suite-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.suite-inline-actions button,
+.suite-file-button {
+  min-height: 42px;
+  border-radius: 10px;
+  padding-inline: 16px;
+}
+
+/* Checkbox rows */
+.suite-toggle {
+  width: fit-content;
+  min-height: 38px;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.suite-toggle input {
+  width: 20px;
+  min-height: 20px;
+}
+
+/* Notes should be readable, not too loud */
+.suite-policy-note {
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-weight: 650;
+}
+
+.suite-validation {
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+/* Submit buttons */
+.suite-primary-button {
+  min-height: 42px;
+  border-radius: 10px;
+  padding-inline: 22px;
+  font-weight: 800;
+}
+
+/* Preview card professional style */
+.suite-preview-card {
+  position: sticky;
+  top: 18px;
+  min-width: 0;
+  border-radius: 14px;
+}
+
+.suite-preview-card h3 {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+}
+
+.suite-preview-phone {
+  min-height: 300px;
+  border-radius: 0;
+}
+
+.suite-preview-empty {
+  min-height: 250px;
+  text-align: center;
+}
+
+.suite-preview-empty svg {
+  opacity: 0.85;
+}
+
+.suite-preview-phone p {
+  max-width: 88%;
+  justify-self: start;
+  line-height: 1.45;
+}
+
+.suite-preview-contact {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+/* Bulk/Canned locked builders should still feel clickable */
+.suite-subtabs button.active {
+  font-weight: 800;
+}
+
+.suite-subtabs button:not(.active):hover {
+  background: rgba(83, 189, 235, 0.08);
+}
+
+/* Prevent any form area from blocking the tab click layer */
+.suite-compose-layout,
+.bulk-layout,
+.suite-send-form,
+.suite-preview-card {
+  position: relative;
+}
+
+.suite-compose-layout {
+  z-index: 1;
+}
+
+.suite-send-form,
+.suite-preview-card {
+  z-index: 1;
+}
+
+/* Better responsive behavior */
+@media (max-width: 1180px) {
+  .suite-preview-card {
+    position: static;
+  }
+
+  .suite-compose-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .suite-subtabs {
+    padding-inline: 10px;
+  }
+
+  .suite-subtabs button {
+    min-height: 48px;
+  }
+
+  .suite-type-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .suite-inline-actions,
+  .suite-inline-actions button,
+  .suite-file-button,
+  .suite-primary-button {
+    width: 100%;
+  }
+
+  .suite-inline-actions button,
+  .suite-file-button,
+  .suite-primary-button {
+    justify-content: center;
+  }
+}
+
+/* Dark mode refinements for send module */
+html[data-theme='dark'] .suite-subtabs {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-subtabs button {
+  color: var(--wa-text-soft) !important;
+}
+
+html[data-theme='dark'] .suite-subtabs button.active {
+  color: var(--wa-blue) !important;
+  background: rgba(83, 189, 235, 0.08) !important;
+  box-shadow: inset 0 -2px 0 var(--wa-blue) !important;
+}
+
+html[data-theme='dark'] .suite-subtabs button:hover {
+  color: var(--wa-text) !important;
+  background: var(--wa-hover) !important;
+}
+
+html[data-theme='dark'] .suite-guide-toggle,
+html[data-theme='dark'] .suite-guide,
+html[data-theme='dark'] .suite-compose-layout,
+html[data-theme='dark'] .suite-preview-card {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-preview-card h3 {
+  background: var(--wa-sidebar) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone,
+html[data-theme='dark'] .suite-preview-empty {
+  background:
+    linear-gradient(rgba(15, 26, 32, 0.96), rgba(15, 26, 32, 0.96)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 24px) !important;
+}
+
+html[data-theme='dark'] .suite-preview-phone p {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text) !important;
+  border: 1px solid var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-type-tabs {
+  background: var(--wa-panel-deep) !important;
+  border-color: var(--wa-border) !important;
+}
+
+html[data-theme='dark'] .suite-type-tabs button.active {
+  background: var(--wa-panel) !important;
+  color: var(--wa-text) !important;
+}

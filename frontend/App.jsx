@@ -33,7 +33,9 @@ import {
   MessageCircle,
   PackageCheck,
   Pencil,
+  Moon,
   RefreshCw,
+  Sun,
   Search,
   Send,
   Settings,
@@ -907,6 +909,8 @@ const [authChecking, setAuthChecking] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [profileOpen, setProfileOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('bosSidebarCollapsed') === 'true')
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('bosTheme') === 'dark')
   const [appSettings, setAppSettings] = useState(defaultAppSettings)
   const [customForm, setCustomForm] = useState({
     ...defaultAppSettings,
@@ -943,6 +947,16 @@ const [authChecking, setAuthChecking] = useState(true)
   const [clientAdminForm, setClientAdminForm] = useState(emptyClientAdminForm)
   const [platformLoading, setPlatformLoading] = useState(false)
   const [platformError, setPlatformError] = useState('')
+
+    useEffect(() => {
+    localStorage.setItem('bosSidebarCollapsed', sidebarCollapsed ? 'true' : 'false')
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    const theme = darkMode ? 'dark' : 'light'
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('bosTheme', theme)
+  }, [darkMode])
 
   const isSuperAdminUser = user?.role === 'super_admin'
   const canMonitor = !isSuperAdminUser && (user?.role === 'admin' || user?.role === 'manager')
@@ -2643,7 +2657,7 @@ async function sendTestMessage(event) {
     },
   }[activePage]
   return (
-    <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'}`}>
+        <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${darkMode ? 'theme-dark' : 'theme-light'}`}>
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail workspace-sidebar">
         <nav className="sidebar-navigation" aria-label="Workspace navigation">
@@ -2771,15 +2785,37 @@ async function sendTestMessage(event) {
 
       <header className="suite-topbar">
         <div className="suite-topbar-left">
-          <button className="suite-icon-button" type="button" aria-label="Navigation menu"><Menu size={19} /></button>
+                  <button
+            className="suite-icon-button"
+            type="button"
+            aria-label={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed((current) => !current)}
+          >
+            <Menu size={19} />
+          </button>
           <span><Headphones size={17} /> Support</span>
         </div>
         <div className="suite-topbar-right">
           {!isSuperAdminUser && canMonitor && (
-            <span className={`workspace-status ${whatsappHealth?.setupComplete ? 'ready' : 'attention'}`}>
+            <button
+              className={`workspace-status ${whatsappHealth?.setupComplete ? 'ready' : 'attention'}`}
+              type="button"
+              onClick={() => showPage(whatsappHealth?.setupComplete ? 'settings' : 'connectWhatsApp')}
+              title={whatsappHealth?.setupComplete ? 'WhatsApp is ready' : 'Complete Meta WhatsApp setup'}
+            >
               {whatsappHealth?.setupComplete ? 'WhatsApp Ready' : 'Setup Attention'}
-            </span>
+            </button>
           )}
+          <button
+            className="suite-theme-toggle"
+            type="button"
+            onClick={() => setDarkMode((current) => !current)}
+            title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+            <span>{darkMode ? 'Light' : 'Dark'}</span>
+          </button>
           <button className="suite-refresh" type="button" onClick={refreshCurrentPage} disabled={loading || platformLoading}><RefreshCw size={16} /></button>
           <div className="suite-account-menu">
             <button className="suite-account-trigger" type="button" onClick={() => setAccountMenuOpen((current) => !current)}>
@@ -2791,7 +2827,16 @@ async function sendTestMessage(event) {
               <ChevronDown size={16} />
             </button>
             {accountMenuOpen && (
-              <div className="suite-account-dropdown">
+              <div className="suite-account-dropdown suite-profile-card">
+                <div className="suite-profile-head">
+                  <span className="suite-avatar profile-avatar">{initials(user.name)}</span>
+                  <div>
+                    <strong>{user.name}</strong>
+                    <small>{user.email}</small>
+                    <em>{String(user.role || '').toUpperCase()}</em>
+                  </div>
+                </div>
+
                 {!isSuperAdminUser && canMonitor && (
                   <button
                     type="button"
@@ -2800,9 +2845,18 @@ async function sendTestMessage(event) {
                       showPage('settings')
                     }}
                   >
-                    <UserRound size={17} /> Profile
+                    <UserRound size={17} /> Profile settings
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => setDarkMode((current) => !current)}
+                >
+                  {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+                  {darkMode ? 'Light mode' : 'Dark mode'}
+                </button>
+
                 <button type="button" onClick={logout}><LogOut size={17} /> Logout</button>
               </div>
             )}
@@ -2813,16 +2867,6 @@ async function sendTestMessage(event) {
       <section className="module-panel">
         {loadError && <div className="load-error">{loadError}</div>}
         {platformError && <div className="load-error">{platformError}</div>}
-        {!isSuperAdminUser && user.role === 'admin' && whatsappOnboarding && !whatsappOnboarding.connected && activePage !== 'connectWhatsApp' && (
-          <div className="workspace-alert warning">
-            <MessageCircle size={20} />
-            <div>
-              <strong>Meta WhatsApp connection is pending</strong>
-              <span>Connect the official account before enabling production customer messaging.</span>
-            </div>
-            <button type="button" onClick={() => showPage('connectWhatsApp')}>Complete Setup</button>
-          </div>
-        )}
         {!isSuperAdminUser && canMonitor && failedOperationsCount > 0 && activePage !== 'controlCenter' && (
           <div className="workspace-alert danger">
             <Activity size={20} />
