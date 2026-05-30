@@ -25,10 +25,18 @@ function createAuthService({
   }
 
   function authCookieOptions() {
+    const cookieNeedsCrossSiteMode =
+      isProduction ||
+      process.env.COOKIE_SECURE === 'true' ||
+      process.env.RENDER === 'true' ||
+      String(process.env.FRONTEND_URL || '').startsWith('https://') ||
+      String(process.env.FRONTEND_URLS || '').includes('https://') ||
+      String(process.env.PUBLIC_BASE_URL || '').startsWith('https://');
+
     return {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
+      secure: cookieNeedsCrossSiteMode,
+      sameSite: cookieNeedsCrossSiteMode ? 'none' : 'lax',
       maxAge: 12 * 60 * 60 * 1000,
       path: '/',
     };
@@ -39,10 +47,18 @@ function createAuthService({
   }
 
   function clearAuthCookie(res) {
+    const cookieNeedsCrossSiteMode =
+      isProduction ||
+      process.env.COOKIE_SECURE === 'true' ||
+      process.env.RENDER === 'true' ||
+      String(process.env.FRONTEND_URL || '').startsWith('https://') ||
+      String(process.env.FRONTEND_URLS || '').includes('https://') ||
+      String(process.env.PUBLIC_BASE_URL || '').startsWith('https://');
+
     res.clearCookie('bosAuthToken', {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
+      secure: cookieNeedsCrossSiteMode,
+      sameSite: cookieNeedsCrossSiteMode ? 'none' : 'lax',
       path: '/',
     });
   }

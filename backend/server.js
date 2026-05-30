@@ -47,7 +47,7 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-const mediaRoot = path.join(__dirname, '..', 'private');
+const mediaRoot = path.resolve(process.env.WHATSAPP_MEDIA_DIR || path.join(__dirname, '.media'));
 if (!fs.existsSync(mediaRoot)) fs.mkdirSync(mediaRoot, { recursive: true });
 
 const app = express();
