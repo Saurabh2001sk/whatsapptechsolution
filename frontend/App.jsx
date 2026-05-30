@@ -1982,6 +1982,9 @@ async function sendMessage(event) {
   const mediaUrl = String(formData?.get('mediaUrl') || '').trim()
   const caption = String(formData?.get('caption') || '').trim()
   const fileName = String(formData?.get('fileName') || '').trim()
+  const mediaFile = formData?.get('mediaFile')
+
+  const hasMediaFile = mediaFile instanceof File && mediaFile.size > 0
 
   const cleanText = draft.trim()
   const selectedTemplate = templates.find((template) => (
@@ -1995,43 +1998,59 @@ async function sendMessage(event) {
     return
   }
 
-  let payload = {}
-
-  if (formMessageType === 'media') {
-    if (!selected.reply_window_open) {
-      setSendError('24-hour reply window expired. Media messages require an open customer service window. Use an approved template.')
-      return
-    }
-
-    if (!mediaType || !mediaUrl) {
-      setSendError('Media type and public HTTPS media URL are required.')
-      return
-    }
-
-    payload = {
-      mediaType,
-      mediaUrl,
-      caption,
-      fileName,
-    }
-  } else {
-    payload = selectedTemplate
-      ? { templateName: selectedTemplate.name, language: selectedTemplate.language || 'en' }
-      : { text: cleanText }
-  }
-
-  if (!payload.templateName && !payload.text && !payload.mediaUrl) {
-    setSendError('Message text required hai, template select karo, ya media URL add karo.')
-    return
-  }
-
   setSendingMessage(true)
 
   try {
-    await api.post(`/api/conversations/${selected.id}/messages`, payload)
+    if (formMessageType === 'media') {
+      if (!selected.reply_window_open) {
+        setSendError('24-hour reply window expired. Media messages require an open customer service window. Use an approved template.')
+        return
+      }
+
+      if (!mediaType) {
+        setSendError('Media type is required.')
+        return
+      }
+
+      if (hasMediaFile) {
+        const uploadPayload = new FormData()
+        uploadPayload.append('mediaType', mediaType)
+        uploadPayload.append('mediaFile', mediaFile)
+        uploadPayload.append('caption', caption)
+        uploadPayload.append('fileName', fileName || mediaFile.name || '')
+
+        await api.post(`/api/conversations/${selected.id}/messages/media-upload`, uploadPayload)
+        notify('Uploaded media message queued/sent')
+      } else {
+        if (!mediaUrl) {
+          setSendError('Upload a file or add a public HTTPS media URL.')
+          return
+        }
+
+        await api.post(`/api/conversations/${selected.id}/messages`, {
+          mediaType,
+          mediaUrl,
+          caption,
+          fileName,
+        })
+        notify('Media URL message queued/sent')
+      }
+    } else {
+      const payload = selectedTemplate
+        ? { templateName: selectedTemplate.name, language: selectedTemplate.language || 'en' }
+        : { text: cleanText }
+
+      if (!payload.templateName && !payload.text) {
+        setSendError('Message text required hai, ya template select karo.')
+        return
+      }
+
+      await api.post(`/api/conversations/${selected.id}/messages`, payload)
+      notify('Message queued/sent')
+    }
+
     setDraft('')
     setTemplateName('')
-    notify(payload.mediaUrl ? 'Media message queued/sent' : 'Message queued/sent')
     await Promise.all([loadMessages(selected.id), loadAll()])
   } catch (err) {
     setSendError(apiErrorMessage(err, 'Message send failed'))

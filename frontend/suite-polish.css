@@ -2517,3 +2517,43 @@ html[data-theme='dark'] .suite-type-tabs button.active {
     grid-template-columns: 1fr;
   }
 }
+
+.send-or-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.send-or-divider::before,
+.send-or-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+}
+
+.send-or-divider span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.send-media-grid input[type="file"] {
+  padding: 10px;
+  cursor: pointer;
+}
+
+.send-media-grid input[type="file"]::file-selector-button {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--text);
+  padding: 8px 10px;
+  margin-right: 10px;
+  cursor: pointer;
+}

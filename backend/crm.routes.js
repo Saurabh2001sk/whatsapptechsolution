@@ -137,7 +137,11 @@ function registerCrmRoutes(app, ctx) {
     isRetryableWhatsAppError,
     postWhatsAppMessage,
     sendWhatsAppText,
+    buildWhatsAppMediaPayload,
+    mediaTypeFromMime,
+    uploadWhatsAppMedia,
     sendWhatsAppMedia,
+    mediaUpload,
     sendWhatsAppInteractiveList,
     sendWhatsAppTemplate,
     sendWhatsAppTemplateToNumber,
@@ -953,6 +957,158 @@ app.post('/api/conversations/:id/messages', rateLimit({
       templateId: templateRecord?.id || null,
       mediaType: hasMedia ? cleanMediaType : null,
       hasCaption: Boolean(cleanCaption),
+      outboundMessageId: outboundRecord?.id || null,
+    },
+  });
+
+  res.status(201).json(message);
+}));
+
+app.post('/api/conversations/:id/messages/media-upload', rateLimit({
+  bucketName: 'conversation-media-upload-send',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), requireAuth, mediaUpload.single('mediaFile'), asyncHandler(async (req, res) => {
+  const contact = await findContact(req.params.id, req.user.tenantId);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
+  if (!canAccessContact(req.user, contact)) {
+    return res.status(403).json({ error: 'Conversation assigned to another user' });
+  }
+
+  if (contact.opted_out) {
+    return res.status(403).json({
+      error: 'Customer has opted out. Do not send WhatsApp messages to this contact.',
+    });
+  }
+
+  const replyWindowOpen = isReplyWindowOpen(contact);
+
+  if (!replyWindowOpen) {
+    return res.status(400).json({
+      error: '24-hour reply window expired. Media messages are not allowed. Use an approved WhatsApp template.',
+    });
+  }
+
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({ error: 'Media file is required' });
+  }
+
+  const caption = String(req.body?.caption || '').trim();
+  const requestedMediaType = String(req.body?.mediaType || '').trim().toLowerCase();
+  const detectedMediaType = mediaTypeFromMime(file.mimetype);
+  const mediaType = requestedMediaType || detectedMediaType;
+  const fileName = String(req.body?.fileName || file.originalname || 'upload').trim().slice(0, 240);
+
+  const allowedMediaTypes = new Set(['image', 'document', 'video', 'audio']);
+
+  if (!allowedMediaTypes.has(mediaType)) {
+    return res.status(400).json({
+      error: 'Invalid media type. Allowed types: image, document, video, audio.',
+    });
+  }
+
+  if (mediaType !== detectedMediaType && !(mediaType === 'document' && detectedMediaType === 'document')) {
+    return res.status(400).json({
+      error: `Selected media type does not match uploaded file type. Detected ${detectedMediaType}.`,
+    });
+  }
+
+  if (caption.length > 1024) {
+    return res.status(400).json({ error: 'Media caption maximum 1024 characters allowed' });
+  }
+
+  if (mediaType === 'audio' && caption) {
+    return res.status(400).json({ error: 'Audio messages do not support captions in this composer' });
+  }
+
+  const mediaId = await uploadWhatsAppMedia({
+    tenantId: req.user.tenantId,
+    buffer: file.buffer,
+    fileName,
+    mimeType: file.mimetype,
+  });
+
+  if (!mediaId && !shouldAllowLocalMessageQueue()) {
+    return res.status(400).json({ error: 'WhatsApp media upload failed.' });
+  }
+
+  const outboundPayload = buildWhatsAppMediaPayload({
+    contact,
+    mediaType,
+    mediaId,
+    caption,
+    fileName,
+  });
+
+  const body = caption || `[${mediaType}] ${fileName}`;
+
+  const outboundRecord = await createOutboundMessageRecord({
+    tenantId: req.user.tenantId,
+    contactId: contact.id,
+    toPhone: contact.wa_id || contact.phone,
+    messageType: mediaType,
+    body,
+    payload: outboundPayload,
+    createdBy: req.user.id,
+  });
+
+  await markOutboundSending(outboundRecord?.id, req.user.tenantId);
+
+  let waMessageId = null;
+
+  try {
+    waMessageId = await sendWhatsAppMedia(contact, outboundPayload, req.user.tenantId);
+    await markOutboundSent(outboundRecord?.id, req.user.tenantId, waMessageId);
+  } catch (error) {
+    await markOutboundFailed(outboundRecord?.id, req.user.tenantId, error);
+
+    return res.status(400).json({
+      error: error.response?.data?.error?.message || error.message || 'WhatsApp media message failed',
+      outboundMessageId: outboundRecord?.id || null,
+    });
+  }
+
+  const status = waMessageId ? 'sent' : 'queued-local';
+
+  if (!waMessageId && !shouldAllowLocalMessageQueue()) {
+    return res.status(400).json({ error: 'WhatsApp media message was not sent.' });
+  }
+
+  const message = await addMessage({
+    tenantId: req.user.tenantId,
+    contactId: contact.id,
+    waMessageId,
+    direction: 'outbound',
+    type: mediaType,
+    body,
+    status,
+    rawPayload: outboundPayload,
+    mediaId,
+    caption,
+    mimeType: file.mimetype,
+    fileName,
+    fileSize: file.size,
+    normalizedText: body,
+  });
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'message.media_file_sent',
+    entityType: 'message',
+    entityId: message?.id,
+    metadata: {
+      contactId: contact.id,
+      status,
+      type: mediaType,
+      replyWindowOpen,
+      mediaId: maskId(mediaId || ''),
+      fileName,
+      mimeType: file.mimetype,
+      fileSize: file.size,
       outboundMessageId: outboundRecord?.id || null,
     },
   });

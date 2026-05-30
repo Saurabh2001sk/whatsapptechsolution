@@ -5,8 +5,10 @@ const bcrypt = require('bcrypt');
 const cors = require('cors');
 const crypto = require('crypto');
 const express = require('express');
+const FormData = require('form-data');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const path = require('path');
 const { query, healthCheck, closePool } = require('./db');
 const asyncHandler = require('./asyncHandler');
@@ -50,6 +52,44 @@ if (!process.env.DATABASE_URL) {
 
 const mediaRoot = path.resolve(process.env.WHATSAPP_MEDIA_DIR || path.join(__dirname, '.media'));
 if (!fs.existsSync(mediaRoot)) fs.mkdirSync(mediaRoot, { recursive: true });
+
+const ALLOWED_OUTBOUND_MEDIA_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'video/mp4',
+  'video/3gpp',
+  'audio/aac',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/amr',
+  'audio/ogg',
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+const OUTBOUND_MEDIA_MAX_BYTES = Number(process.env.OUTBOUND_MEDIA_MAX_BYTES || 16 * 1024 * 1024);
+
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: OUTBOUND_MEDIA_MAX_BYTES,
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_OUTBOUND_MEDIA_MIME.has(file.mimetype)) {
+      return cb(new Error('Unsupported media file type'));
+    }
+
+    return cb(null, true);
+  },
+});
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
@@ -2365,19 +2405,29 @@ async function sendWhatsAppText(contact, text, tenantId) {
   return response.data?.messages?.[0]?.id || null;
 }
 
-function buildWhatsAppMediaPayload({ contact, mediaType, mediaUrl, caption = '', fileName = '' }) {
+function buildWhatsAppMediaPayload({
+  contact,
+  mediaType,
+  mediaUrl = '',
+  mediaId = '',
+  caption = '',
+  fileName = '',
+}) {
   const cleanType = String(mediaType || '').trim().toLowerCase();
   const cleanUrl = String(mediaUrl || '').trim();
+  const cleanMediaId = String(mediaId || '').trim();
   const cleanCaption = String(caption || '').trim().slice(0, 1024);
   const cleanFileName = String(fileName || '').trim().slice(0, 240);
+
+  const mediaObject = cleanMediaId
+    ? { id: cleanMediaId }
+    : { link: cleanUrl };
 
   const payload = {
     messaging_product: 'whatsapp',
     to: contact.wa_id,
     type: cleanType,
-    [cleanType]: {
-      link: cleanUrl,
-    },
+    [cleanType]: mediaObject,
   };
 
   if (['image', 'video', 'document'].includes(cleanType) && cleanCaption) {
@@ -2406,6 +2456,53 @@ async function sendWhatsAppMedia(contact, mediaPayload, tenantId) {
   );
 
   return response.data?.messages?.[0]?.id || null;
+}
+
+function mediaTypeFromMime(mimeType = '') {
+  const cleanMime = String(mimeType || '').toLowerCase();
+
+  if (cleanMime.startsWith('image/')) return 'image';
+  if (cleanMime.startsWith('video/')) return 'video';
+  if (cleanMime.startsWith('audio/')) return 'audio';
+
+  return 'document';
+}
+
+async function uploadWhatsAppMedia({ tenantId, buffer, fileName, mimeType }) {
+  const config = await getWhatsAppSendConfig(tenantId);
+
+  if (!config) {
+    if (shouldAllowLocalMessageQueue()) return null;
+    throw new Error('WhatsApp is not configured. Media file was not uploaded.');
+  }
+
+  if (!buffer?.length) {
+    throw new Error('Media file is empty.');
+  }
+
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mimeType);
+  form.append('file', buffer, {
+    filename: fileName || 'upload',
+    contentType: mimeType,
+  });
+
+  const response = await axios.post(
+    `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/media`,
+    form,
+    {
+      headers: {
+        Authorization: `Bearer ${config.accessToken}`,
+        ...form.getHeaders(),
+      },
+      timeout: Number(process.env.WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS || 20000),
+      maxBodyLength: OUTBOUND_MEDIA_MAX_BYTES + 1024 * 1024,
+      maxContentLength: OUTBOUND_MEDIA_MAX_BYTES + 1024 * 1024,
+    },
+  );
+
+  return response.data?.id || null;
 }
 
 async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
@@ -3422,7 +3519,11 @@ const routeContext = {
   isRetryableWhatsAppError,
   postWhatsAppMessage,
   sendWhatsAppText,
+  buildWhatsAppMediaPayload,
+  mediaTypeFromMime,
+  uploadWhatsAppMedia,
   sendWhatsAppMedia,
+  mediaUpload,
   sendWhatsAppInteractiveList,
   sendWhatsAppTemplate,
   sendWhatsAppTemplateToNumber,
