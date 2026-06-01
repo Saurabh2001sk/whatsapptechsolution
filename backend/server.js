@@ -3292,6 +3292,11 @@ Please share the reason or required changes if you want our team to revise the o
 // =========================================================
 
 async function ensureSchema() {
+  if (isProduction && process.env.AUTO_MIGRATE_ON_START !== 'true') {
+    console.log('Production schema auto-migration skipped. Run npm run init-db before deploy when schema changes.');
+    return;
+  }
+
   const schemaPath = path.join(__dirname, 'schema.sql');
   const schema = fs.readFileSync(schemaPath, 'utf8');
   await query(schema);

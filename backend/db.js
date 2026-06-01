@@ -24,8 +24,10 @@ function sslConfig() {
     };
   }
 
+  const rejectUnauthorizedEnv = String(process.env.PGSSL_REJECT_UNAUTHORIZED || '').trim().toLowerCase();
+
   return {
-    rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true',
+    rejectUnauthorized: rejectUnauthorizedEnv ? rejectUnauthorizedEnv !== 'false' : true,
   };
 }
 

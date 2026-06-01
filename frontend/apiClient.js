@@ -4,6 +4,9 @@ import axios from 'axios'
 export const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
 
 const getBackendUrl = () => {
+  const configuredApiUrl = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '')
+  if (configuredApiUrl) return configuredApiUrl
+
   if (!isProduction) {
     return 'http://localhost:5000' // Local Fallback
   }
@@ -33,12 +36,14 @@ function stripTenantKeys(value) {
   return clean
 }
 
-// 4. Request Interceptor: Inject JWT Token & Clean Tenant Keys
+// 4. Request Interceptor: Clean Tenant Keys
 api.interceptors.request.use((config) => {
-  // Automatically inject Bearer Token for Multi-Tenant verification
-  const token = localStorage.getItem('token')
-  if (token) {
-    config.headers['Authorization'] = `Bearer ${token}`
+  if (config.headers) {
+    if (typeof config.headers.delete === 'function') {
+      config.headers.delete('Authorization')
+    }
+    delete config.headers.Authorization
+    delete config.headers.authorization
   }
 
   // Apply security strip

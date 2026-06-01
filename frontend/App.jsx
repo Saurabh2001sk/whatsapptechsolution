@@ -66,6 +66,7 @@ import {
   ConversationList,
   DashboardPage,
   DraftsPanel,
+  EmptyState,
   FeatureGatePage,
   InventoryPage,
   PlatformPage,
@@ -84,6 +85,7 @@ import './suite-workspace.css'
 import './suite-polish.css'
 
 function clearStoredSession() {
+  localStorage.removeItem('token')
   delete api.defaults.headers.common.Authorization
 }
 

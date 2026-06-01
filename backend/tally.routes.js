@@ -49,6 +49,10 @@ function registerTallyRoutes(app, ctx) {
       throw new Error('Tally gateway URL must start with http:// or https://');
     }
 
+    if (isProduction && parsed.protocol !== 'https:') {
+      throw new Error('Production Tally gateway URL must use HTTPS.');
+    }
+
     const host = parsed.hostname.toLowerCase();
     const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
     const isPrivateHost = /^10\./.test(host)

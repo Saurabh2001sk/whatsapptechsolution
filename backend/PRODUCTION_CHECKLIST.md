@@ -16,6 +16,8 @@
 - MEDIA_STORAGE_ACCESS_KEY_ID set
 - MEDIA_STORAGE_SECRET_ACCESS_KEY set
 - MEDIA_STORAGE_FORCE_PATH_STYLE=true for most S3-compatible providers
+- PGSSL_REJECT_UNAUTHORIZED=true unless your DB provider explicitly requires otherwise
+- AUTO_MIGRATE_ON_START=false after initial setup; run npm run init-db intentionally when schema changes
 
 ## WhatsApp policy
 

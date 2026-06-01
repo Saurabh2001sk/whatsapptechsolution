@@ -564,6 +564,71 @@ ALTER COLUMN tenant_id SET NOT NULL;
 CREATE INDEX IF NOT EXISTS sales_order_items_tenant_order_idx
 ON sales_order_items (tenant_id, order_id);
 
+-- Tenant-owned item relationships. These keep sales item rows from pointing
+-- at a quotation, order, or product that belongs to another tenant.
+CREATE UNIQUE INDEX IF NOT EXISTS quotations_tenant_id_id_uidx
+ON quotations (tenant_id, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS sales_orders_tenant_id_id_uidx
+ON sales_orders (tenant_id, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS products_tenant_id_id_uidx
+ON products (tenant_id, id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotation_items_tenant_quotation_fk'
+  ) THEN
+    ALTER TABLE quotation_items
+    ADD CONSTRAINT quotation_items_tenant_quotation_fk
+    FOREIGN KEY (tenant_id, quotation_id)
+    REFERENCES quotations (tenant_id, id)
+    ON DELETE CASCADE
+    NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'quotation_items_tenant_product_fk'
+  ) THEN
+    ALTER TABLE quotation_items
+    ADD CONSTRAINT quotation_items_tenant_product_fk
+    FOREIGN KEY (tenant_id, product_id)
+    REFERENCES products (tenant_id, id)
+    NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sales_order_items_tenant_order_fk'
+  ) THEN
+    ALTER TABLE sales_order_items
+    ADD CONSTRAINT sales_order_items_tenant_order_fk
+    FOREIGN KEY (tenant_id, order_id)
+    REFERENCES sales_orders (tenant_id, id)
+    ON DELETE CASCADE
+    NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sales_order_items_tenant_product_fk'
+  ) THEN
+    ALTER TABLE sales_order_items
+    ADD CONSTRAINT sales_order_items_tenant_product_fk
+    FOREIGN KEY (tenant_id, product_id)
+    REFERENCES products (tenant_id, id)
+    NOT VALID;
+  END IF;
+END $$;
+
 -- =========================================================
 -- 11. ENQUIRY DRAFTS
 -- =========================================================

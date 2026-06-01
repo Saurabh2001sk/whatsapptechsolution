@@ -185,12 +185,33 @@ app.get('/health', (req, res) => {
 app.get('/ready', asyncHandler(async (req, res) => {
   const db = await healthCheck();
 
-  const whatsappConfigured = Boolean(
+  const envWhatsAppConfigured = Boolean(
     hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
     && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN)
     && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)
     && (!isProduction || hasRealValue(process.env.WHATSAPP_APP_SECRET))
   );
+
+  let whatsappConfigured = envWhatsAppConfigured;
+
+  if (isProduction && db.ok) {
+    const accountResult = await query(
+      `SELECT 1
+       FROM whatsapp_accounts
+       WHERE active = true
+         AND phone_number_id IS NOT NULL
+         AND access_token_encrypted IS NOT NULL
+         AND access_token_iv IS NOT NULL
+         AND access_token_tag IS NOT NULL
+       LIMIT 1`,
+    );
+
+    whatsappConfigured = Boolean(
+      hasRealValue(process.env.WHATSAPP_VERIFY_TOKEN)
+      && hasRealValue(process.env.WHATSAPP_APP_SECRET)
+      && accountResult.rows[0],
+    );
+  }
 
   const ready = Boolean(db.ok);
 
@@ -1208,8 +1229,9 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const accountStatus = await getEnvWhatsAppAccountStatus(req.user.tenantId);
-  const accessTokenSet = hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN);
-  const phoneNumberIdSet = hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
+  const envFallbackAllowed = !isProduction;
+  const accessTokenSet = envFallbackAllowed && hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN);
+  const phoneNumberIdSet = envFallbackAllowed && hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
   const callbackUrl = process.env.PUBLIC_BASE_URL
     ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/webhook`
     : 'Set PUBLIC_BASE_URL to show full webhook URL';
@@ -1266,7 +1288,7 @@ app.get('/api/whatsapp/health', requireAuth, asyncHandler(async (req, res) => {
     account?.access_token_tag,
   );
 
-  const envTokenConfigured = isWhatsAppConfigured();
+  const envTokenConfigured = !isProduction && isWhatsAppConfigured();
   const tokenMode = hasTenantEncryptedToken
     ? 'tenant_embedded_signup'
     : envTokenConfigured

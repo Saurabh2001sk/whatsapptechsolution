@@ -49,6 +49,12 @@ function createMediaStorage({ mediaRoot }) {
     && secretAccessKey
     && (region || endpoint);
 
+  const localProductionAllowed = boolEnv(process.env.MEDIA_STORAGE_ALLOW_LOCAL_IN_PRODUCTION, false);
+
+  if (process.env.NODE_ENV === 'production' && !s3Enabled && !localProductionAllowed) {
+    throw new Error('Production media storage requires MEDIA_STORAGE_DRIVER=s3 with bucket credentials. Set MEDIA_STORAGE_ALLOW_LOCAL_IN_PRODUCTION=true only for temporary non-customer testing.');
+  }
+
   const client = s3Enabled
     ? new S3Client({
       region: region || 'auto',

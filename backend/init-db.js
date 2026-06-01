@@ -9,10 +9,28 @@ function isRemoteDatabase(databaseUrl) {
   return !['localhost', '127.0.0.1'].includes(url.hostname);
 }
 
+function sslConfig(connectionString) {
+  if (!isRemoteDatabase(connectionString) || process.env.PGSSL === 'disable') return undefined;
+
+  const ca = String(process.env.PGSSL_CA_CERT || '').trim();
+  if (ca) {
+    return {
+      ca: ca.replace(/\\n/g, '\n'),
+      rejectUnauthorized: true,
+    };
+  }
+
+  const rejectUnauthorizedEnv = String(process.env.PGSSL_REJECT_UNAUTHORIZED || '').trim().toLowerCase();
+
+  return {
+    rejectUnauthorized: rejectUnauthorizedEnv ? rejectUnauthorizedEnv !== 'false' : true,
+  };
+}
+
 function clientConfig(connectionString) {
   return {
     connectionString,
-    ssl: isRemoteDatabase(connectionString) ? { rejectUnauthorized: false } : undefined,
+    ssl: sslConfig(connectionString),
   };
 }
 

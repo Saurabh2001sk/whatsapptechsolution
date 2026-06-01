@@ -2,6 +2,16 @@ function normalizeCampaignPhone(value = '') {
   return String(value || '').replace(/\D/g, '');
 }
 
+function getCampaignQualityFailureRateLimit() {
+  const value = Number(process.env.WHATSAPP_CAMPAIGN_FAILURE_RATE_LIMIT || 0.2);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 1) : 0.2;
+}
+
+function getCampaignQualityMinimumSample() {
+  const value = Number(process.env.WHATSAPP_CAMPAIGN_QUALITY_MIN_SAMPLE || 50);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 50;
+}
+
 function rowValue(row = {}, keys = []) {
   for (const key of keys) {
     const value = row[key];
@@ -54,6 +64,35 @@ function registerCampaignRoutes(app, ctx) {
     );
 
     return result.rows[0] || null;
+  }
+
+  async function getCampaignQualityGuard(tenantId) {
+    const result = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'sent')::int AS sent_count,
+         COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count
+       FROM campaign_recipients
+       WHERE tenant_id = $1
+         AND updated_at >= now() - interval '24 hours'`,
+      [tenantId],
+    );
+
+    const sentCount = Number(result.rows[0]?.sent_count || 0);
+    const failedCount = Number(result.rows[0]?.failed_count || 0);
+    const totalMeasured = sentCount + failedCount;
+    const minimumSample = getCampaignQualityMinimumSample();
+    const failureRateLimit = getCampaignQualityFailureRateLimit();
+    const failureRate = totalMeasured ? failedCount / totalMeasured : 0;
+
+    return {
+      blocked: totalMeasured >= minimumSample && failureRate >= failureRateLimit,
+      sentCount,
+      failedCount,
+      totalMeasured,
+      minimumSample,
+      failureRate,
+      failureRateLimit,
+    };
   }
 
   app.get('/api/campaigns', requireAuth, asyncHandler(async (req, res) => {
@@ -192,6 +231,28 @@ function registerCampaignRoutes(app, ctx) {
     if (weakProofRow) {
       return res.status(400).json({
         error: `Opt-in proof is too short for ${weakProofRow.phone}. Add clear proof like "Customer replied START on WhatsApp".`,
+      });
+    }
+
+    const qualityGuard = await getCampaignQualityGuard(req.user.tenantId);
+
+    if (qualityGuard.blocked) {
+      await recordAudit({
+        tenantId: req.user.tenantId,
+        actorUserId: req.user.id,
+        action: 'campaign.blocked_quality_guard',
+        entityType: 'campaign',
+        entityId: null,
+        metadata: {
+          sentCount: qualityGuard.sentCount,
+          failedCount: qualityGuard.failedCount,
+          failureRate: Number(qualityGuard.failureRate.toFixed(4)),
+          failureRateLimit: qualityGuard.failureRateLimit,
+        },
+      });
+
+      return res.status(429).json({
+        error: `Campaign sending is paused for this tenant because recent failure rate is ${Math.round(qualityGuard.failureRate * 100)}%. Fix failed messages before sending another campaign.`,
       });
     }
 

@@ -69,6 +69,10 @@ function createTenantService({
   }
 
   async function ensureDefaultWhatsAppAccountMapping(displayPhoneNumber = null) {
+    if (isProduction) {
+      return null;
+    }
+
     const phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
 
     if (!hasRealValue(phoneNumberId)) {
