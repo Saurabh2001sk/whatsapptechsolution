@@ -8,9 +8,10 @@ const getBackendUrl = () => {
   if (configuredApiUrl) return configuredApiUrl
 
   if (!isProduction) {
-    return 'http://localhost:5000' // Local Fallback
+    return 'http://localhost:5000'
   }
-  return 'https://bos-whatsapp-backend.onrender.com' // Live Render Cloud Backend
+
+  throw new Error('VITE_API_URL is required in production frontend environment')
 }
 
 export const apiBaseUrl = getBackendUrl()
@@ -38,17 +39,27 @@ function stripTenantKeys(value) {
 
 // 4. Request Interceptor: Clean Tenant Keys
 api.interceptors.request.use((config) => {
+  const method = String(config.method || 'get').toUpperCase()
+  const isWriteRequest = !['GET', 'HEAD', 'OPTIONS'].includes(method)
+
   if (config.headers) {
     if (typeof config.headers.delete === 'function') {
       config.headers.delete('Authorization')
     }
+
     delete config.headers.Authorization
     delete config.headers.authorization
+
+    config.headers['X-Requested-With'] = 'XMLHttpRequest'
+
+    if (isWriteRequest) {
+      config.headers['X-CSRF-Intent'] = 'same-origin-write'
+    }
   }
 
-  // Apply security strip
   if (config.data) config.data = stripTenantKeys(config.data)
   if (config.params) config.params = stripTenantKeys(config.params)
+
   return config
 })
 

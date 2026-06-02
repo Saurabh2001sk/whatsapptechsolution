@@ -33,6 +33,16 @@ function getCampaignDailyLimit() {
   return Math.min(Math.floor(value), 10000);
 }
 
+function getCampaignImmediateSendLimit() {
+  const value = Number(process.env.WHATSAPP_CAMPAIGN_IMMEDIATE_SEND_LIMIT || 50);
+
+  if (!Number.isFinite(value) || value < 1) {
+    return 50;
+  }
+
+  return Math.min(Math.floor(value), 250);
+}
+
 function registerCampaignRoutes(app, ctx) {
   const {
     query,
@@ -152,6 +162,14 @@ function registerCampaignRoutes(app, ctx) {
         error: `Maximum ${campaignDailyLimit} rows allowed per campaign for this tenant limit.`,
       });
     }
+
+    const immediateSendLimit = getCampaignImmediateSendLimit();
+
+if (sendNow && rows.length > immediateSendLimit) {
+  return res.status(400).json({
+    error: `Send Now is limited to ${immediateSendLimit} recipients until the campaign queue worker is connected. Split the CSV or wait for queued campaign sending.`,
+  });
+}
 
     if (!sendNow) {
       return res.status(400).json({

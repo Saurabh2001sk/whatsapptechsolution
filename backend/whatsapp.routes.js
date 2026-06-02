@@ -387,6 +387,43 @@ app.post('/webhook', rateLimit({
   }
 
   const payload = req.body;
+  const webhookEvent = await createWebhookEvent(payload);
+
+  res.sendStatus(200);
+
+  setImmediate(async () => {
+    try {
+      await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
+
+      await processWhatsAppWebhookPayload(payload);
+
+      await markWebhookEventProcessed(webhookEvent.id, webhookEvent.tenant_id);
+    } catch (error) {
+      console.error('WA webhook async processing failed:', {
+        webhookEventId: webhookEvent?.id || null,
+        ...safeErrorLog(error),
+      });
+
+      if (webhookEvent?.id) {
+        await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
+      }
+    }
+  });
+}));
+  if (!isProduction) {
+    console.log('WA webhook received:', {
+      object: req.body?.object || null,
+      entries: req.body?.entry?.length || 0,
+      hasSignature: Boolean(req.headers['x-hub-signature-256']),
+    });
+  }
+
+  if (!verifyMetaWebhookSignature(req)) {
+    console.warn('WA webhook rejected: invalid signature');
+    return res.status(403).json({ error: 'Invalid webhook signature' });
+  }
+
+  const payload = req.body;
 
   res.sendStatus(200);
 
@@ -412,7 +449,6 @@ app.post('/webhook', rateLimit({
       }
     }
   });
-}));
 
 app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
   if (isProduction) {

@@ -206,6 +206,30 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
+  const isApiWrite = req.path.startsWith('/api/')
+    && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+  if (!isProduction || !isApiWrite) {
+    return next();
+  }
+
+  const usesCookieSession = Boolean(getCookie(req, 'bosAuthToken'));
+
+  if (!usesCookieSession) {
+    return next();
+  }
+
+  const requestedWith = String(req.headers['x-requested-with'] || '').trim().toLowerCase();
+  const csrfIntent = String(req.headers['x-csrf-intent'] || '').trim();
+
+  if (requestedWith !== 'xmlhttprequest' || csrfIntent !== 'same-origin-write') {
+    return res.status(403).json({ error: 'Browser write request verification failed' });
+  }
+
+  return next();
+});
+
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -469,6 +493,64 @@ function validateRuntimeConfig() {
   }
 
   return warnings;
+}
+
+function getFatalProductionConfigErrors() {
+  if (!isProduction) {
+    return [];
+  }
+
+  const errors = [];
+
+  const requiredEnv = [
+    'DATABASE_URL',
+    'JWT_SECRET',
+    'FRONTEND_URL',
+    'PUBLIC_BASE_URL',
+    'WHATSAPP_VERIFY_TOKEN',
+    'WHATSAPP_APP_SECRET',
+    'META_TOKEN_ENCRYPTION_KEY',
+  ];
+
+  for (const envName of requiredEnv) {
+    if (!hasRealValue(process.env[envName])) {
+      errors.push(`${envName} is required in production.`);
+    }
+  }
+
+  const encryptionKey = String(process.env.META_TOKEN_ENCRYPTION_KEY || '').trim();
+  if (encryptionKey && !/^[a-f0-9]{64}$/i.test(encryptionKey)) {
+    errors.push('META_TOKEN_ENCRYPTION_KEY must be a 64-character hex string.');
+  }
+
+  if (hasRealValue(process.env.WHATSAPP_ACCESS_TOKEN) !== hasRealValue(process.env.WHATSAPP_PHONE_NUMBER_ID)) {
+    errors.push('WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID must be configured together.');
+  }
+
+  const localMediaAllowed = String(process.env.MEDIA_STORAGE_ALLOW_LOCAL_IN_PRODUCTION || '')
+    .trim()
+    .toLowerCase() === 'true';
+
+  if (!localMediaAllowed) {
+    const mediaRequiredEnv = [
+      'MEDIA_STORAGE_DRIVER',
+      'MEDIA_STORAGE_BUCKET',
+      'MEDIA_STORAGE_ACCESS_KEY_ID',
+      'MEDIA_STORAGE_SECRET_ACCESS_KEY',
+    ];
+
+    for (const envName of mediaRequiredEnv) {
+      if (!hasRealValue(process.env[envName])) {
+        errors.push(`${envName} is required for production media storage.`);
+      }
+    }
+
+    if (String(process.env.MEDIA_STORAGE_DRIVER || '').trim().toLowerCase() !== 's3') {
+      errors.push('MEDIA_STORAGE_DRIVER=s3 is required in production.');
+    }
+  }
+
+  return errors;
 }
 
 // =========================================================
@@ -3635,6 +3717,13 @@ app.use((err, req, res, next) => {
 let httpServer = null;
 
 async function startServer() {
+  const fatalConfigErrors = getFatalProductionConfigErrors();
+
+  if (fatalConfigErrors.length) {
+    fatalConfigErrors.forEach((error) => console.error(`Config error: ${error}`));
+    throw new Error('Production configuration is incomplete. Fix required environment variables before startup.');
+  }
+
   await ensureSchema();
   await ensureDefaultUsers();
   await ensurePlatformSuperAdmin();

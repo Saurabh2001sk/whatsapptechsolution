@@ -77,7 +77,6 @@ import {
   UsersPage,
   WorkspaceHeading,
 } from './WorkspacePages'
-import './App.css'
 import './public-site.css'
 import './workspace-legacy.css'
 import './authenticated-workspace.css'
