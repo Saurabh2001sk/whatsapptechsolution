@@ -791,6 +791,50 @@ EXCEPTION
 END $$;
 
 -- =========================================================
+-- 12B. AUTO REPLY RULES
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS auto_reply_rules (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  trigger_type TEXT NOT NULL DEFAULT 'contains',
+  trigger_value TEXT NOT NULL,
+  reply_text TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 100,
+  active BOOLEAN NOT NULL DEFAULT true,
+  send_once_per_contact BOOLEAN NOT NULL DEFAULT false,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (trigger_type IN ('contains', 'starts_with', 'exact'))
+);
+
+CREATE INDEX IF NOT EXISTS auto_reply_rules_tenant_active_idx
+ON auto_reply_rules (tenant_id, active, priority, updated_at);
+
+CREATE INDEX IF NOT EXISTS auto_reply_rules_tenant_trigger_idx
+ON auto_reply_rules (tenant_id, trigger_type, active);
+
+CREATE TABLE IF NOT EXISTS auto_reply_rule_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  rule_id UUID REFERENCES auto_reply_rules(id) ON DELETE SET NULL,
+  contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
+  inbound_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  outbound_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS auto_reply_rule_events_tenant_contact_idx
+ON auto_reply_rule_events (tenant_id, contact_id, rule_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS auto_reply_rule_events_once_per_contact_idx
+ON auto_reply_rule_events (tenant_id, rule_id, contact_id)
+WHERE rule_id IS NOT NULL;
+
+-- =========================================================
 -- 13A. COMPANY KNOWLEDGE BASE
 -- =========================================================
 

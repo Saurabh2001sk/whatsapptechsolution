@@ -161,6 +161,252 @@ function registerCrmRoutes(app, ctx) {
     handleCustomerQuoteInbound,
   } = ctx;
 
+function cleanAutoReplyText(value = '', maxLength = 1000) {
+  return String(value || '').trim().slice(0, maxLength);
+}
+
+function cleanAutoReplyTriggerType(value = 'contains') {
+  const cleanValue = String(value || 'contains').trim().toLowerCase();
+  return ['contains', 'starts_with', 'exact'].includes(cleanValue) ? cleanValue : null;
+}
+
+app.get('/api/auto-reply-rules', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const result = await query(
+    `SELECT id, name, trigger_type, trigger_value, reply_text, priority,
+            active, send_once_per_contact, created_at, updated_at
+     FROM auto_reply_rules
+     WHERE tenant_id = $1
+     ORDER BY priority ASC, updated_at DESC
+     LIMIT 200`,
+    [req.user.tenantId],
+  );
+
+  res.json(result.rows);
+}));
+
+app.post('/api/auto-reply-rules', requireAuth, rateLimit({
+  bucketName: 'auto-reply-rule-create',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const name = cleanAutoReplyText(req.body?.name, 120);
+  const triggerType = cleanAutoReplyTriggerType(req.body?.triggerType || req.body?.trigger_type);
+  const triggerValue = cleanAutoReplyText(req.body?.triggerValue || req.body?.trigger_value, 300);
+  const replyText = cleanAutoReplyText(req.body?.replyText || req.body?.reply_text, MAX_WHATSAPP_TEXT_LENGTH);
+  const priority = Math.min(Math.max(Number(req.body?.priority || 100), 1), 10000);
+  const active = req.body?.active === undefined ? true : Boolean(req.body.active);
+  const sendOncePerContact = Boolean(req.body?.sendOncePerContact || req.body?.send_once_per_contact);
+
+  if (!name) {
+    return res.status(400).json({ error: 'Rule name is required' });
+  }
+
+  if (!triggerType) {
+    return res.status(400).json({ error: 'Invalid trigger type' });
+  }
+
+  if (triggerValue.length < 2) {
+    return res.status(400).json({ error: 'Trigger value must be at least 2 characters' });
+  }
+
+  if (replyText.length < 2) {
+    return res.status(400).json({ error: 'Reply text must be at least 2 characters' });
+  }
+
+  const result = await query(
+    `INSERT INTO auto_reply_rules
+       (tenant_id, name, trigger_type, trigger_value, reply_text, priority,
+        active, send_once_per_contact, created_by, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, now())
+     RETURNING id, name, trigger_type, trigger_value, reply_text, priority,
+               active, send_once_per_contact, created_at, updated_at`,
+    [
+      req.user.tenantId,
+      name,
+      triggerType,
+      triggerValue,
+      replyText,
+      priority,
+      active,
+      sendOncePerContact,
+      req.user.id,
+    ],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'auto_reply_rule.created',
+    entityType: 'auto_reply_rule',
+    entityId: result.rows[0].id,
+    metadata: {
+      name,
+      triggerType,
+      priority,
+      active,
+      sendOncePerContact,
+    },
+  });
+
+  res.status(201).json(result.rows[0]);
+}));
+
+app.patch('/api/auto-reply-rules/:id', requireAuth, rateLimit({
+  bucketName: 'auto-reply-rule-update',
+  maxRequests: 120,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const existingResult = await query(
+    `SELECT *
+     FROM auto_reply_rules
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const existing = existingResult.rows[0];
+
+  if (!existing) {
+    return res.status(404).json({ error: 'Auto reply rule not found' });
+  }
+
+  const name = req.body?.name !== undefined
+    ? cleanAutoReplyText(req.body.name, 120)
+    : existing.name;
+
+  const triggerType = req.body?.triggerType !== undefined || req.body?.trigger_type !== undefined
+    ? cleanAutoReplyTriggerType(req.body?.triggerType || req.body?.trigger_type)
+    : existing.trigger_type;
+
+  const triggerValue = req.body?.triggerValue !== undefined || req.body?.trigger_value !== undefined
+    ? cleanAutoReplyText(req.body?.triggerValue || req.body?.trigger_value, 300)
+    : existing.trigger_value;
+
+  const replyText = req.body?.replyText !== undefined || req.body?.reply_text !== undefined
+    ? cleanAutoReplyText(req.body?.replyText || req.body?.reply_text, MAX_WHATSAPP_TEXT_LENGTH)
+    : existing.reply_text;
+
+  const priority = req.body?.priority !== undefined
+    ? Math.min(Math.max(Number(req.body.priority || 100), 1), 10000)
+    : existing.priority;
+
+  const active = req.body?.active !== undefined ? Boolean(req.body.active) : existing.active;
+
+  const sendOncePerContact = req.body?.sendOncePerContact !== undefined || req.body?.send_once_per_contact !== undefined
+    ? Boolean(req.body?.sendOncePerContact || req.body?.send_once_per_contact)
+    : existing.send_once_per_contact;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Rule name is required' });
+  }
+
+  if (!triggerType) {
+    return res.status(400).json({ error: 'Invalid trigger type' });
+  }
+
+  if (triggerValue.length < 2) {
+    return res.status(400).json({ error: 'Trigger value must be at least 2 characters' });
+  }
+
+  if (replyText.length < 2) {
+    return res.status(400).json({ error: 'Reply text must be at least 2 characters' });
+  }
+
+  const result = await query(
+    `UPDATE auto_reply_rules
+     SET name = $3,
+         trigger_type = $4,
+         trigger_value = $5,
+         reply_text = $6,
+         priority = $7,
+         active = $8,
+         send_once_per_contact = $9,
+         updated_by = $10,
+         updated_at = now()
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, name, trigger_type, trigger_value, reply_text, priority,
+               active, send_once_per_contact, created_at, updated_at`,
+    [
+      req.params.id,
+      req.user.tenantId,
+      name,
+      triggerType,
+      triggerValue,
+      replyText,
+      priority,
+      active,
+      sendOncePerContact,
+      req.user.id,
+    ],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'auto_reply_rule.updated',
+    entityType: 'auto_reply_rule',
+    entityId: result.rows[0].id,
+    metadata: {
+      changedFields: Object.keys(req.body || {}),
+      active,
+      priority,
+    },
+  });
+
+  res.json(result.rows[0]);
+}));
+
+app.delete('/api/auto-reply-rules/:id', requireAuth, rateLimit({
+  bucketName: 'auto-reply-rule-delete',
+  maxRequests: 60,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const result = await query(
+    `DELETE FROM auto_reply_rules
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, name`,
+    [req.params.id, req.user.tenantId],
+  );
+
+  const deleted = result.rows[0];
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'Auto reply rule not found' });
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'auto_reply_rule.deleted',
+    entityType: 'auto_reply_rule',
+    entityId: deleted.id,
+    metadata: {
+      name: deleted.name,
+    },
+  });
+
+  res.json({ ok: true, deleted });
+}));
+
 app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
   const params = [req.user.tenantId];
   const where = ['c.tenant_id = $1'];

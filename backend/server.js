@@ -570,7 +570,7 @@ function normalizeAppSettings(input = {}) {
     stages: cleanList(input.stages, DEFAULT_APP_SETTINGS.stages),
     quotationPrefix: String(input.quotationPrefix || DEFAULT_APP_SETTINGS.quotationPrefix).trim().slice(0, 16),
     orderPrefix: String(input.orderPrefix || DEFAULT_APP_SETTINGS.orderPrefix).trim().slice(0, 16),
-    botEnabled: Boolean(input.botEnabled),
+    botEnabled: input.botEnabled === undefined ? DEFAULT_APP_SETTINGS.botEnabled : Boolean(input.botEnabled),
     botGreeting: String(input.botGreeting || DEFAULT_APP_SETTINGS.botGreeting).trim().slice(0, 500),
     handoffKeywords: cleanList(input.handoffKeywords, DEFAULT_APP_SETTINGS.handoffKeywords),
     inventoryFields: cleanList(input.inventoryFields, DEFAULT_APP_SETTINGS.inventoryFields),
@@ -584,11 +584,11 @@ function normalizeAppSettings(input = {}) {
     customerQuoteTemplateLanguage: String(input.customerQuoteTemplateLanguage || DEFAULT_APP_SETTINGS.customerQuoteTemplateLanguage).trim().slice(0, 12),
     orderAcknowledgementTemplateName: String(input.orderAcknowledgementTemplateName || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateName).trim().toLowerCase().slice(0, 80),
     orderAcknowledgementTemplateLanguage: String(input.orderAcknowledgementTemplateLanguage || DEFAULT_APP_SETTINGS.orderAcknowledgementTemplateLanguage).trim().slice(0, 12),
-    ftpAccessEnabled: Boolean(input.ftpAccessEnabled),
-    twoFactorEnabled: Boolean(input.twoFactorEnabled),
-    wabaMmLiteEnabled: Boolean(input.wabaMmLiteEnabled),
-    wabaHealthyRetryEnabled: Boolean(input.wabaHealthyRetryEnabled),
-    wabaConversionEventsEnabled: Boolean(input.wabaConversionEventsEnabled),
+    ftpAccessEnabled: input.ftpAccessEnabled === undefined ? DEFAULT_APP_SETTINGS.ftpAccessEnabled : Boolean(input.ftpAccessEnabled),
+    twoFactorEnabled: input.twoFactorEnabled === undefined ? DEFAULT_APP_SETTINGS.twoFactorEnabled : Boolean(input.twoFactorEnabled),
+    wabaMmLiteEnabled: input.wabaMmLiteEnabled === undefined ? DEFAULT_APP_SETTINGS.wabaMmLiteEnabled : Boolean(input.wabaMmLiteEnabled),
+    wabaHealthyRetryEnabled: input.wabaHealthyRetryEnabled === undefined ? DEFAULT_APP_SETTINGS.wabaHealthyRetryEnabled : Boolean(input.wabaHealthyRetryEnabled),
+    wabaConversionEventsEnabled: input.wabaConversionEventsEnabled === undefined ? DEFAULT_APP_SETTINGS.wabaConversionEventsEnabled : Boolean(input.wabaConversionEventsEnabled),
     billingBusinessName: String(input.billingBusinessName || '').trim().slice(0, 140),
     billingGstNumber: String(input.billingGstNumber || '').trim().toUpperCase().slice(0, 20),
     billingPanNumber: String(input.billingPanNumber || '').trim().toUpperCase().slice(0, 10),
@@ -599,14 +599,14 @@ function normalizeAppSettings(input = {}) {
     billingPinCode: String(input.billingPinCode || '').replace(/\D/g, '').slice(0, 6),
     billingEmail: String(input.billingEmail || '').trim().toLowerCase().slice(0, 140),
     billingContactNumber: String(input.billingContactNumber || '').replace(/\D/g, '').slice(0, 10),
-    voiceCallsEnabled: Boolean(input.voiceCallsEnabled),
-    voiceCallbackEnabled: Boolean(input.voiceCallbackEnabled),
+    voiceCallsEnabled: input.voiceCallsEnabled === undefined ? DEFAULT_APP_SETTINGS.voiceCallsEnabled : Boolean(input.voiceCallsEnabled),
+    voiceCallbackEnabled: input.voiceCallbackEnabled === undefined ? DEFAULT_APP_SETTINGS.voiceCallbackEnabled : Boolean(input.voiceCallbackEnabled),
     voiceDisplayCallButtons: input.voiceDisplayCallButtons === undefined ? DEFAULT_APP_SETTINGS.voiceDisplayCallButtons : Boolean(input.voiceDisplayCallButtons),
     voiceCallHoursMode: input.voiceCallHoursMode === 'all' ? 'all' : 'specific',
     voiceTimeZone: String(input.voiceTimeZone || DEFAULT_APP_SETTINGS.voiceTimeZone).trim().slice(0, 80),
     voiceWeeklyHours: cleanVoiceWeeklyHours(input.voiceWeeklyHours),
     voiceUnavailableHours: cleanUnavailableHours(input.voiceUnavailableHours),
-    inboxAutoAssign: Boolean(input.inboxAutoAssign),
+    inboxAutoAssign: input.inboxAutoAssign === undefined ? DEFAULT_APP_SETTINGS.inboxAutoAssign : Boolean(input.inboxAutoAssign),
   };
 }
 
@@ -1850,12 +1850,67 @@ async function createEnquiryDraft({ tenantId, contactId, messageId, text }) {
   return structuredDraft?.draft || null;
 }
 
+
+async function findMatchingAutoReplyRule({ tenantId, contactId, text }) {
+  const normalized = normalizeUserText(text);
+
+  if (!tenantId || !contactId || !normalized) return null;
+
+  const result = await query(
+    `SELECT id, name, trigger_type, trigger_value, reply_text, send_once_per_contact
+     FROM auto_reply_rules
+     WHERE tenant_id = $1
+       AND active = true
+     ORDER BY priority ASC, updated_at DESC
+     LIMIT 100`,
+    [tenantId],
+  );
+
+  for (const rule of result.rows) {
+    const trigger = normalizeUserText(rule.trigger_value);
+
+    if (!trigger) continue;
+
+    let matched = false;
+
+    if (rule.trigger_type === 'exact') {
+      matched = normalized === trigger;
+    } else if (rule.trigger_type === 'starts_with') {
+      matched = normalized.startsWith(trigger);
+    } else {
+      matched = normalized.includes(trigger);
+    }
+
+    if (!matched) continue;
+
+    if (rule.send_once_per_contact) {
+      const eventResult = await query(
+        `SELECT id
+         FROM auto_reply_rule_events
+         WHERE tenant_id = $1
+           AND rule_id = $2
+           AND contact_id = $3
+         LIMIT 1`,
+        [tenantId, rule.id, contactId],
+      );
+
+      if (eventResult.rows[0]) continue;
+    }
+
+    return rule;
+  }
+
+  return null;
+}
+
 async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }) {
   if (!tenantId || !contact || !inboundMessage) return null;
   if (contact.opted_out || isOptOutMessage(text)) return null;
 
-  const settings = await getAppSettings(tenantId);
-  if (!settings.botEnabled) return null;
+const settings = await getAppSettings(tenantId);
+
+
+if (!settings.botEnabled) return null;
 
   if (!isReplyWindowOpen(contact)) {
     console.warn('Bot auto-reply skipped: 24-hour window is not open', {
@@ -1866,9 +1921,15 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
   }
 
   const normalizedText = normalizeUserText(text);
-  const useMainMenu = shouldSendMainMenu(text);
-  const useCategoryMenu = normalizedText === 'browse products';
-  const selectedCategory = !useMainMenu && !useCategoryMenu
+  const matchedRule = await findMatchingAutoReplyRule({
+    tenantId,
+    contactId: contact.id,
+    text,
+  });
+
+  const useMainMenu = !matchedRule && shouldSendMainMenu(text);
+  const useCategoryMenu = !matchedRule && normalizedText === 'browse products';
+  const selectedCategory = !matchedRule && !useMainMenu && !useCategoryMenu
     ? await findExactProductCategory(tenantId, text)
     : null;
 
@@ -1877,7 +1938,11 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
   let messageType = 'text';
   let auditAction = 'bot.auto_reply_sent';
 
-  if (useMainMenu) {
+  if (matchedRule) {
+    replyText = String(matchedRule.reply_text || '').trim();
+    messageType = 'text';
+    auditAction = 'bot.auto_reply_rule_sent';
+  } else if (useMainMenu) {
     menuPayload = buildMainMenuInteractive(settings);
     replyText = menuPayloadToText(menuPayload);
     messageType = 'interactive';
@@ -1930,26 +1995,14 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       ...safeMetaError(error),
     });
 
-    await recordAudit({
-      tenantId,
-      action: 'bot.auto_reply_failed',
-      entityType: 'contact',
-      entityId: contact.id,
-      metadata: {
-        inboundMessageId: inboundMessage.id,
-        status: error.response?.status || null,
-        type: messageType,
-      },
-    });
-
-    return null;
+    if (!shouldAllowLocalMessageQueue()) {
+      return null;
+    }
   }
 
-  const status = waMessageId ? 'sent' : 'accepted';
+  const status = waMessageId ? 'sent' : 'queued-local';
 
-  if (!waMessageId && !shouldAllowLocalMessageQueue()) {
-    return null;
-  }
+  if (!waMessageId && !shouldAllowLocalMessageQueue()) return null;
 
   const botMessage = await addMessage({
     tenantId,
@@ -1959,10 +2012,32 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
     type: messageType,
     body: replyText,
     status,
-    rawPayload: menuPayload || null,
-    interactivePayload: menuPayload?.interactive || null,
+    templateName: null,
+    rawPayload: matchedRule
+      ? {
+          autoReplyRuleId: matchedRule.id,
+          autoReplyRuleName: matchedRule.name,
+        }
+      : menuPayload || { bot: true },
+    interactivePayload: messageType === 'interactive' ? menuPayload : null,
     normalizedText: replyText,
   });
+
+  if (matchedRule) {
+    await query(
+      `INSERT INTO auto_reply_rule_events
+         (tenant_id, rule_id, contact_id, inbound_message_id, outbound_message_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT DO NOTHING`,
+      [
+        tenantId,
+        matchedRule.id,
+        contact.id,
+        inboundMessage.id,
+        botMessage?.id || null,
+      ],
+    );
+  }
 
   await recordAudit({
     tenantId,
@@ -1975,6 +2050,8 @@ async function maybeSendBotAutoReply({ tenantId, contact, inboundMessage, text }
       status,
       type: messageType,
       selectedCategory,
+      autoReplyRuleId: matchedRule?.id || null,
+      autoReplyRuleName: matchedRule?.name || null,
     },
   });
 

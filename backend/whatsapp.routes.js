@@ -410,45 +410,7 @@ app.post('/webhook', rateLimit({
     }
   });
 }));
-  if (!isProduction) {
-    console.log('WA webhook received:', {
-      object: req.body?.object || null,
-      entries: req.body?.entry?.length || 0,
-      hasSignature: Boolean(req.headers['x-hub-signature-256']),
-    });
-  }
 
-  if (!verifyMetaWebhookSignature(req)) {
-    console.warn('WA webhook rejected: invalid signature');
-    return res.status(403).json({ error: 'Invalid webhook signature' });
-  }
-
-  const payload = req.body;
-
-  res.sendStatus(200);
-
-  setImmediate(async () => {
-    let webhookEvent = null;
-
-    try {
-      webhookEvent = await createWebhookEvent(payload);
-
-      await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
-
-      await processWhatsAppWebhookPayload(payload);
-
-      await markWebhookEventProcessed(webhookEvent.id, webhookEvent.tenant_id);
-    } catch (error) {
-      console.error('WA webhook async processing failed:', {
-        webhookEventId: webhookEvent?.id || null,
-        ...safeErrorLog(error),
-      });
-
-      if (webhookEvent?.id) {
-        await markWebhookEventFailed(webhookEvent.id, webhookEvent.tenant_id, error);
-      }
-    }
-  });
 
 app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
   if (isProduction) {
@@ -467,13 +429,25 @@ app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res
       error: `Inbound simulator message is too long. Maximum ${MAX_WHATSAPP_TEXT_LENGTH} characters allowed.`,
     });
   }
+  const localMessageId = `local.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+
   const result = await processInboundMessage({
     tenantId: req.user.tenantId,
     waId: cleanPhone,
     name: req.body.name || cleanPhone,
     body,
-    waMessageId: `local.${Date.now()}.${Math.random().toString(16).slice(2)}`,
-    rawPayload: { localSimulator: true, createdBy: req.user.id },
+    waMessageId: localMessageId,
+    rawPayload: {
+      id: localMessageId,
+      from: cleanPhone,
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      type: 'text',
+      text: {
+        body,
+      },
+      localSimulator: true,
+      createdBy: req.user.id,
+    },
   });
   await recordAudit({
     tenantId: req.user.tenantId,
