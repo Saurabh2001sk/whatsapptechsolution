@@ -607,6 +607,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
   const signupInfoRef = useRef({})
   const authCodeRef = useRef('')
   const signupTimeoutRef = useRef(null)
+  const completionStartedRef = useRef(false)
 
   const metaAppId = onboarding?.metaAppId || import.meta.env.VITE_META_APP_ID || ''
   const configId = onboarding?.embeddedSignupConfigId || import.meta.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID || ''
@@ -627,19 +628,23 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
     }
   }
 
-  async function completeIfReady(nextInfo = {}) {
+  async function completeIfReady(nextInfo = {}, allowBackendRecovery = false) {
     const code = authCodeRef.current || ''
     const phoneNumberId = nextInfo.phoneNumberId || signupInfoRef.current.phoneNumberId || ''
     const wabaId = nextInfo.wabaId || signupInfoRef.current.wabaId || ''
+    const businessId = nextInfo.businessId || signupInfoRef.current.businessId || ''
 
-    if (!code || !phoneNumberId || !wabaId) return false
+    if (!code || completionStartedRef.current) return false
+    if ((!phoneNumberId || !wabaId) && !allowBackendRecovery) return false
 
     clearSignupTimeout()
+    completionStartedRef.current = true
 
     await onComplete({
       code,
       phoneNumberId,
       wabaId,
+      businessId,
     })
 
     return true
@@ -753,6 +758,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 
     signupInfoRef.current = {}
     authCodeRef.current = ''
+    completionStartedRef.current = false
     clearSignupTimeout()
 
     window.FB.login((response) => {
@@ -774,10 +780,12 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
         const phoneNumberId = signupInfoRef.current.phoneNumberId || ''
         const wabaId = signupInfoRef.current.wabaId || ''
 
-        if (!phoneNumberId || !wabaId) {
+        if (!completionStartedRef.current && (!phoneNumberId || !wabaId)) {
           console.error('WA Embedded Signup completed without required phone or WABA identifiers')
 
-          alert('Meta signup completed but phone number ID / WABA ID was not received. Please click Finish in the Meta popup. If it still fails, check Embedded Signup configuration/session info version.')
+          completeIfReady({}, true).catch((error) => {
+            console.error('Embedded signup backend recovery failed:', error)
+          })
         }
       }, 12000)
     }, {
@@ -870,6 +878,21 @@ const [authChecking, setAuthChecking] = useState(true)
   const [products, setProducts] = useState([])
   const [quotations, setQuotations] = useState([])
   const [orders, setOrders] = useState([])
+    const emptyAutoReplyRuleForm = {
+    name: '',
+    triggerType: 'contains',
+    triggerValue: '',
+    replyText: '',
+    priority: 100,
+    active: true,
+    sendOncePerContact: false,
+  }
+  const [autoReplyRules, setAutoReplyRules] = useState([])
+  const [autoReplyRuleForm, setAutoReplyRuleForm] = useState(emptyAutoReplyRuleForm)
+  const [editingAutoReplyRuleId, setEditingAutoReplyRuleId] = useState('')
+  const [autoReplyRulesLoading, setAutoReplyRulesLoading] = useState(false)
+  const [autoReplyRuleSaving, setAutoReplyRuleSaving] = useState(false)
+  const [autoReplyRuleActionLoading, setAutoReplyRuleActionLoading] = useState('')
   const [tallySettings, setTallySettings] = useState(defaultTallySettings)
   const [tallyLogs, setTallyLogs] = useState([])
   const [tallySaving, setTallySaving] = useState(false)
@@ -1421,6 +1444,7 @@ async function syncTallyOrder(orderId, force = false) {
       ]
       if (canMonitor) {
         calls.push(api.get('/api/users').catch(() => ({ data: [] })))
+        calls.push(api.get('/api/auto-reply-rules', { silentError: true }).catch(() => ({ data: [] })))
         calls.push(api.get('/api/whatsapp/config', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/whatsapp/health', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
@@ -1442,13 +1466,14 @@ const [
         orderRes,
         appSettingsRes,
         usersRes,
+        autoReplyRulesRes,
         whatsappConfigRes,
         whatsappHealthRes,
         auditRes,
-     webhookEventsRes,
-outboundEventsRes,
-optOutContactsRes,
-manageTemplateRes,
+        webhookEventsRes,
+        outboundEventsRes,
+        optOutContactsRes,
+        manageTemplateRes,
       ] = await Promise.all(calls)
 
       if (onboardingRes?.data) setWhatsappOnboarding(onboardingRes.data)
@@ -1476,6 +1501,7 @@ manageTemplateRes,
       })
       setInventoryColumnsText(toCsv(nextSettings.inventoryFields))
       if (usersRes) setUsers(usersRes.data)
+      if (autoReplyRulesRes) setAutoReplyRules(autoReplyRulesRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (whatsappHealthRes) setWhatsappHealth(whatsappHealthRes.data)
       if (auditRes) setAuditEvents(auditRes.data)
@@ -1755,7 +1781,7 @@ function manualOptIn(contact) {
   updateContactOptOut(contact.id, false, cleanProof)
 }
 
-async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
+async function completeEmbeddedSignup({ code, phoneNumberId, wabaId, businessId }) {
   setConnectingWhatsApp(true)
 
   try {
@@ -1763,6 +1789,7 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId }) {
       code,
       phoneNumberId,
       wabaId,
+      businessId,
     })
 
     notify('Meta WhatsApp connected successfully')
@@ -1888,6 +1915,8 @@ const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing']
     setWindowFilter('all')
     setStageFilter('all')
     loadAll({ filter: 'all', windowFilter: 'all', search: '' })
+      } else if (page === 'bot') {
+    loadAutoReplyRules()
   } else if (page === 'inbox') {
     const nextFilter = pageFilter.label || 'all'
     const nextWindowFilter = pageFilter.window || 'all'
@@ -2479,6 +2508,143 @@ async function saveSettingsPayload(form, successMessage = 'Settings saved') {
 async function saveCustomization(event) {
   event.preventDefault()
   await saveSettingsPayload(customForm, 'Customization saved')
+}
+
+async function loadAutoReplyRules() {
+  if (!canMonitor) return
+
+  setAutoReplyRulesLoading(true)
+
+  try {
+    const res = await api.get('/api/auto-reply-rules')
+    setAutoReplyRules(res.data)
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Unable to load auto reply rules'), 'error')
+  } finally {
+    setAutoReplyRulesLoading(false)
+  }
+}
+
+async function saveAutoReplyRule(event) {
+  event.preventDefault()
+
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  const payload = {
+    name: autoReplyRuleForm.name.trim(),
+    triggerType: autoReplyRuleForm.triggerType,
+    triggerValue: autoReplyRuleForm.triggerValue.trim(),
+    replyText: autoReplyRuleForm.replyText.trim(),
+    priority: Number(autoReplyRuleForm.priority || 100),
+    active: Boolean(autoReplyRuleForm.active),
+    sendOncePerContact: Boolean(autoReplyRuleForm.sendOncePerContact),
+  }
+
+  if (!payload.name || payload.name.length < 2) {
+    notify('Rule name is required', 'error')
+    return
+  }
+
+  if (!payload.triggerValue || payload.triggerValue.length < 2) {
+    notify('Trigger text must be at least 2 characters', 'error')
+    return
+  }
+
+  if (!payload.replyText || payload.replyText.length < 2) {
+    notify('Reply text is required', 'error')
+    return
+  }
+
+  setAutoReplyRuleSaving(true)
+
+  try {
+    if (editingAutoReplyRuleId) {
+      await api.patch(`/api/auto-reply-rules/${editingAutoReplyRuleId}`, payload)
+      notify('Auto reply rule updated')
+    } else {
+      await api.post('/api/auto-reply-rules', payload)
+      notify('Auto reply rule created')
+    }
+
+    setAutoReplyRuleForm(emptyAutoReplyRuleForm)
+    setEditingAutoReplyRuleId('')
+    await loadAutoReplyRules()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Auto reply rule save failed'), 'error')
+  } finally {
+    setAutoReplyRuleSaving(false)
+  }
+}
+
+function editAutoReplyRule(rule) {
+  setEditingAutoReplyRuleId(rule.id)
+  setAutoReplyRuleForm({
+    name: rule.name || '',
+    triggerType: rule.trigger_type || 'contains',
+    triggerValue: rule.trigger_value || '',
+    replyText: rule.reply_text || '',
+    priority: rule.priority || 100,
+    active: rule.active !== false,
+    sendOncePerContact: Boolean(rule.send_once_per_contact),
+  })
+  setActivePage('bot')
+}
+
+function cancelAutoReplyRuleEdit() {
+  setEditingAutoReplyRuleId('')
+  setAutoReplyRuleForm(emptyAutoReplyRuleForm)
+}
+
+async function toggleAutoReplyRule(rule) {
+  if (!rule?.id) return
+
+  setAutoReplyRuleActionLoading(rule.id)
+
+  try {
+    await api.patch(`/api/auto-reply-rules/${rule.id}`, {
+      name: rule.name,
+      triggerType: rule.trigger_type,
+      triggerValue: rule.trigger_value,
+      replyText: rule.reply_text,
+      priority: rule.priority,
+      active: !rule.active,
+      sendOncePerContact: Boolean(rule.send_once_per_contact),
+    })
+
+    notify(rule.active ? 'Auto reply rule disabled' : 'Auto reply rule enabled')
+    await loadAutoReplyRules()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Auto reply rule update failed'), 'error')
+  } finally {
+    setAutoReplyRuleActionLoading('')
+  }
+}
+
+async function deleteAutoReplyRule(rule) {
+  if (!rule?.id) return
+
+  const confirmed = window.confirm(`Delete auto reply rule "${rule.name}"?`)
+  if (!confirmed) return
+
+  setAutoReplyRuleActionLoading(rule.id)
+
+  try {
+    await api.delete(`/api/auto-reply-rules/${rule.id}`)
+    notify('Auto reply rule deleted')
+
+    if (editingAutoReplyRuleId === rule.id) {
+      cancelAutoReplyRuleEdit()
+    }
+
+    await loadAutoReplyRules()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Auto reply rule delete failed'), 'error')
+  } finally {
+    setAutoReplyRuleActionLoading('')
+  }
 }
 
 async function sendTestMessage(event) {
@@ -3089,7 +3255,25 @@ async function sendTestMessage(event) {
             <InventoryPage products={products} productForm={productForm} setProductForm={setProductForm} editingProductId={editingProductId} onSave={saveProduct} onEdit={editProduct} onDelete={deleteProduct} onCancel={() => { setEditingProductId(''); setProductForm(emptyProduct) }} productSearch={productSearch} setProductSearch={setProductSearch} onSearch={loadAll} canManage={canMonitor} currency={appSettings.currency} inventoryColumnsText={inventoryColumnsText} setInventoryColumnsText={setInventoryColumnsText} onImport={importProducts} importResult={importResult} />
           </section>
         )}
-        {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage appSettings={appSettings} products={products} drafts={drafts} lowStockProducts={lowStockProducts} onOpenSettings={() => showPage('settings')} />}
+        {!isSuperAdminUser && activePage === 'bot' && <BotStudioPage
+  appSettings={appSettings}
+  products={products}
+  drafts={drafts}
+  lowStockProducts={lowStockProducts}
+  onOpenSettings={() => showPage('settings')}
+  autoReplyRules={autoReplyRules}
+  autoReplyRuleForm={autoReplyRuleForm}
+  setAutoReplyRuleForm={setAutoReplyRuleForm}
+  editingAutoReplyRuleId={editingAutoReplyRuleId}
+  autoReplyRulesLoading={autoReplyRulesLoading}
+  autoReplyRuleSaving={autoReplyRuleSaving}
+  autoReplyRuleActionLoading={autoReplyRuleActionLoading}
+  onSaveAutoReplyRule={saveAutoReplyRule}
+  onEditAutoReplyRule={editAutoReplyRule}
+  onCancelAutoReplyRuleEdit={cancelAutoReplyRuleEdit}
+  onToggleAutoReplyRule={toggleAutoReplyRule}
+  onDeleteAutoReplyRule={deleteAutoReplyRule}
+/>}
         {!isSuperAdminUser && activePage === 'salesWorkspace' && (
           <SalesWorkspacePage
             activeTab={salesWorkspaceTab}

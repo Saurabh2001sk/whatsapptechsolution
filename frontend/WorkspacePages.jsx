@@ -607,7 +607,193 @@ export function DashboardPage({ dashboard, conversations, drafts, products, lowS
   )
 }
 
-export function BotStudioPage({ appSettings, products, drafts, lowStockProducts, onOpenSettings }) {
+export function AutoReplyRulesManager({
+  rules = [],
+  form,
+  setForm,
+  editingId,
+  saving,
+  loading,
+  actionLoadingId,
+  onSave,
+  onEdit,
+  onCancelEdit,
+  onToggle,
+  onDelete,
+}) {
+  const activeRules = rules.filter((rule) => rule.active !== false)
+
+  function patchForm(patch) {
+    setForm((current) => ({ ...current, ...patch }))
+  }
+
+  return (
+    <section className="table-module">
+      <div className="module-title">
+        <Bot size={18} />
+        <h3>Auto Reply Rules</h3>
+      </div>
+
+      <div className="suite-policy-note">
+        Rules reply only after a customer inbound message. Backend still enforces opt-out and WhatsApp 24-hour customer service window.
+      </div>
+
+      <div className="kpi-grid">
+        <button type="button">
+          <strong>{rules.length}</strong>
+          <span>Total Rules</span>
+        </button>
+        <button type="button">
+          <strong>{activeRules.length}</strong>
+          <span>Active Rules</span>
+        </button>
+        <button type="button">
+          <strong>{rules.filter((rule) => rule.send_once_per_contact).length}</strong>
+          <span>Once Per Contact</span>
+        </button>
+        <button type="button">
+          <strong>{loading ? '...' : 'Ready'}</strong>
+          <span>Rule Engine</span>
+        </button>
+      </div>
+
+      <form className="knowledge-form" onSubmit={onSave}>
+        <input
+          placeholder="Rule name, example: Price enquiry auto reply"
+          value={form.name}
+          onChange={(event) => patchForm({ name: event.target.value })}
+        />
+
+        <div className="settings-form-grid compact">
+          <label>
+            Trigger Type
+            <select
+              value={form.triggerType}
+              onChange={(event) => patchForm({ triggerType: event.target.value })}
+            >
+              <option value="contains">Contains</option>
+              <option value="starts_with">Starts with</option>
+              <option value="exact">Exact match</option>
+            </select>
+          </label>
+
+          <label>
+            Trigger Text
+            <input
+              value={form.triggerValue}
+              onChange={(event) => patchForm({ triggerValue: event.target.value })}
+              placeholder="price"
+            />
+          </label>
+
+          <label>
+            Priority
+            <input
+              type="number"
+              min="1"
+              max="10000"
+              value={form.priority}
+              onChange={(event) => patchForm({ priority: event.target.value })}
+            />
+          </label>
+        </div>
+
+        <textarea
+          placeholder="Reply text to send inside the 24-hour customer service window"
+          value={form.replyText}
+          onChange={(event) => patchForm({ replyText: event.target.value.slice(0, 4096) })}
+        />
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={Boolean(form.active)}
+            onChange={(event) => patchForm({ active: event.target.checked })}
+          />
+          Active
+        </label>
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={Boolean(form.sendOncePerContact)}
+            onChange={(event) => patchForm({ sendOncePerContact: event.target.checked })}
+          />
+          Send only once per contact
+        </label>
+
+        <div className="doc-actions">
+          {editingId && (
+            <button type="button" onClick={onCancelEdit} disabled={saving}>
+              Cancel Edit
+            </button>
+          )}
+
+          <button type="submit" disabled={saving}>
+            {saving ? 'Saving...' : editingId ? 'Update Rule' : 'Add Rule'}
+          </button>
+        </div>
+      </form>
+
+      <div className="knowledge-list">
+        {!rules.length && (
+          <EmptyState
+            title="No auto reply rules"
+            text="Add rules like price, catalogue, dispatch, payment, or support keywords."
+          />
+        )}
+
+        {rules.map((rule) => (
+          <div className="knowledge-row" key={rule.id}>
+            <strong>{rule.name}</strong>
+            <span>
+              {rule.trigger_type} &quot;{rule.trigger_value}&quot; | Priority {rule.priority} | {rule.active ? 'Active' : 'Inactive'}
+            </span>
+            <p>{rule.reply_text}</p>
+            <small>
+              {rule.send_once_per_contact ? 'Sends once per contact' : 'Can send every time it matches'}
+              {rule.updated_at ? ` | Updated ${new Date(rule.updated_at).toLocaleString()}` : ''}
+            </small>
+
+            <div className="doc-actions">
+              <button type="button" onClick={() => onEdit(rule)} disabled={Boolean(actionLoadingId)}>
+                Edit
+              </button>
+
+              <button type="button" onClick={() => onToggle(rule)} disabled={actionLoadingId === rule.id}>
+                {actionLoadingId === rule.id ? 'Updating...' : rule.active ? 'Disable' : 'Enable'}
+              </button>
+
+              <button type="button" onClick={() => onDelete(rule)} disabled={actionLoadingId === rule.id}>
+                {actionLoadingId === rule.id ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+export function BotStudioPage({
+  appSettings,
+  products,
+  drafts,
+  lowStockProducts,
+  onOpenSettings,
+  autoReplyRules,
+  autoReplyRuleForm,
+  setAutoReplyRuleForm,
+  editingAutoReplyRuleId,
+  autoReplyRulesLoading,
+  autoReplyRuleSaving,
+  autoReplyRuleActionLoading,
+  onSaveAutoReplyRule,
+  onEditAutoReplyRule,
+  onCancelAutoReplyRuleEdit,
+  onToggleAutoReplyRule,
+  onDeleteAutoReplyRule,
+}) {
   const activeProducts = products.filter((item) => item.active !== false)
   const matchedDrafts = drafts.filter((item) => item.grade || item.size || item.shape || item.quantity)
   const flow = [
@@ -652,6 +838,20 @@ export function BotStudioPage({ appSettings, products, drafts, lowStockProducts,
           <div className="module-title"><Shield size={18} /><h3>Sales Handoff Rules</h3></div>
           <div className="mini-row"><strong>Always handoff when:</strong><span>Complaint, urgent keyword, no stock, unclear product, expired 24h reply window, or order exception.</span></div>
         </section>
+                <AutoReplyRulesManager
+          rules={autoReplyRules}
+          form={autoReplyRuleForm}
+          setForm={setAutoReplyRuleForm}
+          editingId={editingAutoReplyRuleId}
+          loading={autoReplyRulesLoading}
+          saving={autoReplyRuleSaving}
+          actionLoadingId={autoReplyRuleActionLoading}
+          onSave={onSaveAutoReplyRule}
+          onEdit={onEditAutoReplyRule}
+          onCancelEdit={onCancelAutoReplyRuleEdit}
+          onToggle={onToggleAutoReplyRule}
+          onDelete={onDeleteAutoReplyRule}
+        />
       </div>
     </section>
   )

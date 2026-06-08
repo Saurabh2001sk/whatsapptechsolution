@@ -1463,6 +1463,226 @@ app.get('/api/whatsapp/onboarding', requireAuth, asyncHandler(async (req, res) =
   });
 }));
 
+function createSignupResolutionError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  error.publicMessage = message;
+  return error;
+}
+
+function normalizeMetaSignupId(value) {
+  return String(value || '').trim();
+}
+
+function addMetaPhoneCandidate(candidates, waba, phone) {
+  const wabaId = normalizeMetaSignupId(waba?.id || waba);
+  const phoneNumberId = normalizeMetaSignupId(phone?.id || phone);
+
+  if (!wabaId || !phoneNumberId) return;
+
+  const key = `${wabaId}:${phoneNumberId}`;
+
+  if (candidates.has(key)) return;
+
+  candidates.set(key, {
+    wabaId,
+    phoneNumberId,
+    displayPhoneNumber: phone?.display_phone_number || phone?.verified_name || '',
+  });
+}
+
+async function fetchMetaPhoneNumbersForWaba({ apiVersion, accessToken, wabaId }) {
+  const response = await axios.get(
+    `https://graph.facebook.com/${apiVersion}/${wabaId}/phone_numbers`,
+    {
+      params: {
+        fields: 'id,display_phone_number,verified_name',
+        limit: 100,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      timeout: 15000,
+    },
+  );
+
+  return Array.isArray(response.data?.data) ? response.data.data : [];
+}
+
+async function addMetaBusinessWabaPhoneCandidates({ apiVersion, accessToken, businessId, candidates }) {
+  if (!businessId) return;
+
+  const edges = ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts'];
+
+  for (const edge of edges) {
+    try {
+      const response = await axios.get(
+        `https://graph.facebook.com/${apiVersion}/${businessId}/${edge}`,
+        {
+          params: {
+            fields: 'id,name,phone_numbers.limit(100){id,display_phone_number,verified_name}',
+            limit: 100,
+          },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          timeout: 15000,
+        },
+      );
+
+      for (const waba of response.data?.data || []) {
+        for (const phone of waba.phone_numbers?.data || []) {
+          addMetaPhoneCandidate(candidates, waba, phone);
+        }
+      }
+    } catch (error) {
+      console.warn('Meta WABA business lookup skipped:', {
+        businessId: maskValue(businessId),
+        edge,
+        ...safeMetaError(error),
+      });
+    }
+  }
+}
+
+async function addMetaDebugTokenWabaPhoneCandidates({ apiVersion, accessToken, candidates }) {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/${apiVersion}/debug_token`,
+      {
+        params: {
+          input_token: accessToken,
+          access_token: `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`,
+        },
+        timeout: 15000,
+      },
+    );
+
+    const targetIds = new Set();
+
+    for (const scope of response.data?.data?.granular_scopes || []) {
+      if (!String(scope?.scope || '').includes('whatsapp')) continue;
+
+      for (const targetId of scope.target_ids || []) {
+        const cleanTargetId = normalizeMetaSignupId(targetId);
+        if (cleanTargetId) targetIds.add(cleanTargetId);
+      }
+    }
+
+    for (const targetId of targetIds) {
+      try {
+        const phones = await fetchMetaPhoneNumbersForWaba({
+          apiVersion,
+          accessToken,
+          wabaId: targetId,
+        });
+
+        for (const phone of phones) {
+          addMetaPhoneCandidate(candidates, { id: targetId }, phone);
+        }
+      } catch (error) {
+        console.warn('Meta debug token target lookup skipped:', {
+          targetId: maskValue(targetId),
+          ...safeMetaError(error),
+        });
+      }
+    }
+  } catch (error) {
+    console.warn('Meta debug token lookup skipped:', safeMetaError(error));
+  }
+}
+
+async function resolveEmbeddedSignupAccount({ apiVersion, accessToken, phoneNumberId, wabaId, businessId }) {
+  const candidates = new Map();
+  const cleanPhoneNumberId = normalizeMetaSignupId(phoneNumberId);
+  const cleanWabaId = normalizeMetaSignupId(wabaId);
+  const cleanBusinessId = normalizeMetaSignupId(businessId);
+
+  if (cleanWabaId) {
+    const phones = await fetchMetaPhoneNumbersForWaba({
+      apiVersion,
+      accessToken,
+      wabaId: cleanWabaId,
+    });
+
+    for (const phone of phones) {
+      addMetaPhoneCandidate(candidates, { id: cleanWabaId }, phone);
+    }
+  }
+
+  if ((!cleanPhoneNumberId || !cleanWabaId) && cleanBusinessId) {
+    await addMetaBusinessWabaPhoneCandidates({
+      apiVersion,
+      accessToken,
+      businessId: cleanBusinessId,
+      candidates,
+    });
+  }
+
+  if (!cleanPhoneNumberId || !cleanWabaId) {
+    await addMetaDebugTokenWabaPhoneCandidates({
+      apiVersion,
+      accessToken,
+      candidates,
+    });
+  }
+
+  let resolvedPhoneNumberId = cleanPhoneNumberId;
+  let resolvedWabaId = cleanWabaId;
+  let resolvedDisplayPhoneNumber = '';
+
+  if (resolvedPhoneNumberId && resolvedWabaId) {
+    const exactCandidate = [...candidates.values()].find((candidate) => (
+      candidate.phoneNumberId === resolvedPhoneNumberId && candidate.wabaId === resolvedWabaId
+    ));
+
+    if (candidates.size && !exactCandidate) {
+      throw createSignupResolutionError('Meta signup phone number does not belong to the selected WABA. Connection was not saved.');
+    }
+
+    resolvedDisplayPhoneNumber = exactCandidate?.displayPhoneNumber || '';
+  } else if (resolvedPhoneNumberId) {
+    const phoneMatches = [...candidates.values()].filter((candidate) => (
+      candidate.phoneNumberId === resolvedPhoneNumberId
+    ));
+
+    if (phoneMatches.length === 1) {
+      resolvedWabaId = phoneMatches[0].wabaId;
+      resolvedDisplayPhoneNumber = phoneMatches[0].displayPhoneNumber;
+    } else if (phoneMatches.length > 1) {
+      throw createSignupResolutionError('Meta returned multiple WABAs for this phone number. Please select the phone again in Embedded Signup.');
+    }
+  } else if (resolvedWabaId) {
+    const wabaMatches = [...candidates.values()].filter((candidate) => (
+      candidate.wabaId === resolvedWabaId
+    ));
+
+    if (wabaMatches.length === 1) {
+      resolvedPhoneNumberId = wabaMatches[0].phoneNumberId;
+      resolvedDisplayPhoneNumber = wabaMatches[0].displayPhoneNumber;
+    } else if (wabaMatches.length > 1) {
+      throw createSignupResolutionError('Meta returned multiple phone numbers for this WABA. Please select the phone again in Embedded Signup.');
+    }
+  } else if (candidates.size === 1) {
+    const onlyCandidate = [...candidates.values()][0];
+    resolvedPhoneNumberId = onlyCandidate.phoneNumberId;
+    resolvedWabaId = onlyCandidate.wabaId;
+    resolvedDisplayPhoneNumber = onlyCandidate.displayPhoneNumber;
+  } else if (candidates.size > 1) {
+    throw createSignupResolutionError('Meta returned multiple WhatsApp phone numbers. Please select one phone number in Embedded Signup and click Finish.');
+  }
+
+  if (!resolvedPhoneNumberId || !resolvedWabaId) {
+    throw createSignupResolutionError('Meta signup completed, but the WhatsApp phone number ID / WABA ID could not be verified from Meta.');
+  }
+
+  return {
+    phoneNumberId: resolvedPhoneNumberId,
+    wabaId: resolvedWabaId,
+    displayPhoneNumber: resolvedDisplayPhoneNumber,
+  };
+}
+
 app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
   bucketName: 'embedded-signup-complete',
   maxRequests: 10,
@@ -1473,12 +1693,13 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
   }
 
   const code = String(req.body?.code || '').trim();
-  const phoneNumberId = String(req.body?.phoneNumberId || '').trim();
-  const wabaId = String(req.body?.wabaId || '').trim();
+  let phoneNumberId = String(req.body?.phoneNumberId || '').trim();
+  let wabaId = String(req.body?.wabaId || '').trim();
+  const businessId = String(req.body?.businessId || '').trim();
 
-  if (!code || !phoneNumberId || !wabaId) {
+  if (!code) {
     return res.status(400).json({
-      error: 'Meta signup code, phone number ID and WABA ID are required',
+      error: 'Meta signup code is required',
     });
   }
 
@@ -1510,6 +1731,33 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
     });
   }
 
+  let resolvedAccount;
+
+  try {
+    resolvedAccount = await resolveEmbeddedSignupAccount({
+      apiVersion,
+      accessToken,
+      phoneNumberId,
+      wabaId,
+      businessId,
+    });
+
+    phoneNumberId = resolvedAccount.phoneNumberId;
+    wabaId = resolvedAccount.wabaId;
+  } catch (error) {
+    console.error('Meta signup account resolution failed:', {
+      tenantId: req.user.tenantId,
+      phoneNumberId: maskValue(phoneNumberId),
+      wabaId: maskValue(wabaId),
+      businessId: maskValue(businessId),
+      ...safeMetaError(error),
+    });
+
+    return res.status(error.statusCode || 400).json({
+      error: error.publicMessage || 'Unable to verify WhatsApp Business Account details from Meta signup. Connection was not saved.',
+    });
+  }
+
   let displayPhoneNumber = '';
 
   try {
@@ -1533,6 +1781,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
     }
 
     displayPhoneNumber = phoneRes.data?.display_phone_number || phoneRes.data?.verified_name || '';
+    displayPhoneNumber = displayPhoneNumber || resolvedAccount.displayPhoneNumber || '';
   } catch (error) {
     console.error('Meta phone lookup failed:', {
       tenantId: req.user.tenantId,
