@@ -2200,6 +2200,12 @@ html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover {
   padding-inline: 16px;
 }
 
+.suite-inline-actions button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(92, 47, 97, 0.1);
+}
+
 /* Checkbox rows */
 .suite-toggle {
   width: fit-content;

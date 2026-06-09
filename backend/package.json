@@ -18,13 +18,17 @@
     "@aws-sdk/s3-request-presigner": "^3.1057.0",
     "axios": "^1.16.0",
     "bcrypt": "^6.0.0",
+    "bullmq": "^5.78.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "form-data": "^4.0.5",
+    "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

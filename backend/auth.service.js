@@ -7,7 +7,13 @@ function createAuthService({
 }) {
   function signUser(user) {
     return jwt.sign(
-      { id: user.id, tenantId: user.tenant_id, name: user.name, email: user.email, role: user.role },
+      {
+        id: user.id,
+        tenantId: user.tenant_id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
       jwtSecret,
       { expiresIn: '12h' },
     );
@@ -21,6 +27,7 @@ function createAuthService({
       email: user.email,
       role: user.role,
       active: user.active,
+      totpEnabled: Boolean(user.totp_enabled),
     };
   }
 

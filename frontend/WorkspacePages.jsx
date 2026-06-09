@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useEffect, useState } from 'react'
 import {
   Activity,
@@ -8,8 +9,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ClipboardList,
-  Code2,
-  Copy,
   CreditCard,
   FileText,
   Headphones,
@@ -37,7 +36,6 @@ import {
   UserPlus,
   UserRound,
   Users,
-  Wallet,
   X,
 } from 'lucide-react'
 import { api } from './apiClient'
@@ -615,6 +613,7 @@ export function AutoReplyRulesManager({
   saving,
   loading,
   actionLoadingId,
+  canManage = true,
   onSave,
   onEdit,
   onCancelEdit,
@@ -636,6 +635,7 @@ export function AutoReplyRulesManager({
 
       <div className="suite-policy-note">
         Rules reply only after a customer inbound message. Backend still enforces opt-out and WhatsApp 24-hour customer service window.
+        {!canManage && ' Admin access is required to change rules.'}
       </div>
 
       <div className="kpi-grid">
@@ -662,6 +662,7 @@ export function AutoReplyRulesManager({
           placeholder="Rule name, example: Price enquiry auto reply"
           value={form.name}
           onChange={(event) => patchForm({ name: event.target.value })}
+          disabled={!canManage}
         />
 
         <div className="settings-form-grid compact">
@@ -670,6 +671,7 @@ export function AutoReplyRulesManager({
             <select
               value={form.triggerType}
               onChange={(event) => patchForm({ triggerType: event.target.value })}
+              disabled={!canManage}
             >
               <option value="contains">Contains</option>
               <option value="starts_with">Starts with</option>
@@ -683,6 +685,7 @@ export function AutoReplyRulesManager({
               value={form.triggerValue}
               onChange={(event) => patchForm({ triggerValue: event.target.value })}
               placeholder="price"
+              disabled={!canManage}
             />
           </label>
 
@@ -694,6 +697,7 @@ export function AutoReplyRulesManager({
               max="10000"
               value={form.priority}
               onChange={(event) => patchForm({ priority: event.target.value })}
+              disabled={!canManage}
             />
           </label>
         </div>
@@ -702,6 +706,7 @@ export function AutoReplyRulesManager({
           placeholder="Reply text to send inside the 24-hour customer service window"
           value={form.replyText}
           onChange={(event) => patchForm({ replyText: event.target.value.slice(0, 4096) })}
+          disabled={!canManage}
         />
 
         <label className="toggle-row">
@@ -709,6 +714,7 @@ export function AutoReplyRulesManager({
             type="checkbox"
             checked={Boolean(form.active)}
             onChange={(event) => patchForm({ active: event.target.checked })}
+            disabled={!canManage}
           />
           Active
         </label>
@@ -718,18 +724,19 @@ export function AutoReplyRulesManager({
             type="checkbox"
             checked={Boolean(form.sendOncePerContact)}
             onChange={(event) => patchForm({ sendOncePerContact: event.target.checked })}
+            disabled={!canManage}
           />
           Send only once per contact
         </label>
 
         <div className="doc-actions">
           {editingId && (
-            <button type="button" onClick={onCancelEdit} disabled={saving}>
+            <button type="button" onClick={onCancelEdit} disabled={saving || !canManage}>
               Cancel Edit
             </button>
           )}
 
-          <button type="submit" disabled={saving}>
+          <button type="submit" disabled={saving || !canManage}>
             {saving ? 'Saving...' : editingId ? 'Update Rule' : 'Add Rule'}
           </button>
         </div>
@@ -756,15 +763,15 @@ export function AutoReplyRulesManager({
             </small>
 
             <div className="doc-actions">
-              <button type="button" onClick={() => onEdit(rule)} disabled={Boolean(actionLoadingId)}>
+              <button type="button" onClick={() => onEdit(rule)} disabled={Boolean(actionLoadingId) || !canManage}>
                 Edit
               </button>
 
-              <button type="button" onClick={() => onToggle(rule)} disabled={actionLoadingId === rule.id}>
+              <button type="button" onClick={() => onToggle(rule)} disabled={actionLoadingId === rule.id || !canManage}>
                 {actionLoadingId === rule.id ? 'Updating...' : rule.active ? 'Disable' : 'Enable'}
               </button>
 
-              <button type="button" onClick={() => onDelete(rule)} disabled={actionLoadingId === rule.id}>
+              <button type="button" onClick={() => onDelete(rule)} disabled={actionLoadingId === rule.id || !canManage}>
                 {actionLoadingId === rule.id ? 'Deleting...' : 'Delete'}
               </button>
             </div>
@@ -788,6 +795,7 @@ export function BotStudioPage({
   autoReplyRulesLoading,
   autoReplyRuleSaving,
   autoReplyRuleActionLoading,
+  canManageAutoReplyRules = true,
   onSaveAutoReplyRule,
   onEditAutoReplyRule,
   onCancelAutoReplyRuleEdit,
@@ -846,6 +854,7 @@ export function BotStudioPage({
           loading={autoReplyRulesLoading}
           saving={autoReplyRuleSaving}
           actionLoadingId={autoReplyRuleActionLoading}
+          canManage={canManageAutoReplyRules}
           onSave={onSaveAutoReplyRule}
           onEdit={onEditAutoReplyRule}
           onCancelEdit={onCancelAutoReplyRuleEdit}
@@ -1441,6 +1450,8 @@ export function BulkMessagePage({ templates, contacts }) {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [sendMode, setSendMode] = useState('now')
+  const [scheduledAt, setScheduledAt] = useState('')
 
   const disabledTabs = new Set(['manual', 'filters', 'retargeting'])
 
@@ -1495,6 +1506,11 @@ export function BulkMessagePage({ templates, contacts }) {
     missingConsentRows.length ? `Consent source/proof missing for ${csvPhone(missingConsentRows[0])}` :
     weakProofRows.length ? `Opt-in proof too short for ${csvPhone(weakProofRows[0])}` :
     ''
+  const scheduleDate = scheduledAt ? new Date(scheduledAt) : null
+  const scheduleValidationError =
+    sendMode === 'schedule' && !scheduledAt ? 'Choose a future schedule time.' :
+    sendMode === 'schedule' && Number.isNaN(scheduleDate?.getTime()) ? 'Choose a valid schedule time.' :
+    ''
 
   async function uploadCsv(event) {
     const file = event.target.files?.[0]
@@ -1506,7 +1522,7 @@ export function BulkMessagePage({ templates, contacts }) {
     try {
       const parsedRows = parseCsv(await file.text())
       setRows(parsedRows)
-    } catch (err) {
+    } catch {
       setRows([])
       setError('CSV file could not be read. Please upload a valid CSV file.')
     } finally {
@@ -1535,8 +1551,20 @@ export function BulkMessagePage({ templates, contacts }) {
       return
     }
 
+    const scheduleSubmitError = scheduleValidationError ||
+      (sendMode === 'schedule' && scheduleDate.getTime() <= Date.now() ? 'Schedule time must be in the future.' : '')
+
+    if (scheduleSubmitError) {
+      setError(scheduleSubmitError)
+      return
+    }
+
+    const actionText = sendMode === 'schedule'
+      ? `schedule this WhatsApp template campaign for ${scheduleDate.toLocaleString()}`
+      : 'send this WhatsApp template campaign now'
+
     const confirmed = window.confirm(
-      `Send this WhatsApp template campaign now?\n\nCampaign: ${campaignName.trim()}\nTemplate: ${selectedTemplate.name}\nRecipients: ${matchedRows.length}\n\nOnly opted-in tenant contacts will be sent.`
+      `Confirm to ${actionText}?\n\nCampaign: ${campaignName.trim()}\nTemplate: ${selectedTemplate.name}\nRecipients: ${matchedRows.length}\n\nOnly opted-in tenant contacts will be sent.`
     )
 
     if (!confirmed) return
@@ -1554,8 +1582,8 @@ export function BulkMessagePage({ templates, contacts }) {
         templateName: selectedTemplate.name,
         language: selectedTemplate.language || 'en',
         rows: safeRows,
-        sendNow: true,
-        scheduledAt: null,
+        sendNow: sendMode === 'now',
+        scheduledAt: sendMode === 'schedule' ? scheduleDate.toISOString() : null,
       })
 
       setResult(res.data)
@@ -1639,6 +1667,43 @@ export function BulkMessagePage({ templates, contacts }) {
           <div className="suite-inline-actions">
             <button
               type="button"
+              className={sendMode === 'now' ? 'active' : ''}
+              disabled={activeTab !== 'csv'}
+              onClick={() => {
+                setSendMode('now')
+                setError('')
+              }}
+            >
+              <Send size={16} /> Send Now
+            </button>
+            <button
+              type="button"
+              className={sendMode === 'schedule' ? 'active' : ''}
+              disabled={activeTab !== 'csv'}
+              onClick={() => {
+                setSendMode('schedule')
+                setError('')
+              }}
+            >
+              <CalendarClock size={16} /> Schedule
+            </button>
+          </div>
+
+          {sendMode === 'schedule' && (
+            <label>
+              <span className="required">*</span> Schedule Time
+              <input
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={(event) => setScheduledAt(event.target.value)}
+                disabled={activeTab !== 'csv'}
+              />
+            </label>
+          )}
+
+          <div className="suite-inline-actions">
+            <button
+              type="button"
               disabled={activeTab !== 'csv'}
               onClick={() => downloadCsv(
                 'bulk-message-template.csv',
@@ -1666,10 +1731,6 @@ export function BulkMessagePage({ templates, contacts }) {
           )}
 
           <div className="suite-policy-note">
-            Schedule and drip are intentionally locked until the queue worker is connected. Use Send Campaign now.
-          </div>
-
-          <div className="suite-policy-note">
             Meta safety: campaign sends only to existing tenant contacts with consent proof. Unknown and opted-out contacts are blocked before sending.
           </div>
 
@@ -1681,16 +1742,17 @@ export function BulkMessagePage({ templates, contacts }) {
               <span>
                 Total {result.summary.total} - Sent {result.summary.sent} - Failed {result.summary.failed} - Skipped {result.summary.skipped}
               </span>
+              {result.queue?.status && <span>Queue status: {result.queue.status}</span>}
             </div>
           )}
 
           <button
             className="suite-primary-button"
             type="button"
-            disabled={submitting || activeTab !== 'csv' || !campaignName.trim() || !selectedTemplate || !rows.length || Boolean(csvValidationError) || !matchedRows.length}
+            disabled={submitting || activeTab !== 'csv' || !campaignName.trim() || !selectedTemplate || !rows.length || Boolean(csvValidationError) || Boolean(scheduleValidationError) || !matchedRows.length}
             onClick={submitCampaign}
           >
-            {submitting ? 'Submitting...' : 'Send Campaign'}
+            {submitting ? 'Submitting...' : sendMode === 'schedule' ? 'Schedule Campaign' : 'Send Campaign'}
           </button>
         </div>
 
@@ -1725,7 +1787,7 @@ export function CannedMessagePage({
     setTemplateName(event.target.value)
   }
 
-  function handleTabClick(id, label) {
+  function handleTabClick(id) {
     setTab(id)
 
     if (disabledTabs.has(id)) {
@@ -2132,6 +2194,8 @@ export function TallyIntegrationPage({
   const isAdmin = userRole === 'admin'
 
   useEffect(() => {
+    // Settings props hydrate this local editable form.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(settings)
   }, [settings])
 
@@ -2593,6 +2657,8 @@ export function KnowledgeBaseManager() {
   }
 
   useEffect(() => {
+    // Knowledge base rows are fetched once when this manager mounts.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadKnowledge().catch(() => setMessage('Unable to load knowledge base'))
   }, [])
 
@@ -2764,14 +2830,15 @@ export function SettingsPage({
   const voiceWeeklyHours = normalizeVoiceWeeklyHours(customForm.voiceWeeklyHours)
   const unavailableHours = Array.isArray(customForm.voiceUnavailableHours) ? customForm.voiceUnavailableHours : []
 
-  const settingsTabs = [
-    { id: 'profile', label: 'Profile' },
-    { id: 'agents', label: 'Agents and Permissions' },
-    { id: 'waba', label: 'WABA Settings' },
-    { id: 'billing', label: 'Billing & GST Details' },
-    { id: 'voice', label: 'Voice Call Settings' },
-    { id: 'inbox', label: 'Inbox Settings' },
-  ]
+const settingsTabs = [
+  { id: 'profile', label: 'Profile' },
+  { id: 'agents', label: 'Agents and Permissions' },
+  { id: 'waba', label: 'WABA Settings' },
+  { id: 'billing', label: 'Billing & GST Details' },
+  { id: 'usage', label: 'Usage & Limits' },
+  { id: 'voice', label: 'Voice Call Settings' },
+  { id: 'inbox', label: 'Inbox Settings' },
+]
 
   function patchForm(patch) {
     setCustomForm({ ...customForm, ...patch })
@@ -3138,6 +3205,36 @@ export function SettingsPage({
           {settingsSaved && <small className="success-text">{settingsSaved}</small>}
         </form>
       )}
+
+      {activeSettingsTab === 'usage' && (
+  <section className="settings-card">
+    <div className="settings-card-title">
+      <h3>Usage & Limits</h3>
+    </div>
+
+    <div className="settings-role-grid">
+      <div>
+        <strong>Contacts</strong>
+        <span>Usage metrics will appear here</span>
+      </div>
+
+      <div>
+        <strong>Messages</strong>
+        <span>Usage metrics will appear here</span>
+      </div>
+
+      <div>
+        <strong>Campaigns</strong>
+        <span>Usage metrics will appear here</span>
+      </div>
+
+      <div>
+        <strong>Storage</strong>
+        <span>Usage metrics will appear here</span>
+      </div>
+    </div>
+  </section>
+)}
 
       {activeSettingsTab === 'voice' && (
         <form className="voice-settings-form" onSubmit={saveVoiceSettings}>

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useEffect, useState } from 'react'
 import { api, apiBaseUrl } from './apiClient'
 
@@ -11,11 +12,9 @@ export function mediaSrc(url) {
 }
 
 export function ProtectedImage({ url, alt }) {
-  const [src, setSrc] = useState('')
+  const [media, setMedia] = useState({ url: '', src: '' })
 
   useEffect(() => {
-    setSrc('')
-
     if (!url) return undefined
 
    if (!isSafeWhatsAppMediaUrl(url)) {
@@ -29,10 +28,10 @@ export function ProtectedImage({ url, alt }) {
       .then((res) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(res.data)
-        setSrc(objectUrl)
+        setMedia({ url, src: objectUrl })
       })
       .catch(() => {
-        if (!cancelled) setSrc('')
+        if (!cancelled) setMedia({ url, src: '' })
       })
 
     return () => {
@@ -41,7 +40,7 @@ export function ProtectedImage({ url, alt }) {
     }
   }, [url])
 
-const displaySrc = src
+const displaySrc = media.url === url ? media.src : ''
 
   if (!displaySrc) return <span>Loading media...</span>
 
@@ -49,11 +48,9 @@ const displaySrc = src
 }
 
 export function ProtectedMedia({ url, type, className, title }) {
-  const [src, setSrc] = useState('')
+  const [media, setMedia] = useState({ url: '', src: '' })
 
   useEffect(() => {
-    setSrc('')
-
     if (!url || !isSafeWhatsAppMediaUrl(url)) return undefined
 
     let objectUrl = ''
@@ -63,10 +60,10 @@ export function ProtectedMedia({ url, type, className, title }) {
       .then((res) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(res.data)
-        setSrc(objectUrl)
+        setMedia({ url, src: objectUrl })
       })
       .catch(() => {
-        if (!cancelled) setSrc('')
+        if (!cancelled) setMedia({ url, src: '' })
       })
 
     return () => {
@@ -75,14 +72,16 @@ export function ProtectedMedia({ url, type, className, title }) {
     }
   }, [url])
 
-  if (!src) return <span>Loading media...</span>
+  const displaySrc = media.url === url ? media.src : ''
+
+  if (!displaySrc) return <span>Loading media...</span>
 
   if (type === 'video') {
-    return <video className={className} src={src} controls preload="metadata" title={title || 'WhatsApp video'} />
+    return <video className={className} src={displaySrc} controls preload="metadata" title={title || 'WhatsApp video'} />
   }
 
   if (type === 'audio') {
-    return <audio className={className} src={src} controls preload="metadata" title={title || 'WhatsApp audio'} />
+    return <audio className={className} src={displaySrc} controls preload="metadata" title={title || 'WhatsApp audio'} />
   }
 
   return null

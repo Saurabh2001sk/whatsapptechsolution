@@ -152,7 +152,11 @@ function registerWhatsAppRoutes(app, ctx) {
     isCustomerQuoteRejectText,
     findLatestCustomerSentQuote,
     sendCustomerQuoteSystemReply,
+    enqueueWebhookEvent,
+    webhookQueueAvailable,
     handleCustomerQuoteInbound,
+    assertTenantLimit,
+    getTenantLimits,
   } = ctx;
 
 app.get('/webhook', (req, res) => {
@@ -391,6 +395,22 @@ app.post('/webhook', rateLimit({
 
   res.sendStatus(200);
 
+  if (
+    webhookQueueAvailable
+    && typeof enqueueWebhookEvent === 'function'
+  ) {
+    try {
+      await enqueueWebhookEvent({
+        webhookEventId: webhookEvent.id,
+        tenantId: webhookEvent.tenant_id,
+      });
+
+      return;
+    } catch (error) {
+      console.error('Webhook queue enqueue failed:', safeErrorLog(error));
+    }
+  }
+
   setImmediate(async () => {
     try {
       await markWebhookEventProcessing(webhookEvent.id, webhookEvent.tenant_id);
@@ -621,6 +641,12 @@ app.post('/api/users', rateLimit({
   if (!isStrongPassword(cleanPassword)) {
     return res.status(400).json({ error: strongPasswordError() });
   }
+
+  await assertTenantLimit({
+  tenantId: req.user.tenantId,
+  resource: 'users',
+  add: 1,
+});
 
   const existingUser = await query(
     `SELECT id, tenant_id
@@ -1058,6 +1084,40 @@ app.post('/api/system/maintenance', rateLimit({
   res.json({
     ok: true,
     ...result,
+  });
+}));
+
+app.get('/api/tenant/usage', requireAuth, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const limits = await getTenantLimits(req.user.tenantId);
+
+  const [users, contacts, templates, products, outboundToday] = await Promise.all([
+    query(`SELECT COUNT(*)::int AS count FROM users WHERE tenant_id = $1 AND active = true`, [req.user.tenantId]),
+    query(`SELECT COUNT(*)::int AS count FROM contacts WHERE tenant_id = $1`, [req.user.tenantId]),
+    query(`SELECT COUNT(*)::int AS count FROM whatsapp_templates WHERE tenant_id = $1`, [req.user.tenantId]),
+    query(`SELECT COUNT(*)::int AS count FROM products WHERE tenant_id = $1`, [req.user.tenantId]),
+    query(
+      `SELECT COUNT(*)::int AS count
+       FROM outbound_messages
+       WHERE tenant_id = $1
+         AND created_at >= now() - interval '24 hours'`,
+      [req.user.tenantId],
+    ),
+  ]);
+
+  res.json({
+    plan: limits.plan,
+    limits,
+    usage: {
+      users: users.rows[0]?.count || 0,
+      contacts: contacts.rows[0]?.count || 0,
+      templates: templates.rows[0]?.count || 0,
+      products: products.rows[0]?.count || 0,
+      outboundMessagesToday: outboundToday.rows[0]?.count || 0,
+    },
   });
 }));
 
@@ -1504,6 +1564,7 @@ app.post('/api/outbound-messages/retry-failed', rateLimit({
      FROM outbound_messages
      WHERE tenant_id = $1
        AND status = 'failed'
+       AND retryable = true
        AND attempts < $2
      ORDER BY updated_at ASC
      LIMIT $3`,
@@ -1669,9 +1730,11 @@ app.post('/api/outbound-messages/retry-failed', rateLimit({
   });
 }));
 
-// =========================================================
-// ROUTES — DASHBOARD
-// =========================================================
+  ctx.processWhatsAppWebhookPayload = processWhatsAppWebhookPayload;
+  ctx.markWebhookEventProcessing = markWebhookEventProcessing;
+  ctx.markWebhookEventProcessed = markWebhookEventProcessed;
+  ctx.markWebhookEventFailed = markWebhookEventFailed;
+
 }
 
 module.exports = {

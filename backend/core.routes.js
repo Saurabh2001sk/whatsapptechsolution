@@ -22,6 +22,8 @@ function registerCoreRoutes(app, ctx) {
     encryptSecret,
     decryptSecret,
     safeMetaError,
+    createTotpEnrollment,
+    verifyTotp,
     safeErrorLog,
     cleanList,
     WEEK_DAYS,
@@ -157,6 +159,31 @@ function registerCoreRoutes(app, ctx) {
 
     const ALLOWED_TENANT_PLANS = new Set(['starter', 'growth', 'business', 'enterprise', 'internal']);
   const ALLOWED_TENANT_STATUSES = new Set(['active', 'inactive', 'suspended']);
+
+    function signTotpLoginChallenge(user) {
+    return signUser({
+      id: user.id,
+      tenant_id: user.tenant_id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      totp_challenge: true,
+    });
+  }
+
+  function verifyTotpLoginChallenge(token) {
+    try {
+      const decoded = require('jsonwebtoken').verify(String(token || ''), jwtSecret);
+
+      if (!decoded?.id || !decoded?.tenantId || decoded?.totp_challenge !== true) {
+        return null;
+      }
+
+      return decoded;
+    } catch (error) {
+      return null;
+    }
+  }
 
   function cleanPlatformText(value = '', maxLength = 120) {
     return String(value || '').trim().slice(0, maxLength);
@@ -302,14 +329,18 @@ app.post('/api/auth/login', rateLimit({
 
   const result = await query(
     `SELECT
-       users.id,
-       users.tenant_id,
-       users.name,
-       users.email,
-       users.password_hash,
-       users.role,
-       users.active,
-       tenants.status AS tenant_status
+  users.id,
+  users.tenant_id,
+  users.name,
+  users.email,
+  users.password_hash,
+  users.role,
+  users.active,
+  users.totp_enabled,
+  users.totp_secret_encrypted,
+  users.totp_secret_iv,
+  users.totp_secret_tag,
+  tenants.status AS tenant_status
      FROM users
      JOIN tenants ON tenants.id = users.tenant_id
      WHERE lower(users.email) = $1
@@ -334,23 +365,34 @@ app.post('/api/auth/login', rateLimit({
     return res.status(403).json({ error: 'Company account is inactive' });
   }
 
-  await recordAudit({
-    tenantId: user.tenant_id,
-    actorUserId: user.id,
-    action: 'auth.login',
-    entityType: 'user',
-    entityId: user.id,
-    metadata: {
-      email: maskEmail(user.email),
-      role: user.role,
-    },
-  });
-
-  setAuthCookie(res, user);
-
+if (
+  user.role === 'admin'
+  && user.totp_enabled
+) {
   return res.json({
-    user: publicUser(user),
+    requiresTotp: true,
+    totpChallenge: signTotpLoginChallenge(user),
   });
+}
+
+await recordAudit({
+  tenantId: user.tenant_id,
+  actorUserId: user.id,
+  action: 'auth.login',
+  entityType: 'user',
+  entityId: user.id,
+  metadata: {
+    email: maskEmail(user.email),
+    role: user.role,
+    totpEnabled: Boolean(user.totp_enabled),
+  },
+});
+
+setAuthCookie(res, user);
+
+return res.json({
+  user: publicUser(user),
+});
 }));
 
 app.post('/api/auth/register', rateLimit({
@@ -446,6 +488,271 @@ app.post('/api/auth/register', rateLimit({
 }));
 
 app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
+
+app.post('/api/auth/totp/setup', requireAuth, rateLimit({
+  bucketName: 'totp-setup',
+  maxRequests: 10,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const userResult = await query(
+    `SELECT id, tenant_id, email, role, totp_enabled
+     FROM users
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.user.id, req.user.tenantId],
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (user.totp_enabled) {
+    return res.status(400).json({ error: '2FA is already enabled' });
+  }
+
+  const enrollment = await createTotpEnrollment(user.email);
+  const encryptedSecret = encryptSecret(enrollment.secret);
+
+  await query(
+    `UPDATE users
+     SET totp_secret_encrypted = $3,
+         totp_secret_iv = $4,
+         totp_secret_tag = $5
+     WHERE id = $1
+       AND tenant_id = $2`,
+    [
+      user.id,
+      user.tenant_id,
+      encryptedSecret.encrypted,
+      encryptedSecret.iv,
+      encryptedSecret.tag,
+    ],
+  );
+
+  await recordAudit({
+    tenantId: user.tenant_id,
+    actorUserId: user.id,
+    action: 'admin.totp_setup_started',
+    entityType: 'user',
+    entityId: user.id,
+  });
+
+  return res.json({
+    qrCodeDataUrl: enrollment.qrCodeDataUrl,
+  });
+}));
+
+app.post('/api/auth/totp/enable', requireAuth, rateLimit({
+  bucketName: 'totp-enable',
+  maxRequests: 10,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const token = String(req.body?.token || '');
+
+  const userResult = await query(
+    `SELECT *
+     FROM users
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.user.id, req.user.tenantId],
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (!user.totp_secret_encrypted || !user.totp_secret_iv || !user.totp_secret_tag) {
+    return res.status(400).json({ error: 'Start 2FA setup first' });
+  }
+
+  const secret = decryptSecret({
+    encrypted: user.totp_secret_encrypted,
+    iv: user.totp_secret_iv,
+    tag: user.totp_secret_tag,
+  });
+
+  if (!verifyTotp(secret, token)) {
+    await recordAudit({
+      tenantId: user.tenant_id,
+      actorUserId: user.id,
+      action: 'admin.totp_enable_failed',
+      entityType: 'user',
+      entityId: user.id,
+    });
+
+    return res.status(401).json({ error: 'Invalid code' });
+  }
+
+  const updatedResult = await query(
+    `UPDATE users
+     SET totp_enabled = true,
+         totp_enabled_at = now()
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, tenant_id, name, email, role, active, totp_enabled`,
+    [user.id, user.tenant_id],
+  );
+
+  await recordAudit({
+    tenantId: user.tenant_id,
+    actorUserId: user.id,
+    action: 'admin.totp_enabled',
+    entityType: 'user',
+    entityId: user.id,
+  });
+
+  return res.json({
+    ok: true,
+    user: publicUser(updatedResult.rows[0]),
+  });
+}));
+
+app.post('/api/auth/totp/login', rateLimit({
+  bucketName: 'totp-login',
+  maxRequests: 15,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  const challenge = verifyTotpLoginChallenge(req.body?.totpChallenge);
+  const token = String(req.body?.token || '');
+
+  if (!challenge) {
+    return res.status(401).json({
+      error: 'Invalid or expired 2FA challenge',
+    });
+  }
+
+  const result = await query(
+    `SELECT *
+     FROM users
+     WHERE id = $1
+       AND tenant_id = $2
+       AND active = true
+     LIMIT 1`,
+    [challenge.id, challenge.tenantId],
+  );
+
+  const user = result.rows[0];
+
+  if (!user || !user.totp_enabled) {
+    return res.status(400).json({
+      error: '2FA not enabled',
+    });
+  }
+
+  const secret = decryptSecret({
+    encrypted: user.totp_secret_encrypted,
+    iv: user.totp_secret_iv,
+    tag: user.totp_secret_tag,
+  });
+
+  const valid = verifyTotp(secret, token);
+
+  if (!valid) {
+    await recordAudit({
+      tenantId: user.tenant_id,
+      actorUserId: user.id,
+      action: 'admin.totp_login_failed',
+      entityType: 'user',
+      entityId: user.id,
+    });
+
+    return res.status(401).json({
+      error: 'Invalid code',
+    });
+  }
+
+  await recordAudit({
+    tenantId: user.tenant_id,
+    actorUserId: user.id,
+    action: 'admin.totp_login_success',
+    entityType: 'user',
+    entityId: user.id,
+  });
+
+  setAuthCookie(res, user);
+
+  return res.json({
+    success: true,
+    user: publicUser(user),
+  });
+}));
+
+app.post('/api/auth/totp/disable', requireAuth, rateLimit({
+  bucketName: 'totp-disable',
+  maxRequests: 10,
+  windowMs: 15 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  const token = String(req.body?.token || '');
+
+  const userResult = await query(
+    `SELECT *
+     FROM users
+     WHERE id = $1
+       AND tenant_id = $2
+     LIMIT 1`,
+    [req.user.id, req.user.tenantId],
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user || !user.totp_enabled) {
+    return res.status(400).json({ error: '2FA is not enabled' });
+  }
+
+  const secret = decryptSecret({
+    encrypted: user.totp_secret_encrypted,
+    iv: user.totp_secret_iv,
+    tag: user.totp_secret_tag,
+  });
+
+  if (!verifyTotp(secret, token)) {
+    return res.status(401).json({ error: 'Invalid code' });
+  }
+
+  const updatedResult = await query(
+    `UPDATE users
+     SET totp_enabled = false,
+         totp_enabled_at = NULL,
+         totp_secret_encrypted = NULL,
+         totp_secret_iv = NULL,
+         totp_secret_tag = NULL
+     WHERE id = $1
+       AND tenant_id = $2
+     RETURNING id, tenant_id, name, email, role, active, totp_enabled`,
+    [user.id, user.tenant_id],
+  );
+
+  await recordAudit({
+    tenantId: user.tenant_id,
+    actorUserId: user.id,
+    action: 'admin.totp_disabled',
+    entityType: 'user',
+    entityId: user.id,
+  });
+
+  return res.json({
+    ok: true,
+    user: publicUser(updatedResult.rows[0]),
+  });
+}));
 
 app.post('/api/auth/logout', (req, res) => {
   clearAuthCookie(res);
@@ -1636,7 +1943,7 @@ async function resolveEmbeddedSignupAccount({ apiVersion, accessToken, phoneNumb
       candidate.phoneNumberId === resolvedPhoneNumberId && candidate.wabaId === resolvedWabaId
     ));
 
-    if (candidates.size && !exactCandidate) {
+    if (!exactCandidate) {
       throw createSignupResolutionError('Meta signup phone number does not belong to the selected WABA. Connection was not saved.');
     }
 

@@ -159,6 +159,7 @@ function registerCrmRoutes(app, ctx) {
     findLatestCustomerSentQuote,
     sendCustomerQuoteSystemReply,
     handleCustomerQuoteInbound,
+    assertTenantLimit,
   } = ctx;
 
 function cleanAutoReplyText(value = '', maxLength = 1000) {
@@ -193,8 +194,8 @@ app.post('/api/auto-reply-rules', requireAuth, rateLimit({
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
 }), asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
   }
 
   const name = cleanAutoReplyText(req.body?.name, 120);
@@ -264,8 +265,8 @@ app.patch('/api/auto-reply-rules/:id', requireAuth, rateLimit({
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
 }), asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
   }
 
   const existingResult = await query(
@@ -375,8 +376,8 @@ app.delete('/api/auto-reply-rules/:id', requireAuth, rateLimit({
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
 }), asyncHandler(async (req, res) => {
-  if (!canMonitor(req.user)) {
-    return res.status(403).json({ error: 'Manager/Admin only' });
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
   }
 
   const result = await query(
@@ -1437,6 +1438,12 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   if (cleanBody.length > 1000) {
     return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
   }
+
+  await assertTenantLimit({
+  tenantId: req.user.tenantId,
+  resource: 'templates',
+  add: 1,
+});
 
   const result = await query(
     `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active, category, meta_status)

@@ -16,6 +16,9 @@ const rateLimit = require('./rateLimit');
 const { createAuthService } = require('./auth.service');
 const { createTenantService } = require('./tenant.service');
 const { createAuditService } = require('./audit.service');
+const { createTenantLimitsService } = require('./tenantLimits.service');
+const { createOutboundQueueTools, isOutboundQueueConfigured } = require('./outbound.queue');
+const { createWebhookQueueTools, isWebhookQueueConfigured } = require('./webhook.queue');
 const {
   maskValue,
   maskEmail,
@@ -39,12 +42,17 @@ const {
   cleanUnavailableHours,
 } = require('./common');
 const { registerCoreRoutes } = require('./core.routes');
+const {
+  createTotpEnrollment,
+  verifyTotp,
+} = require('./totp.service');
 const { registerWhatsAppRoutes } = require('./whatsapp.routes');
 const { registerCrmRoutes } = require('./crm.routes');
 const { registerSalesRoutes } = require('./sales.routes');
 const { registerCampaignRoutes } = require('./campaign.routes');
 const { registerTallyRoutes } = require('./tally.routes');
 const { createMediaStorage } = require('./media.storage');
+const { createCampaignQueueTools, isCampaignQueueConfigured } = require('./campaign.queue');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
@@ -149,6 +157,15 @@ const {
   recordAudit,
   recordAssignmentHistory,
 } = createAuditService({
+  query,
+});
+
+const {
+  getTenantLimits,
+  assertTenantLimit,
+  assertCampaignRecipientLimit,
+  assertDailyOutboundLimit,
+} = createTenantLimitsService({
   query,
 });
 
@@ -1748,6 +1765,23 @@ async function getLeastLoadedSalesUser(tenantId) {
 }
 
 async function upsertContact({ tenantId, waId, name, phone, label, touchInbound = true }) {
+  const existingContact = await query(
+    `SELECT id
+     FROM contacts
+     WHERE tenant_id = $1
+       AND wa_id = $2
+     LIMIT 1`,
+    [tenantId, waId],
+  );
+
+  if (!existingContact.rows[0]) {
+    await assertTenantLimit({
+      tenantId,
+      resource: 'contacts',
+      add: 1,
+    });
+  }
+
   const assignedTo = await getLeastLoadedSalesUser(tenantId);
   const result = await query(
     `INSERT INTO contacts (tenant_id, wa_id, name, phone, label, assigned_to, last_inbound_at, updated_at)
@@ -2326,21 +2360,31 @@ async function getWhatsAppSendConfig(tenantId) {
   const account = accountResult.rows[0];
 
   if (account?.phone_number_id && account?.access_token_encrypted) {
-    const accessToken = decryptSecret({
-      encrypted: account.access_token_encrypted,
-      iv: account.access_token_iv,
-      tag: account.access_token_tag,
-    });
+    let accessToken = '';
 
-    if (!hasRealValue(accessToken)) {
-      return null;
+    try {
+      accessToken = decryptSecret({
+        encrypted: account.access_token_encrypted,
+        iv: account.access_token_iv,
+        tag: account.access_token_tag,
+      });
+    } catch (error) {
+      if (isProduction) {
+        throw error;
+      }
+
+      console.warn('Local dev: encrypted WhatsApp token could not be decrypted. Falling back to .env token.', {
+        message: error.message,
+      });
     }
 
-    return {
-      apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
-      phoneNumberId: account.phone_number_id,
-      accessToken,
-    };
+    if (hasRealValue(accessToken)) {
+      return {
+        apiVersion: process.env.WHATSAPP_API_VERSION || 'v24.0',
+        phoneNumberId: account.phone_number_id,
+        accessToken,
+      };
+    }
   }
 
   if (isProduction) {
@@ -2509,22 +2553,57 @@ async function markOutboundSent(outboundId, tenantId, waMessageId) {
   return result.rows[0] || null;
 }
 
+function isOutboundRetryableFailure(error) {
+  if (!error) return true;
+
+  const status = error.response?.status;
+  const message = String(
+    error?.response?.data?.error?.message ||
+    error?.message ||
+    error ||
+    '',
+  ).toLowerCase();
+
+  if (status === 400 || status === 401 || status === 403 || status === 404) return false;
+
+  if (
+    message.includes('opted out') ||
+    message.includes('24-hour reply window expired') ||
+    message.includes('template is not approved') ||
+    message.includes('template is not active') ||
+    message.includes('template name missing') ||
+    message.includes('unsupported outbound type') ||
+    message.includes('contact not found')
+  ) {
+    return false;
+  }
+
+  return isRetryableWhatsAppError(error) || !status;
+}
+
 async function markOutboundFailed(outboundId, tenantId, error) {
   if (!outboundId || !tenantId) return null;
 
+  const retryable = isOutboundRetryableFailure(error);
+  const errorMessage = String(
+    error?.response?.data?.error?.message ||
+    error?.message ||
+    error ||
+    'WhatsApp send failed',
+  ).slice(0, 2000);
+
   const result = await query(
     `UPDATE outbound_messages
-     SET status = 'failed',
+     SET status = CASE WHEN $4::boolean THEN 'failed' ELSE 'final_failed' END,
+         retryable = $4,
+         next_retry_at = CASE WHEN $4::boolean THEN now() + interval '5 minutes' ELSE NULL END,
+         final_failed_at = CASE WHEN $4::boolean THEN final_failed_at ELSE now() END,
          last_error = $3,
          updated_at = now()
      WHERE id = $1
        AND tenant_id = $2
      RETURNING *`,
-    [
-      outboundId,
-      tenantId,
-      String(error?.response?.data?.error?.message || error?.message || error || 'WhatsApp send failed').slice(0, 2000),
-    ],
+    [outboundId, tenantId, errorMessage, retryable],
   );
 
   return result.rows[0] || null;
@@ -2565,6 +2644,15 @@ async function postWhatsAppMessage(config, payload, meta = {}) {
           timeout: timeoutMs,
         },
       );
+
+if (!isProduction) {
+  console.log('WA send response:', {
+    to: payload.to,
+    type: payload.type,
+    messageId: response.data?.messages?.[0]?.id || null,
+    raw: response.data,
+  });
+}
 
       return response;
     } catch (error) {
@@ -2710,6 +2798,7 @@ async function uploadWhatsAppMedia({ tenantId, buffer, fileName, mimeType }) {
 
   return response.data?.id || null;
 }
+
 
 async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
   const config = await getWhatsAppSendConfig(tenantId);
@@ -3591,6 +3680,9 @@ async function ensurePlatformSuperAdmin() {
 // =========================================================
 
 const serverStartedAt = new Date();
+let campaignQueueTools = null;
+let outboundQueueTools = null;
+let webhookQueueTools = null;
 
 const routeContext = {
   axios,
@@ -3615,6 +3707,8 @@ const routeContext = {
   encryptSecret,
   decryptSecret,
   safeMetaError,
+  createTotpEnrollment,
+  verifyTotp,
   safeErrorLog,
   cleanList,
   WEEK_DAYS,
@@ -3752,14 +3846,70 @@ const routeContext = {
   findLatestCustomerSentQuote,
   sendCustomerQuoteSystemReply,
   handleCustomerQuoteInbound,
+  getTenantLimits,
+assertTenantLimit,
+assertCampaignRecipientLimit,
+assertDailyOutboundLimit,
+outboundQueueAvailable: isOutboundQueueConfigured(),
+webhookQueueAvailable: isWebhookQueueConfigured(),
+campaignQueueAvailable: isCampaignQueueConfigured(),
+enqueueWebhookEvent: (payload) => {
+  if (!webhookQueueTools) return null;
+  return webhookQueueTools.enqueueWebhookEvent(payload);
+},
+  enqueueCampaignDelivery: (payload) => {
+    if (!campaignQueueTools) {
+      const error = new Error('Campaign queue is not available');
+      error.statusCode = 503;
+      throw error;
+    }
+
+    return campaignQueueTools.enqueueCampaignDelivery(payload);
+  },
 };
+
+outboundQueueTools = isOutboundQueueConfigured()
+  ? createOutboundQueueTools({
+    query,
+    findContact,
+    isReplyWindowOpen,
+    validateTemplateRetryAllowed,
+    markOutboundSending,
+    markOutboundSent,
+    markOutboundFailed,
+    sendWhatsAppText,
+    sendWhatsAppTemplate,
+    addMessage,
+    recordAudit,
+    MAX_WHATSAPP_TEXT_LENGTH,
+    logger: console,
+  })
+  : null;
 
 registerCoreRoutes(app, routeContext);
 registerWhatsAppRoutes(app, routeContext);
 registerCrmRoutes(app, routeContext);
 registerSalesRoutes(app, routeContext);
-registerCampaignRoutes(app, routeContext);
+const campaignRoutes = registerCampaignRoutes(app, routeContext);
+campaignQueueTools = isCampaignQueueConfigured()
+  ? createCampaignQueueTools({
+    processCampaignDelivery: campaignRoutes.processCampaignDelivery,
+    logger: console,
+  })
+  : null;
 registerTallyRoutes(app, routeContext);
+
+webhookQueueTools = isWebhookQueueConfigured()
+  ? createWebhookQueueTools({
+    query,
+    processWhatsAppWebhookPayload: routeContext.processWhatsAppWebhookPayload,
+    markWebhookEventProcessing: routeContext.markWebhookEventProcessing,
+    markWebhookEventProcessed: routeContext.markWebhookEventProcessed,
+    markWebhookEventFailed: routeContext.markWebhookEventFailed,
+    safeErrorLog,
+    logger: console,
+  })
+  : null;
 
 // =========================================================
 // ERROR HANDLER
@@ -3806,6 +3956,10 @@ async function startServer() {
   await ensurePlatformSuperAdmin();
   await ensureDefaultWhatsAppAccountMapping();
 
+  campaignQueueTools?.startWorkerIfEnabled();
+  outboundQueueTools?.startWorkerIfEnabled();
+  webhookQueueTools?.startWorkerIfEnabled();
+
   const warnings = validateRuntimeConfig();
   warnings.forEach((warning) => console.warn(`Config warning: ${warning}`));
 
@@ -3822,6 +3976,18 @@ async function gracefulShutdown(signal) {
   try {
     if (httpServer) {
       await new Promise((resolve) => httpServer.close(resolve));
+    }
+
+    if (campaignQueueTools) {
+      await campaignQueueTools.close();
+    }
+
+    if (outboundQueueTools) {
+      await outboundQueueTools.close();
+    }
+
+    if (webhookQueueTools) {
+      await webhookQueueTools.close();
     }
 
     await closePool();

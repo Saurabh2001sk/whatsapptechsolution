@@ -1,38 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  BarChart3,
   Activity,
   ArrowRight,
   Boxes,
   Building2,
-  CalendarClock,
   ChevronDown,
   ClipboardList,
-  Code2,
-  Copy,
-  CreditCard,
   LayoutDashboard,
   Headphones,
-  HelpCircle,
-  Info,
   Link2,
   Menu,
   Megaphone,
-  PhoneCall,
-  Plus,
-  Save,
   ShoppingCart,
   Sparkles,
   Bell,
   Bot,
   CheckCircle2,
-  Clock3,
   FileText,
   Inbox,
   LogOut,
   MessageCircle,
   PackageCheck,
-  Pencil,
   Moon,
   RefreshCw,
   Sun,
@@ -40,12 +28,8 @@ import {
   Send,
   Settings,
   Shield,
-  Trash2,
-  UserPlus,
   UserRound,
   Users,
-  Upload,
-  Wallet,
   X,
 } from 'lucide-react'
 import { api, formatApiIssue, isProduction } from './apiClient'
@@ -65,7 +49,6 @@ import {
   ControlCenterPage,
   ConversationList,
   DashboardPage,
-  DraftsPanel,
   EmptyState,
   FeatureGatePage,
   InventoryPage,
@@ -603,6 +586,60 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
   )
 }
 
+function findMetaSignupValue(source, keys, depth = 0) {
+  if (!source || typeof source !== 'object' || depth > 4) return ''
+
+  for (const key of keys) {
+    const value = source[key]
+    if (value !== undefined && value !== null && typeof value !== 'object') {
+      return String(value).trim()
+    }
+
+    if (value && typeof value === 'object' && value.id !== undefined) {
+      return String(value.id || '').trim()
+    }
+  }
+
+  for (const value of Object.values(source)) {
+    const found = findMetaSignupValue(value, keys, depth + 1)
+    if (found) return found
+  }
+
+  return ''
+}
+
+function getEmbeddedSignupInfo(payload = {}) {
+  const source = payload.data || payload
+
+  return {
+    phoneNumberId: findMetaSignupValue(source, [
+      'phone_number_id',
+      'phoneNumberId',
+      'phone_number',
+      'phoneNumber',
+      'selected_phone_number_id',
+      'selectedPhoneNumberId',
+    ]),
+    wabaId: findMetaSignupValue(source, [
+      'waba_id',
+      'wabaId',
+      'whatsapp_business_account_id',
+      'whatsappBusinessAccountId',
+      'whatsapp_business_account',
+      'whatsappBusinessAccount',
+      'selected_waba_id',
+      'selectedWabaId',
+    ]),
+    businessId: findMetaSignupValue(source, [
+      'business_id',
+      'businessId',
+      'business',
+      'selected_business_id',
+      'selectedBusinessId',
+    ]),
+  }
+}
+
 function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
   const signupInfoRef = useRef({})
   const authCodeRef = useRef('')
@@ -621,14 +658,14 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
       ? 'Platform Meta setup pending hai. Platform owner ko Embedded Signup Configuration ID configure karna hoga; client ko backend access ki zarurat nahi hai.'
       : ''
 
-  function clearSignupTimeout() {
+  const clearSignupTimeout = useCallback(() => {
     if (signupTimeoutRef.current) {
       window.clearTimeout(signupTimeoutRef.current)
       signupTimeoutRef.current = null
     }
-  }
+  }, [])
 
-  async function completeIfReady(nextInfo = {}, allowBackendRecovery = false) {
+  const completeIfReady = useCallback(async (nextInfo = {}, allowBackendRecovery = false) => {
     const code = authCodeRef.current || ''
     const phoneNumberId = nextInfo.phoneNumberId || signupInfoRef.current.phoneNumberId || ''
     const wabaId = nextInfo.wabaId || signupInfoRef.current.wabaId || ''
@@ -640,15 +677,39 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
     clearSignupTimeout()
     completionStartedRef.current = true
 
-    await onComplete({
+    const completed = await onComplete({
       code,
       phoneNumberId,
       wabaId,
       businessId,
     })
 
+    if (!completed) {
+      completionStartedRef.current = false
+
+      if (allowBackendRecovery && signupInfoRef.current.phoneNumberId && signupInfoRef.current.wabaId) {
+        completionStartedRef.current = true
+
+        const retryCompleted = await onComplete({
+          code,
+          phoneNumberId: signupInfoRef.current.phoneNumberId,
+          wabaId: signupInfoRef.current.wabaId,
+          businessId: signupInfoRef.current.businessId || businessId,
+        })
+
+        if (!retryCompleted) {
+          completionStartedRef.current = false
+          return false
+        }
+
+        return true
+      }
+
+      return false
+    }
+
     return true
-  }
+  }, [clearSignupTimeout, onComplete])
 
   useEffect(() => {
     function handleEmbeddedSignupMessage(event) {
@@ -675,29 +736,16 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
       if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return
 
       if (payload.event === 'FINISH' || payload.event === 'FINISH_ONLY_WABA') {
-        const nextInfo = {
-          phoneNumberId:
-            payload.data?.phone_number_id ||
-            payload.data?.phoneNumberId ||
-            payload.data?.phone_number?.id ||
-            payload.data?.phoneNumber?.id ||
-            '',
-          wabaId:
-            payload.data?.waba_id ||
-            payload.data?.wabaId ||
-            payload.data?.whatsapp_business_account_id ||
-            payload.data?.whatsappBusinessAccountId ||
-            '',
-          businessId:
-            payload.data?.business_id ||
-            payload.data?.businessId ||
-            '',
+        const nextInfo = getEmbeddedSignupInfo(payload)
+
+        signupInfoRef.current = {
+          ...signupInfoRef.current,
+          ...nextInfo,
         }
 
-        signupInfoRef.current = nextInfo
-
-        completeIfReady(nextInfo).catch((error) => {
+        completeIfReady(signupInfoRef.current).catch((error) => {
           console.error('Embedded signup completion failed:', error)
+          completionStartedRef.current = false
         })
       }
 
@@ -719,7 +767,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
       clearSignupTimeout()
       window.removeEventListener('message', handleEmbeddedSignupMessage)
     }
-  }, [])
+  }, [clearSignupTimeout, completeIfReady])
 
   useEffect(() => {
     if (!hasRealMetaAppId) return undefined
@@ -785,6 +833,7 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
 
           completeIfReady({}, true).catch((error) => {
             console.error('Embedded signup backend recovery failed:', error)
+            completionStartedRef.current = false
           })
         }
       }, 12000)
@@ -935,7 +984,6 @@ const [authChecking, setAuthChecking] = useState(true)
   const [simulator, setSimulator] = useState({ phone: '', name: '', message: 'Need quotation for round bar grade EN8 size 20mm qty 25 pcs' })
   const [testMessage, setTestMessage] = useState({ to: '', text: 'BOS WhatsApp CRM test message' })
   const [testResult, setTestResult] = useState('')
-  const [quoteRates, setQuoteRates] = useState({})
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [profileOpen, setProfileOpen] = useState(false)
@@ -1087,7 +1135,7 @@ const [authChecking, setAuthChecking] = useState(true)
         icon: Users,
         children: [
           { id: 'contactsList', label: 'All Contacts', icon: Users },
-          { id: 'optOuts', label: 'Opt-outs', icon: Shield },
+          { id: 'optOuts', label: 'Opt-outs', icon: Shield, page: 'optOuts' },
         ],
       },
       { id: 'bot', label: 'Automation', icon: Bot },
@@ -1541,13 +1589,14 @@ async function loadMessages(contactId, markRead = false, options = {}) {
 
   useEffect(() => {
     // Data fetch is intentionally triggered by auth/filter changes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, filter, windowFilter])
 
   useEffect(() => {
     if (!user?.id || activePage !== 'integrations') return
+    // Tally state is loaded only when the integrations page is opened.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadTallyIntegration()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, activePage])
@@ -1556,6 +1605,8 @@ async function loadMessages(contactId, markRead = false, options = {}) {
     if (!user?.id || !isSuperAdminUser) return
 
     if (!['platformTenants', 'platformStatus'].includes(activePage)) {
+      // Super admin is routed back to the platform workspace after auth changes.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActivePage('platformTenants')
     }
 
@@ -1567,6 +1618,8 @@ async function loadMessages(contactId, markRead = false, options = {}) {
     if (isSuperAdminUser) return
     if (!selected?.id) return
 
+    // Conversation detail state is synchronized when the selected chat changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSendError('')
 
     loadMessages(selected.id, true)
@@ -1635,6 +1688,7 @@ function logout() {
 useEffect(() => {
   window.addEventListener('bos-auth-expired', logout)
   return () => window.removeEventListener('bos-auth-expired', logout)
+// eslint-disable-next-line react-hooks/exhaustive-deps
 }, [])
 
 useEffect(() => {
@@ -1794,8 +1848,10 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId, businessId 
 
     notify('Meta WhatsApp connected successfully')
     await loadAll()
+    return true
   } catch (err) {
     notify(err.response?.data?.error || err.message || 'Meta WhatsApp connection failed', 'error')
+    return false
   } finally {
     setConnectingWhatsApp(false)
   }
@@ -1807,6 +1863,17 @@ function enterWorkspace(authenticatedUser) {
 }
 
 if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={appSettings} />
+
+const salesSubPages = ['quotes', 'orders', 'activeOrders']
+const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
+
+function pageMatchesNavTarget(page) {
+  if (!page) return false
+  if (page === activePage) return true
+  if (salesSubPages.includes(page)) return activePage === 'salesWorkspace' && salesWorkspaceTab === page
+  if (controlSubPages.includes(page)) return activePage === 'controlCenter' && controlCenterTab === page
+  return false
+}
 
   function showPage(page, pageFilter = {}) {
     const platformPages = ['platformTenants', 'platformStatus']
@@ -1832,8 +1899,6 @@ if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={ap
     ]
 const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit', 'sendBulk', 'integrations', 'billing', 'voice', 'automation']
 const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing']
-    const salesSubPages = ['quotes', 'orders', 'activeOrders']
-    const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
 
   if (isSuperAdminUser) {
     if (clientPreviewPages.includes(page)) {
@@ -2190,22 +2255,6 @@ async function simulateInbound(event) {
   }
 }
 
-  async function createQuoteFromDraft(draftItem) {
-    await api.post(`/api/enquiry-drafts/${draftItem.id}/create-quote`, {
-      rate: Number(quoteRates[draftItem.id] || 0),
-      notes: `Quote for ${draftItem.grade || ''} ${draftItem.size || ''} ${draftItem.quantity || ''}`.trim(),
-    })
-    setQuoteRates({ ...quoteRates, [draftItem.id]: '' })
-    notify('Quotation created')
-    await loadAll()
-  }
-
-  async function createErp(draftId) {
-    await api.post(`/api/enquiry-drafts/${draftId}/create-erp`)
-    notify('ERP enquiry marked')
-    await loadAll()
-  }
-
   async function updateQuote(quote, statusValue) {
     await api.patch(`/api/quotations/${quote.id}`, { status: statusValue })
     notify(`Quotation marked ${statusValue}`)
@@ -2528,8 +2577,8 @@ async function loadAutoReplyRules() {
 async function saveAutoReplyRule(event) {
   event.preventDefault()
 
-  if (!canMonitor) {
-    notify('Manager/Admin access required', 'error')
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
     return
   }
 
@@ -2601,6 +2650,11 @@ function cancelAutoReplyRuleEdit() {
 async function toggleAutoReplyRule(rule) {
   if (!rule?.id) return
 
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    return
+  }
+
   setAutoReplyRuleActionLoading(rule.id)
 
   try {
@@ -2625,6 +2679,11 @@ async function toggleAutoReplyRule(rule) {
 
 async function deleteAutoReplyRule(rule) {
   if (!rule?.id) return
+
+  if (user?.role !== 'admin') {
+    notify('Admin access required', 'error')
+    return
+  }
 
   const confirmed = window.confirm(`Delete auto reply rule "${rule.name}"?`)
   if (!confirmed) return
@@ -2732,7 +2791,6 @@ async function sendTestMessage(event) {
     }
   }
 
-  const newEnquiries = drafts.filter((item) => item.status === 'draft')
   const activeOrders = orders.filter((item) => item.status !== 'closed')
   const chatPages = !isSuperAdminUser && (activePage === 'inbox' || activePage === 'new' || activePage === 'sales')
   const lowStockProducts = products.filter((item) => item.active !== false && Number(item.stock_qty || 0) <= 5)
@@ -2956,31 +3014,30 @@ async function sendTestMessage(event) {
             const children = item.children || []
             const hasChildren = children.length > 0
             const includesCurrentPage = children.some((child) => (
-              child.id === activePage ||
-              (child.id === 'settings' && activePage === 'controlCenter') ||
-              (child.id === 'orders' && activePage === 'salesWorkspace') ||
+              pageMatchesNavTarget(child.page || child.id) ||
               (child.children || []).some((nestedChild) => (
-                nestedChild.id === activePage ||
-                (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
-                (nestedChild.id === 'inventory' && activePage === 'inventory')
+                pageMatchesNavTarget(nestedChild.page || nestedChild.id)
               ))
             ))
-            const isExpanded = hasChildren && expandedSuiteMenu === item.id
-            const isActive = item.page ? activePage === item.page || (item.page === 'settings' && activePage === 'controlCenter') : includesCurrentPage
+const isExpanded = hasChildren && expandedSuiteMenu === item.id
+const targetPage = item.page || item.id
+const isActive = hasChildren
+  ? includesCurrentPage
+  : pageMatchesNavTarget(targetPage)
 
-            return (
-              <div className={`suite-nav-item ${isExpanded ? 'expanded' : ''}`} key={item.id}>
-                <button
-                  className={isActive ? 'active' : ''}
-                  type="button"
-                  onClick={() => {
-                    if (hasChildren) {
-                      setExpandedSuiteMenu((current) => (current === item.id ? '' : item.id))
-                    } else {
-                      showPage(item.page)
-                    }
-                  }}
-                >
+return (
+  <div className={`suite-nav-item ${isExpanded ? 'expanded' : ''}`} key={item.id}>
+    <button
+      className={isActive ? 'active' : ''}
+      type="button"
+      onClick={() => {
+        if (hasChildren) {
+          setExpandedSuiteMenu((current) => (current === item.id ? '' : item.id))
+        } else {
+          showPage(targetPage)
+        }
+      }}
+    >
                   <Icon size={18} />
                   <span>{item.label}</span>
                   {hasChildren && <ChevronDown className="suite-chevron" size={16} />}
@@ -2992,15 +3049,11 @@ async function sendTestMessage(event) {
                       const nestedChildren = child.children || []
                       const hasNestedChildren = nestedChildren.length > 0
                       const nestedActive = nestedChildren.some((nestedChild) => (
-                        nestedChild.id === activePage ||
-                        (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
-                        (nestedChild.id === 'inventory' && activePage === 'inventory')
+                        pageMatchesNavTarget(nestedChild.page || nestedChild.id)
                       ))
                       const nestedExpanded = hasNestedChildren && (expandedSuiteSubmenu === child.id || nestedActive)
                       const childActive =
-                        child.id === activePage ||
-                        (child.id === 'settings' && activePage === 'controlCenter') ||
-                        (child.id === 'orders' && activePage === 'salesWorkspace') ||
+                        pageMatchesNavTarget(child.page || child.id) ||
                         nestedActive
 
                       return (
@@ -3012,7 +3065,7 @@ async function sendTestMessage(event) {
                               if (hasNestedChildren) {
                                 setExpandedSuiteSubmenu((current) => (current === child.id ? '' : child.id))
                               } else {
-                                showPage(child.id)
+                                showPage(child.page || child.id)
                               }
                             }}
                           >
@@ -3025,14 +3078,11 @@ async function sendTestMessage(event) {
                             <div className="suite-thirdnav">
                               {nestedChildren.map((nestedChild) => {
                                 const NestedIcon = nestedChild.icon
-                                const active =
-                                  nestedChild.id === activePage ||
-                                  (nestedChild.id === 'webhooks' && activePage === 'controlCenter') ||
-                                  (nestedChild.id === 'inventory' && activePage === 'inventory')
+const targetPage = nestedChild.page || nestedChild.id
+const active = pageMatchesNavTarget(targetPage)
 
-                                return (
-                                  <button className={active ? 'active' : ''} type="button" key={nestedChild.id} onClick={() => showPage(nestedChild.id)}>
-                                    <NestedIcon size={15} />
+return (
+  <button className={active ? 'active' : ''} type="button" key={nestedChild.id} onClick={() => showPage(targetPage)}>                                    <NestedIcon size={15} />
                                     <span>{nestedChild.label}</span>
                                   </button>
                                 )
@@ -3268,6 +3318,7 @@ async function sendTestMessage(event) {
   autoReplyRulesLoading={autoReplyRulesLoading}
   autoReplyRuleSaving={autoReplyRuleSaving}
   autoReplyRuleActionLoading={autoReplyRuleActionLoading}
+  canManageAutoReplyRules={user.role === 'admin'}
   onSaveAutoReplyRule={saveAutoReplyRule}
   onEditAutoReplyRule={editAutoReplyRule}
   onCancelAutoReplyRuleEdit={cancelAutoReplyRuleEdit}

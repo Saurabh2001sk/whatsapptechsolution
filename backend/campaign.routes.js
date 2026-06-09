@@ -58,6 +58,10 @@ function registerCampaignRoutes(app, ctx) {
     sendWhatsAppTemplate,
     addMessage,
     recordAudit,
+    enqueueCampaignDelivery,
+    campaignQueueAvailable,
+    assertCampaignRecipientLimit,
+    assertDailyOutboundLimit,
   } = ctx;
 
   async function getCampaignTemplate(tenantId, templateName, language) {
@@ -103,6 +107,354 @@ function registerCampaignRoutes(app, ctx) {
       failureRate,
       failureRateLimit,
     };
+  }
+
+  async function getCampaignDeliveryRecord(tenantId, campaignId) {
+    const result = await query(
+      `SELECT
+         campaigns.*,
+         whatsapp_templates.active AS template_active,
+         whatsapp_templates.meta_status AS template_meta_status
+       FROM campaigns
+       LEFT JOIN whatsapp_templates
+         ON whatsapp_templates.id = campaigns.template_id
+        AND whatsapp_templates.tenant_id = campaigns.tenant_id
+       WHERE campaigns.tenant_id = $1
+         AND campaigns.id = $2
+       LIMIT 1`,
+      [tenantId, campaignId],
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async function updateCampaignSummary(tenantId, campaignId, status) {
+    const summaryResult = await query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
+         COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+         COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+         COUNT(*) FILTER (WHERE status = 'pending')::int AS pending
+       FROM campaign_recipients
+       WHERE tenant_id = $1
+         AND campaign_id = $2`,
+      [tenantId, campaignId],
+    );
+
+    const summary = summaryResult.rows[0] || {};
+    const result = await query(
+      `UPDATE campaigns
+       SET status = $3,
+           total_recipients = $4,
+           sent_count = $5,
+           failed_count = $6,
+           skipped_count = $7,
+           updated_at = now()
+       WHERE tenant_id = $1
+         AND id = $2
+       RETURNING *`,
+      [
+        tenantId,
+        campaignId,
+        status,
+        Number(summary.total || 0),
+        Number(summary.sent || 0),
+        Number(summary.failed || 0),
+        Number(summary.skipped || 0),
+      ],
+    );
+
+    return {
+      campaign: result.rows[0],
+      summary: {
+        total: Number(summary.total || 0),
+        sent: Number(summary.sent || 0),
+        failed: Number(summary.failed || 0),
+        skipped: Number(summary.skipped || 0),
+        pending: Number(summary.pending || 0),
+      },
+    };
+  }
+
+  async function processCampaignDelivery({ campaignId, tenantId, actorUserId = null }) {
+    const campaign = await getCampaignDeliveryRecord(tenantId, campaignId);
+
+    if (!campaign) {
+      throw new Error('Campaign not found');
+    }
+
+    if (campaign.status === 'cancelled') {
+      return updateCampaignSummary(tenantId, campaignId, 'cancelled');
+    }
+
+    if (['sent', 'partial_failed', 'failed'].includes(campaign.status)) {
+      return updateCampaignSummary(tenantId, campaignId, campaign.status);
+    }
+
+    if (!campaign.template_active || String(campaign.template_meta_status || '').toLowerCase() !== 'approved') {
+      await recordAudit({
+        tenantId,
+        actorUserId,
+        action: 'campaign.blocked_template_not_approved',
+        entityType: 'campaign',
+        entityId: campaignId,
+        metadata: {
+          templateName: campaign.template_name,
+          language: campaign.language,
+        },
+      });
+
+      return updateCampaignSummary(tenantId, campaignId, 'failed');
+    }
+
+    const qualityGuard = await getCampaignQualityGuard(tenantId);
+
+    if (qualityGuard.blocked) {
+      await recordAudit({
+        tenantId,
+        actorUserId,
+        action: 'campaign.blocked_quality_guard',
+        entityType: 'campaign',
+        entityId: campaignId,
+        metadata: {
+          sentCount: qualityGuard.sentCount,
+          failedCount: qualityGuard.failedCount,
+          failureRate: Number(qualityGuard.failureRate.toFixed(4)),
+          failureRateLimit: qualityGuard.failureRateLimit,
+        },
+      });
+
+      throw new Error(`Campaign sending paused. Recent failure rate is ${Math.round(qualityGuard.failureRate * 100)}%.`);
+    }
+
+    const dailyUsageResult = await query(
+      `SELECT COUNT(*)::int AS sent_today
+       FROM campaign_recipients
+       WHERE tenant_id = $1
+         AND status = 'sent'
+         AND sent_at >= date_trunc('day', now())`,
+      [tenantId],
+    );
+
+    const sentToday = Number(dailyUsageResult.rows[0]?.sent_today || 0);
+    const remainingToday = Math.max(getCampaignDailyLimit() - sentToday, 0);
+
+    if (remainingToday <= 0) {
+      await recordAudit({
+        tenantId,
+        actorUserId,
+        action: 'campaign.blocked_daily_limit',
+        entityType: 'campaign',
+        entityId: campaignId,
+        metadata: {
+          sentToday,
+          dailyLimit: getCampaignDailyLimit(),
+        },
+      });
+
+      throw new Error(`Daily WhatsApp campaign limit reached. Limit: ${getCampaignDailyLimit()}, sent today: ${sentToday}.`);
+    }
+
+    const recipientResult = await query(
+      `SELECT
+         campaign_recipients.*,
+         contacts.id AS contact_id,
+         contacts.phone AS contact_phone,
+         contacts.wa_id AS contact_wa_id,
+         contacts.name AS contact_name,
+         contacts.opted_out AS contact_opted_out,
+         contacts.marketing_opted_in AS contact_marketing_opted_in
+       FROM campaign_recipients
+       JOIN contacts
+         ON contacts.id = campaign_recipients.contact_id
+        AND contacts.tenant_id = campaign_recipients.tenant_id
+       WHERE campaign_recipients.tenant_id = $1
+         AND campaign_recipients.campaign_id = $2
+         AND campaign_recipients.status = 'pending'
+       ORDER BY campaign_recipients.created_at ASC
+       LIMIT $3`,
+      [tenantId, campaignId, remainingToday],
+    );
+
+    const sendableRecipients = recipientResult.rows;
+
+    await query(
+      `UPDATE campaigns
+       SET status = 'sending',
+           updated_at = now()
+       WHERE tenant_id = $1
+         AND id = $2
+         AND status <> 'cancelled'`,
+      [tenantId, campaignId],
+    );
+
+    if (!sendableRecipients.length) {
+      const currentSummary = await updateCampaignSummary(tenantId, campaignId, 'failed');
+
+      await recordAudit({
+        tenantId,
+        actorUserId,
+        action: 'campaign.blocked_no_sendable_recipients',
+        entityType: 'campaign',
+        entityId: campaignId,
+        metadata: {
+          templateName: campaign.template_name,
+          language: campaign.language,
+          totalRecipients: currentSummary.summary.total,
+          skippedCount: currentSummary.summary.skipped,
+        },
+      });
+
+      return currentSummary;
+    }
+
+    for (const recipient of sendableRecipients) {
+      const contact = {
+        id: recipient.contact_id,
+        phone: recipient.contact_phone || recipient.to_phone,
+        wa_id: recipient.contact_wa_id,
+        name: recipient.contact_name,
+        opted_out: recipient.contact_opted_out,
+        marketing_opted_in: recipient.contact_marketing_opted_in,
+      };
+
+      if (contact.opted_out || !contact.marketing_opted_in) {
+        await query(
+          `UPDATE campaign_recipients
+           SET status = 'skipped',
+               skip_reason = $3,
+               updated_at = now()
+           WHERE id = $1
+             AND tenant_id = $2`,
+          [
+            recipient.id,
+            tenantId,
+            contact.opted_out ? 'contact_opted_out' : 'marketing_opt_in_missing',
+          ],
+        );
+        continue;
+      }
+
+      await query(
+        `UPDATE campaign_recipients
+         SET status = 'sending',
+             updated_at = now()
+         WHERE id = $1
+           AND tenant_id = $2`,
+        [recipient.id, tenantId],
+      );
+
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: contact.wa_id || contact.phone,
+        type: 'template',
+        template: {
+          name: campaign.template_name,
+          language: { code: campaign.language },
+        },
+      };
+
+      const outboundRecord = await createOutboundMessageRecord({
+        tenantId,
+        contactId: contact.id,
+        toPhone: contact.wa_id || contact.phone,
+        messageType: 'template',
+        templateName: campaign.template_name,
+        language: campaign.language,
+        body: `[Campaign Template] ${campaign.template_name}`,
+        payload,
+        createdBy: actorUserId,
+      });
+
+      await markOutboundSending(outboundRecord?.id, tenantId);
+
+      try {
+        const waMessageId = await sendWhatsAppTemplate(contact, campaign.template_name, campaign.language, tenantId);
+
+        await markOutboundSent(outboundRecord?.id, tenantId, waMessageId);
+        await addMessage({
+          tenantId,
+          contactId: contact.id,
+          waMessageId,
+          direction: 'outbound',
+          type: 'template',
+          body: `[Campaign Template] ${campaign.template_name}`,
+          status: waMessageId ? 'sent' : 'accepted',
+          templateName: campaign.template_name,
+          normalizedText: `[Campaign Template] ${campaign.template_name}`,
+        });
+
+        await query(
+          `UPDATE campaign_recipients
+           SET status = 'sent',
+               outbound_message_id = $3,
+               sent_at = now(),
+               last_error = NULL,
+               updated_at = now()
+           WHERE id = $1
+             AND tenant_id = $2`,
+          [recipient.id, tenantId, outboundRecord?.id || null],
+        );
+      } catch (error) {
+        await markOutboundFailed(outboundRecord?.id, tenantId, error);
+
+        await query(
+          `UPDATE campaign_recipients
+           SET status = 'failed',
+               outbound_message_id = $3,
+               last_error = $4,
+               updated_at = now()
+           WHERE id = $1
+             AND tenant_id = $2`,
+          [
+            recipient.id,
+            tenantId,
+            outboundRecord?.id || null,
+            String(error?.response?.data?.error?.message || error?.message || 'WhatsApp campaign send failed').slice(0, 1000),
+          ],
+        );
+      }
+    }
+
+    const statusResult = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+         COUNT(*) FILTER (WHERE status = 'sent')::int AS sent_count,
+         COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count
+       FROM campaign_recipients
+       WHERE tenant_id = $1
+         AND campaign_id = $2`,
+      [tenantId, campaignId],
+    );
+
+    const pendingCount = Number(statusResult.rows[0]?.pending_count || 0);
+    const sentCount = Number(statusResult.rows[0]?.sent_count || 0);
+    const failedCount = Number(statusResult.rows[0]?.failed_count || 0);
+    const finalStatus = pendingCount > 0
+      ? 'scheduled'
+      : failedCount && sentCount
+        ? 'partial_failed'
+        : sentCount
+          ? 'sent'
+          : 'failed';
+
+    const finalSummary = await updateCampaignSummary(tenantId, campaignId, finalStatus);
+
+    await recordAudit({
+      tenantId,
+      actorUserId,
+      action: 'campaign.delivery_processed',
+      entityType: 'campaign',
+      entityId: campaignId,
+      metadata: {
+        templateName: campaign.template_name,
+        language: campaign.language,
+        ...finalSummary.summary,
+      },
+    });
+
+    return finalSummary;
   }
 
   app.get('/api/campaigns', requireAuth, asyncHandler(async (req, res) => {
@@ -165,15 +517,15 @@ function registerCampaignRoutes(app, ctx) {
 
     const immediateSendLimit = getCampaignImmediateSendLimit();
 
-if (sendNow && rows.length > immediateSendLimit) {
-  return res.status(400).json({
-    error: `Send Now is limited to ${immediateSendLimit} recipients until the campaign queue worker is connected. Split the CSV or wait for queued campaign sending.`,
-  });
-}
-
-    if (!sendNow) {
+    if (sendNow && !campaignQueueAvailable && rows.length > immediateSendLimit) {
       return res.status(400).json({
-        error: 'Draft/scheduled campaigns are locked until the campaign queue worker is connected. Use Send Now only.',
+        error: `Send Now is limited to ${immediateSendLimit} recipients until the campaign queue worker is connected. Split the CSV or wait for queued campaign sending.`,
+      });
+    }
+
+    if (!sendNow && !scheduledAt) {
+      return res.status(400).json({
+        error: 'Choose Send Now or provide a scheduled time.',
       });
     }
 
@@ -181,9 +533,15 @@ if (sendNow && rows.length > immediateSendLimit) {
       return res.status(400).json({ error: 'Invalid scheduled time' });
     }
 
-    if (scheduledAt) {
+    if (scheduledAt && scheduledAt.getTime() <= Date.now()) {
       return res.status(400).json({
-        error: 'Campaign scheduling is not enabled yet. Use Send Now only until the queue worker is connected.',
+        error: 'Scheduled time must be in the future.',
+      });
+    }
+
+    if (scheduledAt && !campaignQueueAvailable) {
+      return res.status(503).json({
+        error: 'Campaign scheduling needs Redis/BullMQ. Set REDIS_URL and start the campaign worker.',
       });
     }
 
@@ -274,7 +632,7 @@ if (sendNow && rows.length > immediateSendLimit) {
       });
     }
 
-        const dailyUsageResult = await query(
+    const dailyUsageResult = await query(
       `SELECT COUNT(*)::int AS sent_today
        FROM campaign_recipients
        WHERE tenant_id = $1
@@ -297,6 +655,16 @@ if (sendNow && rows.length > immediateSendLimit) {
         error: `This campaign has ${cleanRows.length} rows, but only ${remainingToday} sends are remaining today. Reduce CSV size or increase verified WhatsApp messaging limit.`,
       });
     }
+
+    await assertCampaignRecipientLimit({
+  tenantId: req.user.tenantId,
+  recipientCount: cleanRows.length,
+});
+
+await assertDailyOutboundLimit({
+  tenantId: req.user.tenantId,
+  add: cleanRows.length,
+});
 
     const uniquePhones = [...new Set(cleanRows.map((row) => row.phone))];
     const contactResult = await query(
@@ -344,10 +712,10 @@ if (sendNow && rows.length > immediateSendLimit) {
       } else if (contact.opted_out) {
         status = 'skipped';
         skipReason = 'contact_opted_out';
-             } else if (!contact.marketing_opted_in && (!row.optInSource || !row.optInProof)) {
-          status = 'skipped';
-          skipReason = 'marketing_opt_in_missing';
-        }
+      } else if (!contact.marketing_opted_in && (!row.optInSource || !row.optInProof)) {
+        status = 'skipped';
+        skipReason = 'marketing_opt_in_missing';
+      }
 
       if (contact && !contact.marketing_opted_in && row.optInProof && status === 'pending') {
         await query(
@@ -403,14 +771,32 @@ if (sendNow && rows.length > immediateSendLimit) {
       if (status === 'skipped') skipped.push(recipient);
     }
 
-    let sentCount = 0;
-    let failedCount = 0;
+    const skippedCount = skipped.length;
+    const pendingCount = Math.max(recipients.length - skippedCount, 0);
 
-    if (sendNow) {
-      const sendableRecipients = recipients.filter((recipient) => recipient.status === 'pending');
+    const preparedCampaignResult = await query(
+      `UPDATE campaigns
+       SET status = $3,
+           total_recipients = $4,
+           sent_count = 0,
+           failed_count = 0,
+           skipped_count = $7,
+           updated_at = now()
+       WHERE id = $1
+         AND tenant_id = $2
+       RETURNING *`,
+      [
+        campaign.id,
+        req.user.tenantId,
+        campaignStatus,
+        recipients.length,
+        0,
+        0,
+        skippedCount,
+      ],
+    );
 
-      if (!sendableRecipients.length) {
-            if (sendNow && skipped.length > 0) {
+    if (skipped.length > 0) {
       await recordAudit({
         tenantId: req.user.tenantId,
         actorUserId: req.user.id,
@@ -423,195 +809,105 @@ if (sendNow && rows.length > immediateSendLimit) {
         },
       });
     }
-        const skippedCount = skipped.length;
 
-        const updatedCampaignResult = await query(
-          `UPDATE campaigns
-           SET status = 'failed',
-               total_recipients = $3,
-               sent_count = 0,
-               failed_count = 0,
-               skipped_count = $4,
-               updated_at = now()
-           WHERE id = $1
-             AND tenant_id = $2
-           RETURNING *`,
-          [campaign.id, req.user.tenantId, recipients.length, skippedCount],
-        );
+    if (pendingCount <= 0) {
+      const failedSummary = await updateCampaignSummary(req.user.tenantId, campaign.id, 'failed');
 
-        await recordAudit({
-          tenantId: req.user.tenantId,
-          actorUserId: req.user.id,
-          action: 'campaign.blocked_no_sendable_recipients',
-          entityType: 'campaign',
-          entityId: campaign.id,
-          metadata: {
-            templateName: template.name,
-            language: template.language,
-            totalRecipients: recipients.length,
-            skippedCount,
-          },
-        });
-
-        return res.status(400).json({
-          error: 'Campaign has no sendable recipients. Check opt-in, opt-out, and contact matching.',
-          campaign: updatedCampaignResult.rows[0],
-          summary: {
-            total: recipients.length,
-            sent: 0,
-            failed: 0,
-            skipped: skippedCount,
-            pending: 0,
-          },
-        });
-      }
-
-      for (const recipient of sendableRecipients) {
-        const contact = recipient.contact;
-
-        await query(
-          `UPDATE campaign_recipients
-           SET status = 'sending',
-               updated_at = now()
-           WHERE id = $1
-             AND tenant_id = $2`,
-          [recipient.id, req.user.tenantId],
-        );
-
-        const payload = {
-          messaging_product: 'whatsapp',
-          to: contact.wa_id || contact.phone,
-          type: 'template',
-          template: {
-            name: template.name,
-            language: { code: template.language },
-          },
-        };
-
-        const outboundRecord = await createOutboundMessageRecord({
-          tenantId: req.user.tenantId,
-          contactId: contact.id,
-          toPhone: contact.wa_id || contact.phone,
-          messageType: 'template',
+      await recordAudit({
+        tenantId: req.user.tenantId,
+        actorUserId: req.user.id,
+        action: 'campaign.blocked_no_sendable_recipients',
+        entityType: 'campaign',
+        entityId: campaign.id,
+        metadata: {
           templateName: template.name,
           language: template.language,
-          body: `[Campaign Template] ${template.name}`,
-          payload,
-          createdBy: req.user.id,
-        });
+          totalRecipients: recipients.length,
+          skippedCount,
+        },
+      });
 
-        await markOutboundSending(outboundRecord?.id, req.user.tenantId);
-
-        try {
-          const waMessageId = await sendWhatsAppTemplate(contact, template.name, template.language, req.user.tenantId);
-
-          await markOutboundSent(outboundRecord?.id, req.user.tenantId, waMessageId);
-          await addMessage({
-            tenantId: req.user.tenantId,
-            contactId: contact.id,
-            waMessageId,
-            direction: 'outbound',
-            type: 'template',
-            body: `[Campaign Template] ${template.name}`,
-            status: waMessageId ? 'sent' : 'accepted',
-            templateName: template.name,
-            normalizedText: `[Campaign Template] ${template.name}`,
-          });
-
-          await query(
-            `UPDATE campaign_recipients
-             SET status = 'sent',
-                 outbound_message_id = $3,
-                 sent_at = now(),
-                 updated_at = now()
-             WHERE id = $1
-               AND tenant_id = $2`,
-            [recipient.id, req.user.tenantId, outboundRecord?.id || null],
-          );
-
-          sentCount += 1;
-        } catch (error) {
-          await markOutboundFailed(outboundRecord?.id, req.user.tenantId, error);
-
-          await query(
-            `UPDATE campaign_recipients
-             SET status = 'failed',
-                 outbound_message_id = $3,
-                 last_error = $4,
-                 updated_at = now()
-             WHERE id = $1
-               AND tenant_id = $2`,
-            [
-              recipient.id,
-              req.user.tenantId,
-              outboundRecord?.id || null,
-              String(error?.response?.data?.error?.message || error?.message || 'WhatsApp campaign send failed').slice(0, 1000),
-            ],
-          );
-
-          failedCount += 1;
-        }
-      }
+      return res.status(400).json({
+        error: 'Campaign has no sendable recipients. Check opt-in, opt-out, and contact matching.',
+        campaign: failedSummary.campaign,
+        summary: failedSummary.summary,
+      });
     }
 
-    const skippedCount = skipped.length;
-    const pendingCount = Math.max(recipients.length - skippedCount - sentCount - failedCount, 0);
+    if (campaignQueueAvailable && (sendNow || scheduledAt)) {
+      const job = await enqueueCampaignDelivery({
+        tenantId: req.user.tenantId,
+        campaignId: campaign.id,
+        actorUserId: req.user.id,
+        scheduledAt: sendNow ? null : scheduledAt,
+      });
 
-    const finalStatus = failedCount && sentCount
-      ? 'partial_failed'
-      : sentCount
-        ? 'sent'
-        : 'failed';
+      await recordAudit({
+        tenantId: req.user.tenantId,
+        actorUserId: req.user.id,
+        action: sendNow ? 'campaign.queued' : 'campaign.scheduled',
+        entityType: 'campaign',
+        entityId: campaign.id,
+        metadata: {
+          templateName: template.name,
+          language: template.language,
+          totalRecipients: recipients.length,
+          skippedCount,
+          pendingCount,
+          jobId: job?.id || null,
+          scheduledAt: sendNow ? null : scheduledAt,
+        },
+      });
 
-    const updatedCampaignResult = await query(
-      `UPDATE campaigns
-       SET status = $3,
-           total_recipients = $4,
-           sent_count = $5,
-           failed_count = $6,
-           skipped_count = $7,
-           updated_at = now()
-       WHERE id = $1
-         AND tenant_id = $2
-       RETURNING *`,
-      [
-        campaign.id,
-        req.user.tenantId,
-        finalStatus,
-        recipients.length,
-        sentCount,
-        failedCount,
-        skippedCount,
-      ],
-    );
+      return res.status(201).json({
+        campaign: preparedCampaignResult.rows[0],
+        queue: {
+          enabled: true,
+          jobId: job?.id || null,
+          status: sendNow ? 'queued' : 'scheduled',
+        },
+        summary: {
+          total: recipients.length,
+          sent: 0,
+          failed: 0,
+          skipped: skippedCount,
+          pending: pendingCount,
+        },
+      });
+    }
+
+    const processed = await processCampaignDelivery({
+      campaignId: campaign.id,
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+    });
 
     await recordAudit({
       tenantId: req.user.tenantId,
       actorUserId: req.user.id,
-      action: sendNow ? 'campaign.sent' : 'campaign.created',
+      action: 'campaign.sent',
       entityType: 'campaign',
       entityId: campaign.id,
       metadata: {
         templateName: template.name,
         language: template.language,
-        totalRecipients: recipients.length,
-        sentCount,
-        failedCount,
-        skippedCount,
+        ...processed.summary,
       },
     });
 
     res.status(201).json({
-      campaign: updatedCampaignResult.rows[0],
-      summary: {
-        total: recipients.length,
-        sent: sentCount,
-        failed: failedCount,
-        skipped: skippedCount,
-        pending: pendingCount,
+      campaign: processed.campaign,
+      queue: {
+        enabled: false,
+        status: 'processed_without_queue',
       },
+      summary: processed.summary,
     });
   }));
+
+  return {
+    processCampaignDelivery,
+  };
 }
 
 module.exports = {

@@ -647,6 +647,12 @@
   font-size: 12px;
 }
 
+.suite-inline-actions button.active {
+  border-color: #5c2f61;
+  color: #5c2f61;
+  background: #f8eef8;
+}
+
 .suite-file-button input {
   display: none;
 }

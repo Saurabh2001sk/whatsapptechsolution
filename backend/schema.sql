@@ -1585,3 +1585,28 @@ ON tally_sync_logs (tenant_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_tally_sync_logs_tenant_entity
 ON tally_sync_logs (tenant_id, entity_type, entity_id, status);
+
+
+ALTER TABLE outbound_messages
+  ADD COLUMN IF NOT EXISTS retryable boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS next_retry_at timestamptz NULL,
+  ADD COLUMN IF NOT EXISTS final_failed_at timestamptz NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_auto_retry
+  ON outbound_messages (status, retryable, next_retry_at, updated_at)
+  WHERE status = 'failed';
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_secret_encrypted text;
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_secret_iv text;
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_secret_tag text;
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_enabled boolean NOT NULL DEFAULT false;
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_enabled_at timestamptz;
