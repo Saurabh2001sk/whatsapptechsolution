@@ -42,7 +42,9 @@ api.interceptors.request.use((config) => {
   const method = String(config.method || 'get').toUpperCase()
   const isWriteRequest = !['GET', 'HEAD', 'OPTIONS'].includes(method)
 
-  if (config.headers) {
+config.headers = config.headers || {}
+
+if (config.headers) {
     if (typeof config.headers.delete === 'function') {
       config.headers.delete('Authorization')
     }

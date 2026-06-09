@@ -11,15 +11,13 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const { query, healthCheck, closePool } = require('./db');
-const asyncHandler = require('./asyncHandler');
-const rateLimit = require('./rateLimit');
-const { createAuthService } = require('./auth.service');
-const { createTenantService } = require('./tenant.service');
-const { createAuditService } = require('./audit.service');
-const { createTenantLimitsService } = require('./tenantLimits.service');
-const { createOutboundQueueTools, isOutboundQueueConfigured } = require('./outbound.queue');
-const { createWebhookQueueTools, isWebhookQueueConfigured } = require('./webhook.queue');
 const {
+  asyncHandler,
+  rateLimit,
+  createAuthService,
+  createTenantService,
+  createAuditService,
+  createTenantLimitsService,
   maskValue,
   maskEmail,
   maskId,
@@ -40,19 +38,26 @@ const {
   DEFAULT_VOICE_WEEKLY_HOURS,
   cleanVoiceWeeklyHours,
   cleanUnavailableHours,
-} = require('./common');
-const { registerCoreRoutes } = require('./core.routes');
-const {
   createTotpEnrollment,
   verifyTotp,
-} = require('./totp.service');
-const { registerWhatsAppRoutes } = require('./whatsapp.routes');
-const { registerCrmRoutes } = require('./crm.routes');
-const { registerSalesRoutes } = require('./sales.routes');
-const { registerCampaignRoutes } = require('./campaign.routes');
-const { registerTallyRoutes } = require('./tally.routes');
-const { createMediaStorage } = require('./media.storage');
-const { createCampaignQueueTools, isCampaignQueueConfigured } = require('./campaign.queue');
+  createMediaStorage,
+} = require('./services');
+const {
+  registerCoreRoutes,
+  registerWhatsAppRoutes,
+  registerCrmRoutes,
+  registerSalesRoutes,
+  registerCampaignRoutes,
+  registerTallyRoutes,
+} = require('./routes');
+const {
+  createOutboundQueueTools,
+  isOutboundQueueConfigured,
+  createWebhookQueueTools,
+  isWebhookQueueConfigured,
+  createCampaignQueueTools,
+  isCampaignQueueConfigured,
+} = require('./queues');
 
 if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL is not set. Add it to backend/.env and restart.');
@@ -565,6 +570,14 @@ function getFatalProductionConfigErrors() {
     if (String(process.env.MEDIA_STORAGE_DRIVER || '').trim().toLowerCase() !== 's3') {
       errors.push('MEDIA_STORAGE_DRIVER=s3 is required in production.');
     }
+  }
+
+  const memoryRateLimitAllowed = String(process.env.RATE_LIMIT_ALLOW_MEMORY_IN_PRODUCTION || '')
+    .trim()
+    .toLowerCase() === 'true';
+
+  if (!memoryRateLimitAllowed && !hasRealValue(process.env.RATE_LIMIT_REDIS_URL || process.env.REDIS_URL)) {
+    errors.push('RATE_LIMIT_REDIS_URL or REDIS_URL is required for production Redis-backed rate limiting.');
   }
 
   return errors;
@@ -2034,7 +2047,7 @@ if (!settings.botEnabled) return null;
     }
   }
 
-  const status = waMessageId ? 'sent' : 'queued-local';
+  const status = waMessageId ? 'accepted' : 'queued-local';
 
   if (!waMessageId && !shouldAllowLocalMessageQueue()) return null;
 
@@ -3020,7 +3033,7 @@ async function sendOrderAcknowledgementToCustomer({ tenantId, userId, order, quo
     direction: 'outbound',
     type: 'template',
     body: outboundBody,
-    status: waMessageId ? 'sent' : 'accepted',
+    status: 'accepted',
     templateName,
     rawPayload: {
       templateName,
@@ -3124,7 +3137,7 @@ async function sendManagerApprovalSystemReply({ tenantId, contactId, contact, te
     direction: 'outbound',
     type: 'text',
     body: text,
-    status: waMessageId ? 'sent' : 'accepted',
+    status: 'accepted',
     rawPayload: { action, quoteId },
     normalizedText: text,
   });
@@ -3398,7 +3411,7 @@ async function sendCustomerQuoteSystemReply({ tenantId, contactId, contact, text
     direction: 'outbound',
     type: 'text',
     body: text,
-    status: waMessageId ? 'sent' : 'accepted',
+    status: 'accepted',
     rawPayload: { action, quoteId },
     normalizedText: text,
   });

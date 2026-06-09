@@ -1610,3 +1610,23 @@ ADD COLUMN IF NOT EXISTS totp_enabled boolean NOT NULL DEFAULT false;
 
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS totp_enabled_at timestamptz;
+
+DO $$
+BEGIN
+  ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_status_check;
+
+  ALTER TABLE campaigns
+  ADD CONSTRAINT campaigns_status_check
+  CHECK (
+    status IN (
+      'draft',
+      'scheduled',
+      'queued',
+      'sending',
+      'sent',
+      'partial_failed',
+      'failed',
+      'cancelled'
+    )
+  );
+END $$;

@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ClipboardList,
   LayoutDashboard,
-  Headphones,
   Link2,
   Menu,
   Megaphone,
@@ -33,13 +32,15 @@ import {
   X,
 } from 'lucide-react'
 import { api, formatApiIssue, isProduction } from './apiClient'
-import { ProtectedImage, ProtectedMedia, ProtectedMediaLink } from './ProtectedMedia'
 import {
   buildAppSettingsPayload,
   defaultAppSettings,
   initials,
+  ProtectedImage,
+  ProtectedMedia,
+  ProtectedMediaLink,
   toCsv,
-} from './appUtils'
+} from './utils.jsx'
 import {
   BotStudioPage,
   BulkMessagePage,
@@ -60,11 +61,6 @@ import {
   UsersPage,
   WorkspaceHeading,
 } from './WorkspacePages'
-import './public-site.css'
-import './workspace-legacy.css'
-import './authenticated-workspace.css'
-import './suite-workspace.css'
-import './suite-polish.css'
 
 function clearStoredSession() {
   localStorage.removeItem('token')
@@ -2988,6 +2984,13 @@ async function sendTestMessage(event) {
         <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${darkMode ? 'theme-dark' : 'theme-light'}`}>
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail workspace-sidebar">
+        <div className="suite-sidebar-brand">
+          <span className="suite-brand-mark"><MessageCircle size={21} /></span>
+          <div>
+            <strong>{appSettings.appName || 'WhatsApp CRM'}</strong>
+            <small>{appSettings.companyName || 'Business workspace'}</small>
+          </div>
+        </div>
         <nav className="sidebar-navigation" aria-label="Workspace navigation">
           {isSuperAdminUser && navigationGroups.map((group) => (
             <div className="nav-group" key={group.label}>
@@ -3114,7 +3117,10 @@ return (
           >
             <Menu size={19} />
           </button>
-          <span><Headphones size={17} /> Support</span>
+          <div className="suite-page-context">
+            <strong>{chatPages ? chatMode.title : featureGate?.title || 'Workspace'}</strong>
+            <small>{chatPages ? chatMode.helper : 'Secure business operations workspace'}</small>
+          </div>
         </div>
         <div className="suite-topbar-right">
           {!isSuperAdminUser && canMonitor && (

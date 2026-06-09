@@ -49,7 +49,7 @@ import {
   initials,
   parseCsv,
   toCsv,
-} from './appUtils'
+} from './utils.jsx'
 
 export function PlatformPage({
   activePage,
@@ -84,7 +84,7 @@ export function PlatformPage({
       <div className="workspace-head">
         <div>
           <h2>Client Company Control</h2>
-        <span>Create client companies, create the first admin, verify WhatsApp/account status, and enter client CRM for testing. Build: enter-crm-v2</span>
+        <span>Create client companies, assign the first admin, verify WhatsApp account status, and access client CRM workspaces for approved support.</span>
         </div>
       </div>
 
@@ -1498,7 +1498,7 @@ export function BulkMessagePage({ templates, contacts }) {
   })
 
   const csvValidationError =
-    activeTab !== 'csv' ? 'This builder is coming soon. Use CSV Upload for now.' :
+    activeTab !== 'csv' ? 'This campaign builder is not enabled yet. Use CSV Upload for production-safe sending.' :
     blankPhoneRows.length ? 'CSV contains a row without phone number.' :
     duplicatePhones.length ? `Duplicate phone found: ${duplicatePhones[0]}` :
     unknownRows.length ? `Unknown contact found: ${csvPhone(unknownRows[0])}. Add/contact sync this customer before campaign sending.` :
@@ -1615,7 +1615,7 @@ export function BulkMessagePage({ templates, contacts }) {
               onClick={() => {
                 if (disabled) {
                   setActiveTab(id)
-                  setError(`${label} is coming soon. Use CSV Upload for production-safe campaign sending.`)
+                  setError(`${label} is not enabled yet. Use CSV Upload for production-safe campaign sending.`)
                   return
                 }
 
@@ -1632,7 +1632,7 @@ export function BulkMessagePage({ templates, contacts }) {
 
       {activeTab !== 'csv' && (
         <div className="suite-policy-note">
-          This builder is coming soon. CSV Upload is the only production-safe bulk campaign flow currently enabled.
+          This builder is not enabled yet. CSV Upload is the only production-safe bulk campaign flow currently enabled.
         </div>
       )}
 
@@ -1827,9 +1827,9 @@ export function CannedMessagePage({
 
       {lockedBatchMode && (
         <div className="suite-policy-note">
-          {tab === 'csv' && 'CSV canned sending is coming soon. Use Bulk Messages for consent-backed template campaigns.'}
-          {tab === 'manual' && 'Manual grid sending is coming soon. Use Single Number for safe one-to-one sending.'}
-          {tab === 'filters' && 'Contact filter sending is coming soon. Use Bulk Messages after consent-backed audience filtering is enabled.'}
+          {tab === 'csv' && 'CSV canned sending is not enabled here. Use Bulk Messages for consent-backed template campaigns.'}
+          {tab === 'manual' && 'Manual grid sending is not enabled yet. Use Single Number for safe one-to-one sending.'}
+          {tab === 'filters' && 'Contact filter sending is not enabled yet. Use Bulk Messages after consent-backed audience filtering is enabled.'}
         </div>
       )}
 
@@ -3215,22 +3215,22 @@ const settingsTabs = [
     <div className="settings-role-grid">
       <div>
         <strong>Contacts</strong>
-        <span>Usage metrics will appear here</span>
+        <span>Usage metrics are not connected yet</span>
       </div>
 
       <div>
         <strong>Messages</strong>
-        <span>Usage metrics will appear here</span>
+        <span>Usage metrics are not connected yet</span>
       </div>
 
       <div>
         <strong>Campaigns</strong>
-        <span>Usage metrics will appear here</span>
+        <span>Usage metrics are not connected yet</span>
       </div>
 
       <div>
         <strong>Storage</strong>
-        <span>Usage metrics will appear here</span>
+        <span>Usage metrics are not connected yet</span>
       </div>
     </div>
   </section>
