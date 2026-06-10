@@ -3641,12 +3641,41 @@ async function ensurePlatformSuperAdmin() {
   }
 
   const tenantResult = await query(
-    `INSERT INTO tenants (name, slug, industry, status, plan, onboarding_status, updated_at)
-     VALUES ('Platform Admin', 'platform', 'SaaS Platform', 'active', 'internal', 'active', now())
+    `INSERT INTO tenants (
+  name,
+  slug,
+  industry,
+  status,
+  plan,
+  subscription_status,
+  trial_ends_at,
+  subscription_ends_at,
+  suspended_reason,
+  onboarding_status,
+  updated_at
+)
+VALUES (
+  'Platform Admin',
+  'platform',
+  'SaaS Platform',
+  'active',
+  'internal',
+  'active',
+  NULL,
+  NULL,
+  NULL,
+  'active',
+  now()
+)
      ON CONFLICT (slug)
-     DO UPDATE SET status = 'active',
-                   onboarding_status = 'active',
-                   updated_at = now()
+DO UPDATE SET status = 'active',
+              plan = 'internal',
+              subscription_status = 'active',
+              trial_ends_at = NULL,
+              subscription_ends_at = NULL,
+              suspended_reason = NULL,
+              onboarding_status = 'active',
+              updated_at = now()
      RETURNING id`,
   );
 

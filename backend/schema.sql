@@ -5,19 +5,43 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- =========================================================
 
 CREATE TABLE IF NOT EXISTS tenants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
-  slug TEXT UNIQUE NOT NULL,
-  industry TEXT NOT NULL DEFAULT 'General',
+  slug TEXT NOT NULL UNIQUE,
+  industry TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'starter',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  subscription_status TEXT NOT NULL DEFAULT 'trial',
+  trial_ends_at TIMESTAMPTZ DEFAULT (now() + interval '14 days'),
+  subscription_ends_at TIMESTAMPTZ,
+  suspended_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO tenants (name, slug, industry, status, plan)
-VALUES ('Demo Company', 'demo', 'General', 'active', 'starter')
+INSERT INTO tenants (
+  name,
+  slug,
+  industry,
+  status,
+  plan,
+  subscription_status,
+  trial_ends_at,
+  subscription_ends_at,
+  suspended_reason
+)
+VALUES (
+  'Demo Company',
+  'demo',
+  'General',
+  'active',
+  'starter',
+  'trial',
+  now() + interval '14 days',
+  NULL,
+  NULL
+)
 ON CONFLICT (slug) DO NOTHING;
-
 -- =========================================================
 -- 2. USERS
 -- =========================================================
@@ -37,9 +61,34 @@ CREATE TABLE IF NOT EXISTS users (
 -- PLATFORM / SUPER ADMIN SUPPORT
 -- =========================================================
 
-INSERT INTO tenants (name, slug, industry, status, plan)
-VALUES ('Platform Admin', 'platform', 'SaaS Platform', 'active', 'internal')
-ON CONFLICT (slug) DO NOTHING;
+INSERT INTO tenants (
+  name,
+  slug,
+  industry,
+  status,
+  plan,
+  subscription_status,
+  trial_ends_at,
+  subscription_ends_at,
+  suspended_reason
+)
+VALUES (
+  'Platform Admin',
+  'platform',
+  'SaaS Platform',
+  'active',
+  'internal',
+  'active',
+  NULL,
+  NULL,
+  NULL
+)
+ON CONFLICT (slug) DO UPDATE SET
+  plan = 'internal',
+  subscription_status = 'active',
+  trial_ends_at = NULL,
+  subscription_ends_at = NULL,
+  suspended_reason = NULL;
 
 DO $$
 BEGIN
@@ -862,6 +911,23 @@ ON knowledge_base (tenant_id, category, active);
 -- 14. AUDIT EVENTS
 -- =========================================================
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  requested_ip TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user
+  ON password_reset_tokens(user_id, expires_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash
+  ON password_reset_tokens(token_hash);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1630,3 +1696,15 @@ BEGIN
     )
   );
 END $$;
+
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'trial';
+
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ DEFAULT (now() + interval '14 days');
+
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS subscription_ends_at TIMESTAMPTZ;
+
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS suspended_reason TEXT;

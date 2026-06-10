@@ -654,23 +654,27 @@ function createTenantService({
       .slice(0, 60);
   }
 
-  function publicTenant(tenant) {
-    return {
-      id: tenant.id,
-      name: tenant.name,
-      slug: tenant.slug,
-      industry: tenant.industry,
-      status: tenant.status,
-      plan: tenant.plan,
-      logoUrl: tenant.logo_url || '',
-      businessPhone: tenant.business_phone || '',
-      businessEmail: tenant.business_email || '',
-      metaBusinessId: tenant.meta_business_id || '',
-      onboardingStatus: tenant.onboarding_status || 'pending',
-      createdAt: tenant.created_at,
-      updatedAt: tenant.updated_at,
-    };
-  }
+function publicTenant(tenant) {
+  return {
+    id: tenant.id,
+    name: tenant.name,
+    slug: tenant.slug,
+    industry: tenant.industry,
+    status: tenant.status,
+    plan: tenant.plan,
+    subscriptionStatus: tenant.subscription_status || 'trial',
+    trialEndsAt: tenant.trial_ends_at || null,
+    subscriptionEndsAt: tenant.subscription_ends_at || null,
+    suspendedReason: tenant.suspended_reason || '',
+    logoUrl: tenant.logo_url,
+    businessPhone: tenant.business_phone,
+    businessEmail: tenant.business_email,
+    metaBusinessId: tenant.meta_business_id,
+    onboardingStatus: tenant.onboarding_status,
+    createdAt: tenant.created_at,
+    updatedAt: tenant.updated_at,
+  };
+}
 
   async function countActiveTenantAdmins(tenantId, excludeUserId = null) {
     const params = [tenantId];

@@ -68,11 +68,14 @@ export function PlatformPage({
   onLoadStatus,
   onEnterClientCrm,
   onRemoveClientAccess,
+  onSubscriptionAction,
 }) {
-  const clientTenants = tenants.filter((tenant) => tenant.slug !== 'platform')
-  const selectedTenant = clientTenants.find((tenant) => tenant.id === selectedTenantId) || clientTenants[0]
-  const connectedClients = clientTenants.filter((tenant) => tenant.onboardingStatus === 'whatsapp_mapped').length
-  const activeClients = clientTenants.filter((tenant) => tenant.status === 'active').length
+const clientTenants = tenants.filter((tenant) => tenant.slug !== 'platform')
+const selectedTenant = clientTenants.find((tenant) => tenant.id === selectedTenantId) || clientTenants[0]
+const connectedClients = clientTenants.filter((tenant) => tenant.onboardingStatus === 'whatsapp_mapped').length
+const activeClients = clientTenants.filter((tenant) => tenant.status === 'active').length
+const trialClients = clientTenants.filter((tenant) => tenant.subscriptionStatus === 'trial').length
+const suspendedClients = clientTenants.filter((tenant) => tenant.subscriptionStatus === 'suspended' || tenant.status === 'suspended').length
 
   function selectTenant(tenantId) {
     setSelectedTenantId(tenantId)
@@ -89,10 +92,11 @@ export function PlatformPage({
       </div>
 
       <div className="kpi-grid platform-kpis">
-        <button type="button"><strong>{clientTenants.length}</strong><span>Client Companies</span></button>
-        <button type="button"><strong>{activeClients}</strong><span>Active Clients</span></button>
-        <button type="button"><strong>{connectedClients}</strong><span>WhatsApp Mapped</span></button>
-        <button type="button"><strong>{tenants.length}</strong><span>Total Tenants</span></button>
+<button type="button"><strong>{clientTenants.length}</strong><span>Client Companies</span></button>
+<button type="button"><strong>{activeClients}</strong><span>Active Clients</span></button>
+<button type="button"><strong>{connectedClients}</strong><span>WhatsApp Mapped</span></button>
+<button type="button"><strong>{trialClients}</strong><span>Trial Clients</span></button>
+<button type="button"><strong>{suspendedClients}</strong><span>Suspended Clients</span></button>
       </div>
 
       {activePage === 'platformTenants' && (
@@ -103,7 +107,7 @@ export function PlatformPage({
               <label>Company Name<input value={tenantForm.name} onChange={(e) => setTenantForm({ ...tenantForm, name: e.target.value })} placeholder="ABC Steels Pvt Ltd" /></label>
               <label>Slug<input value={tenantForm.slug} onChange={(e) => setTenantForm({ ...tenantForm, slug: e.target.value })} placeholder="abc-steels" /></label>
               <label>Industry<input value={tenantForm.industry} onChange={(e) => setTenantForm({ ...tenantForm, industry: e.target.value })} placeholder="Steel / Retail / Service" /></label>
-              <label>Plan<input value={tenantForm.plan} onChange={(e) => setTenantForm({ ...tenantForm, plan: e.target.value })} placeholder="starter" /></label>
+              <label>Plan<input value={tenantForm.plan} onChange={(e) => setTenantForm({ ...tenantForm, plan: e.target.value })} placeholder="trial" /></label>
               <label>Status<select value={tenantForm.status} onChange={(e) => setTenantForm({ ...tenantForm, status: e.target.value })}><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></label>
               <label>Business Phone<input value={tenantForm.businessPhone} onChange={(e) => setTenantForm({ ...tenantForm, businessPhone: e.target.value })} placeholder="919876543210" /></label>
               <label>Business Email<input value={tenantForm.businessEmail} onChange={(e) => setTenantForm({ ...tenantForm, businessEmail: e.target.value })} placeholder="admin@abcsteels.com" /></label>
@@ -138,8 +142,14 @@ export function PlatformPage({
               <div className="platform-tenant-row" key={tenant.id}>
                 <div>
                   <strong>{tenant.name}</strong>
-                  <span>{tenant.slug} - {tenant.industry || 'General'} - {tenant.plan || 'starter'}</span>
-                  <small>{tenant.businessEmail || 'No email'} - {tenant.businessPhone || 'No phone'}</small>
+<span>
+  {tenant.slug} - {tenant.industry || 'General'} - Plan: {tenant.plan || 'starter'}
+</span>
+<small>
+  Subscription: {tenant.subscriptionStatus || 'trial'}
+  {tenant.trialEndsAt ? ` - Trial ends: ${new Date(tenant.trialEndsAt).toLocaleDateString()}` : ''}
+</small>
+<small>{tenant.businessEmail || 'No email'} - {tenant.businessPhone || 'No phone'}</small>
                 </div>
                 <b className={`status-${tenant.status === 'active' ? 'active' : 'inactive'}`}>{tenant.status}</b>
                 <i>{tenant.onboardingStatus || 'pending'}</i>
@@ -161,6 +171,46 @@ export function PlatformPage({
                 >
                   Remove Access
                 </button>
+                <button
+  type="button"
+  onClick={() => onSubscriptionAction(tenant, 'activate')}
+>
+  Activate
+</button>
+
+<button
+  type="button"
+  onClick={() => onSubscriptionAction(tenant, 'trial')}
+>
+  Trial
+</button>
+
+<button
+  type="button"
+  onClick={() => onSubscriptionAction(tenant, 'resume')}
+>
+  Resume
+</button>
+
+<button
+  type="button"
+  onClick={() => {
+    const reason = window.prompt('Suspend reason', 'Payment pending')
+    if (reason !== null) onSubscriptionAction(tenant, 'suspend', reason)
+  }}
+>
+  Suspend
+</button>
+
+<button
+  type="button"
+  onClick={() => {
+    const reason = window.prompt('Expiry reason', 'Subscription expired')
+    if (reason !== null) onSubscriptionAction(tenant, 'expire', reason)
+  }}
+>
+  Expire
+</button>
               </div>
             ))}
           </div>
@@ -184,7 +234,15 @@ export function PlatformPage({
             <div className="platform-status-grid">
               <div className="mini-row">
                 <strong>{platformStatus.tenant?.name}</strong>
-                <span>{platformStatus.tenant?.slug} - {platformStatus.tenant?.status} - {platformStatus.tenant?.onboardingStatus}</span>
+                <span>
+  {platformStatus.tenant?.slug}
+  {' - '}
+  {platformStatus.tenant?.status}
+  {' - '}
+  {platformStatus.tenant?.onboardingStatus}
+  {' - '}
+  Subscription: {platformStatus.tenant?.subscriptionStatus || 'trial'}
+</span>
               </div>
               <div className="mini-row">
                 <strong>{platformStatus.totals?.contacts || 0}</strong>
@@ -2819,6 +2877,7 @@ export function SettingsPage({
   onCancelUserEdit,
   onToggleUser,
   onDeleteUser,
+  tenantUsage,
 }) {
   const warnings = status?.warnings || []
   const [activeSettingsTab, setActiveSettingsTab] = useState('profile')
@@ -3207,34 +3266,35 @@ const settingsTabs = [
       )}
 
       {activeSettingsTab === 'usage' && (
-  <section className="settings-card">
-    <div className="settings-card-title">
-      <h3>Usage & Limits</h3>
-    </div>
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <h3>Usage & Limits</h3>
+          </div>
 
-    <div className="settings-role-grid">
-      <div>
-        <strong>Contacts</strong>
-        <span>Usage metrics are not connected yet</span>
-      </div>
+          <div className="settings-role-grid">
+            {[
+              ['Plan', tenantUsage?.plan || '-'],
+              ['Users', `${tenantUsage?.usage?.users ?? 0} / ${tenantUsage?.limits?.users ?? '-'}`],
+              ['Contacts', `${tenantUsage?.usage?.contacts ?? 0} / ${tenantUsage?.limits?.contacts ?? '-'}`],
+              ['Templates', `${tenantUsage?.usage?.templates ?? 0} / ${tenantUsage?.limits?.templates ?? '-'}`],
+              ['Products', `${tenantUsage?.usage?.products ?? 0} / ${tenantUsage?.limits?.products ?? '-'}`],
+              ['Outbound Today', `${tenantUsage?.usage?.outboundMessagesToday ?? 0} / ${tenantUsage?.limits?.outboundMessagesPerDay ?? '-'}`],
+              ['Campaign Recipients / Run', tenantUsage?.limits?.campaignRecipientsPerRun ?? '-'],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <strong>{label}</strong>
+                <span>{value}</span>
+              </div>
+            ))}
+          </div>
 
-      <div>
-        <strong>Messages</strong>
-        <span>Usage metrics are not connected yet</span>
-      </div>
-
-      <div>
-        <strong>Campaigns</strong>
-        <span>Usage metrics are not connected yet</span>
-      </div>
-
-      <div>
-        <strong>Storage</strong>
-        <span>Usage metrics are not connected yet</span>
-      </div>
-    </div>
-  </section>
-)}
+          {!tenantUsage && (
+            <small className="settings-safe-note">
+              Usage data is loading or unavailable for this role.
+            </small>
+          )}
+        </section>
+      )}
 
       {activeSettingsTab === 'voice' && (
         <form className="voice-settings-form" onSubmit={saveVoiceSettings}>
@@ -3358,3 +3418,126 @@ export function VoiceToggleRow({ icon: Icon, title, text, checked, onChange }) {
     </div>
   )
 }
+export function BillingPage({
+  billingSummary,
+  tenantUsage,
+  user,
+  onRefresh,
+}) {
+  const summary = billingSummary || tenantUsage || {}
+  const tenant = summary.tenant || user?.tenant || {}
+  const limits = summary.limits || tenantUsage?.limits || {}
+  const usage = summary.usage || tenantUsage?.usage || {}
+  const plan = summary.plan || tenant.plan || 'starter'
+  const status = summary.subscriptionStatus || tenant.subscriptionStatus || 'trial'
+  const blocked = Boolean(summary.blocked)
+  const blockedReason = summary.blockedReason || tenant.suspendedReason || ''
+
+  const rows = [
+    ['Users', usage.users, limits.users],
+    ['Contacts', usage.contacts, limits.contacts],
+    ['Campaigns this month', usage.campaignsThisMonth, 'Your WABA limit'],
+    ['Messages this month', usage.outboundMessagesThisMonth, 'Your WABA limit'],
+    ['Messages today', usage.outboundMessagesToday, 'Your WABA limit'],
+    ['Templates', usage.templates, '-'],
+    ['Products', usage.products, '-'],
+  ]
+
+  function limitText(value) {
+    if (value === 'Your WABA limit') return value
+    if (value === -1) return 'Unlimited'
+    if (value === undefined || value === null || value === '') return '-'
+    return value
+  }
+
+  function usagePercent(used, limit) {
+    if (!limit || limit === -1 || limit === 'Your WABA limit' || Number.isNaN(Number(limit))) return 0
+    return Math.min(Math.round((Number(used || 0) / Number(limit)) * 100), 100)
+  }
+
+  return (
+    <section className="workspace-page workspace-hub-page">
+      <WorkspaceHeading
+        title="Billing & Subscription"
+        description="View current plan, subscription status, trial dates, and SaaS usage limits for this workspace."
+      />
+
+      <div className="dashboard-grid">
+        <section className={`settings-card ${blocked ? 'billing-blocked-card' : ''}`}>
+          <div className="settings-card-title">
+            <CreditCard size={22} />
+            <h3>Current Subscription</h3>
+          </div>
+
+          <div className="settings-role-grid">
+            <div>
+              <strong>{String(plan).toUpperCase()}</strong>
+              <span>Current Plan</span>
+            </div>
+            <div>
+              <strong>{String(status).toUpperCase()}</strong>
+              <span>Subscription Status</span>
+            </div>
+            <div>
+              <strong>{tenant.trialEndsAt ? new Date(tenant.trialEndsAt).toLocaleDateString() : '-'}</strong>
+              <span>Trial Ends</span>
+            </div>
+            <div>
+              <strong>{tenant.subscriptionEndsAt ? new Date(tenant.subscriptionEndsAt).toLocaleDateString() : '-'}</strong>
+              <span>Subscription Ends</span>
+            </div>
+          </div>
+
+          {blocked && (
+            <div className="workspace-alert danger">
+              <Shield size={20} />
+              <div>
+                <strong>Workspace access is billing blocked</strong>
+                <span>{blockedReason || 'Please contact platform admin to reactivate this workspace.'}</span>
+              </div>
+            </div>
+          )}
+
+          {!blocked && (
+            <div className="workspace-alert">
+              <CheckCircle2 size={20} />
+              <div>
+                <strong>Workspace subscription is usable</strong>
+                <span>Your platform plan controls feature access. WhatsApp message volume follows your connected WABA limits and Meta billing.</span>
+              </div>
+            </div>
+          )}
+
+          <div className="inline-actions">
+            <button type="button" onClick={onRefresh}>Refresh Billing</button>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <Activity size={22} />
+            <h3>Usage & Limits</h3>
+          </div>
+
+          <div className="billing-usage-list">
+            {rows.map(([label, used, limit]) => {
+              const percent = usagePercent(used, limit)
+
+              return (
+                <div className="billing-usage-row" key={label}>
+                  <div>
+                    <strong>{label}</strong>
+                    <span>{used ?? 0} / {limitText(limit)}</span>
+                  </div>
+                  <div className="billing-meter">
+                    <i style={{ width: `${percent}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      </div>
+    </section>
+  )
+} 

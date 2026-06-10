@@ -42,6 +42,7 @@ import {
   toCsv,
 } from './utils.jsx'
 import {
+  BillingPage,
   BotStudioPage,
   BulkMessagePage,
   CannedMessagePage,
@@ -63,8 +64,50 @@ import {
 } from './WorkspacePages'
 
 function clearStoredSession() {
-  localStorage.removeItem('token')
   delete api.defaults.headers.common.Authorization
+}
+
+function SubscriptionBanner({ user }) {
+  const tenant = user?.tenant
+  if (!tenant || user?.role === 'super_admin') return null
+
+  const status = tenant.subscriptionStatus || 'trial'
+  const trialEndsAt = tenant.trialEndsAt ? new Date(tenant.trialEndsAt).toLocaleDateString() : ''
+  const subscriptionEndsAt = tenant.subscriptionEndsAt ? new Date(tenant.subscriptionEndsAt).toLocaleDateString() : ''
+
+  if (status === 'trial') {
+    return (
+      <div className="subscription-banner trial">
+        Trial active{trialEndsAt ? ` until ${trialEndsAt}` : ''}. Upgrade before trial ends to avoid interruption.
+      </div>
+    )
+  }
+
+  if (status === 'active') {
+    return (
+      <div className="subscription-banner active">
+        Subscription active{subscriptionEndsAt ? ` until ${subscriptionEndsAt}` : ''}.
+      </div>
+    )
+  }
+
+  if (status === 'expired') {
+    return (
+      <div className="subscription-banner blocked">
+        Subscription expired. Please contact platform admin to reactivate your workspace.
+      </div>
+    )
+  }
+
+  if (status === 'suspended') {
+    return (
+      <div className="subscription-banner blocked">
+        Subscription suspended{tenant.suspendedReason ? `: ${tenant.suspendedReason}` : ''}. Please contact platform admin.
+      </div>
+    )
+  }
+
+  return null
 }
 
 const LEGAL_EFFECTIVE_DATE = '29 May 2026'
@@ -305,8 +348,17 @@ function PublicLegalPage({ path, appSettings }) {
 }
 
 function PublicWebsite({ onAuthenticate, appSettings }) {
-  const [mode, setMode] = useState('')
-  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+const [mode, setMode] = useState('')
+const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+const [totpForm, setTotpForm] = useState({ challenge: '', token: '' })
+const [forgotEmail, setForgotEmail] = useState('')
+const resetTokenFromUrl = new URLSearchParams(window.location.search).get('resetToken') || ''
+
+  const [resetForm, setResetForm] = useState({
+    token: resetTokenFromUrl,
+    password: '',
+    confirmPassword: '',
+  })
   const [registerForm, setRegisterForm] = useState({
     companyName: '',
     industry: '',
@@ -319,6 +371,10 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const platformName = appSettings.appName || 'BOS WhatsApp CRM'
+
+  if (resetTokenFromUrl && mode !== 'reset') {
+    setMode('reset')
+  }
 
   const capabilities = [
     { icon: MessageCircle, title: 'Meta WhatsApp Setup', copy: 'Connect an official WhatsApp Business account through secure Embedded Signup.' },
@@ -354,11 +410,19 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
     setSubmitting(true)
 
     try {
-      const res = await api.post('/api/auth/login', {
-        email: loginForm.email.trim().toLowerCase(),
-        password: loginForm.password,
-      })
-      onAuthenticate(res.data.user)
+const res = await api.post('/api/auth/login', {
+  email: loginForm.email.trim().toLowerCase(),
+  password: loginForm.password,
+})
+
+if (res.data?.requiresTotp && res.data?.totpChallenge) {
+  setTotpForm({ challenge: res.data.totpChallenge, token: '' })
+  setMode('totp')
+  setLoginForm((current) => ({ ...current, password: '' }))
+  return
+}
+
+onAuthenticate(res.data.user)
     } catch (err) {
      setError(
   err.response?.data?.error ||
@@ -366,6 +430,92 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
   err.message ||
   'Login failed'
 )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitTotpLogin(event) {
+  event.preventDefault()
+  if (submitting) return
+
+  const cleanToken = String(totpForm.token || '').replace(/\D/g, '').slice(0, 6)
+
+  if (cleanToken.length !== 6) {
+    setError('Enter the 6 digit authenticator code')
+    return
+  }
+
+  setError('')
+  setSubmitting(true)
+
+  try {
+    const res = await api.post('/api/auth/totp/login', {
+      totpChallenge: totpForm.challenge,
+      token: cleanToken,
+    })
+
+    onAuthenticate(res.data.user)
+  } catch (err) {
+    setError(
+      err.response?.data?.error ||
+      err.response?.data?.message ||
+      err.message ||
+      '2FA verification failed'
+    )
+  } finally {
+    setSubmitting(false)
+  }
+}
+
+    async function submitForgotPassword(event) {
+    event.preventDefault()
+    if (submitting) return
+
+    setError('')
+    setSubmitting(true)
+
+    try {
+      const res = await api.post('/api/auth/forgot-password', {
+        email: forgotEmail.trim().toLowerCase(),
+      })
+
+      if (res.data?.resetUrl) {
+        setError(`Development reset link: ${res.data.resetUrl}`)
+      } else {
+        setError(res.data?.message || 'If this email exists, reset instructions will be sent.')
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Unable to request password reset')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitResetPassword(event) {
+    event.preventDefault()
+    if (submitting) return
+
+    if (resetForm.password !== resetForm.confirmPassword) {
+      setError('Passwords do not match')
+      return
+    }
+
+    setError('')
+    setSubmitting(true)
+
+    try {
+      const res = await api.post('/api/auth/reset-password', {
+        token: resetForm.token.trim(),
+        password: resetForm.password,
+      })
+
+      setError(res.data?.message || 'Password reset successful. Please login again.')
+      setMode('login')
+      setLoginForm((current) => ({ ...current, password: '' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Unable to reset password')
     } finally {
       setSubmitting(false)
     }
@@ -538,43 +688,154 @@ function PublicWebsite({ onAuthenticate, appSettings }) {
         <div className="access-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMode('') }}>
           <div className="access-card access-dialog" role="dialog" aria-modal="true" aria-labelledby="access-title">
             <button className="access-close" type="button" onClick={() => setMode('')} aria-label="Close account access"><X size={19} /></button>
-            {mode === 'login' ? (
-              <form className="access-form" onSubmit={submitLogin}>
-                <span className="access-label">Secure Login</span>
-                <h2 id="access-title">Welcome back</h2>
-                <p>Access your secured business operations dashboard.</p>
-                <label>Work email<input type="email" autoComplete="email" required value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="admin@company.com" /></label>
-                <label>Password<input type="password" autoComplete="current-password" required value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Enter your password" /></label>
-                {error && <p className="error-text">{error}</p>}
-                <button className="public-primary" type="submit" disabled={submitting}>
-                  {submitting ? 'Signing in...' : 'Continue securely'} <ArrowRight size={17} />
-                </button>
-                <small>Session access is managed securely by the backend.</small>
-              </form>
-            ) : (
-              <form className="access-form register-form" onSubmit={submitRegistration}>
-                <span className="access-label">New Business Workspace</span>
-                <h2 id="access-title">Create your account</h2>
-                <p>Start with an administrator account for your business.</p>
-                <label>Business name<input required value={registerForm.companyName} onChange={(event) => setRegisterForm({ ...registerForm, companyName: event.target.value })} placeholder="Your business name" /></label>
-                <label>Industry<input value={registerForm.industry} onChange={(event) => setRegisterForm({ ...registerForm, industry: event.target.value })} placeholder="Manufacturing, Retail, Services..." /></label>
-                <label>Administrator name<input required autoComplete="name" value={registerForm.adminName} onChange={(event) => setRegisterForm({ ...registerForm, adminName: event.target.value })} placeholder="Full name" /></label>
-                <label>Work email<input required type="email" autoComplete="email" value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="admin@company.com" /></label>
-                <div className="register-passwords">
-                  <label>Password<input required type="password" autoComplete="new-password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Minimum 12 characters" /></label>
-                  <label>Confirm password<input required type="password" autoComplete="new-password" value={registerForm.confirmPassword} onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })} placeholder="Repeat password" /></label>
-                </div>
-                <small>Use 12+ characters with uppercase, lowercase, a number and a symbol.</small>
-                <label className="policy-consent">
-                  <input type="checkbox" checked={registerForm.acceptedPolicy} onChange={(event) => setRegisterForm({ ...registerForm, acceptedPolicy: event.target.checked })} />
-                  <span>I will send WhatsApp communications only to opted-in customers and follow Meta messaging policies.</span>
-                </label>
-                {error && <p className="error-text">{error}</p>}
-                <button className="public-primary" type="submit" disabled={submitting}>
-                  {submitting ? 'Creating workspace...' : 'Create workspace'} <ArrowRight size={17} />
-                </button>
-              </form>
-            )}
+          {mode === 'login' ? (
+            <form className="access-form" onSubmit={submitLogin}>
+              <span className="access-label">Secure Login</span>
+              <h2>Login to your workspace</h2>
+              <p>Use your registered business email and password.</p>
+
+              <label>
+                Email
+                <input value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} />
+              </label>
+
+              <label>
+                Password
+                <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+              </label>
+
+              {error && <p className="error-text">{error}</p>}
+
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Logging in...' : 'Login'}
+              </button>
+
+              <button className="public-ghost" type="button" onClick={() => openAccess('forgot')}>
+                Forgot password?
+              </button>
+            </form>
+) : mode === 'totp' ? (
+  <form className="access-form" onSubmit={submitTotpLogin}>
+    <span className="access-label">Two Factor Login</span>
+    <h2>Enter authenticator code</h2>
+    <p>Open your authenticator app and enter the 6 digit code.</p>
+
+    <label>
+      Authenticator Code
+      <input
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        value={totpForm.token}
+        onChange={(event) => setTotpForm({
+          ...totpForm,
+          token: event.target.value.replace(/\D/g, '').slice(0, 6),
+        })}
+        placeholder="123456"
+      />
+    </label>
+
+    {error && <p className="error-text">{error}</p>}
+
+    <button className="public-primary" type="submit" disabled={submitting}>
+      {submitting ? 'Verifying...' : 'Verify and Login'}
+    </button>
+
+    <button className="public-ghost" type="button" onClick={() => openAccess('login')}>
+      Back to login
+    </button>
+  </form>
+) : mode === 'forgot' ? (
+            <form className="access-form" onSubmit={submitForgotPassword}>
+              <span className="access-label">Password Reset</span>
+              <h2>Request reset link</h2>
+              <p>Enter your registered email. If it exists, reset instructions will be created.</p>
+
+              <label>
+                Email
+                <input value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} />
+              </label>
+
+              {error && <p className="error-text">{error}</p>}
+
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Requesting...' : 'Request reset link'}
+              </button>
+            </form>
+          ) : mode === 'reset' ? (
+            <form className="access-form" onSubmit={submitResetPassword}>
+              <span className="access-label">Set New Password</span>
+              <h2>Create a new password</h2>
+              <p>Your reset link expires in 30 minutes.</p>
+
+              <label>
+                Reset token
+                <input value={resetForm.token} onChange={(event) => setResetForm({ ...resetForm, token: event.target.value })} />
+              </label>
+
+              <label>
+                New password
+                <input type="password" value={resetForm.password} onChange={(event) => setResetForm({ ...resetForm, password: event.target.value })} />
+              </label>
+
+              <label>
+                Confirm new password
+                <input type="password" value={resetForm.confirmPassword} onChange={(event) => setResetForm({ ...resetForm, confirmPassword: event.target.value })} />
+              </label>
+
+              {error && <p className="error-text">{error}</p>}
+
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Resetting...' : 'Reset password'}
+              </button>
+            </form>
+          ) : (
+            <form className="access-form" onSubmit={submitRegistration}>
+              <span className="access-label">Create Workspace</span>
+              <h2>Register your business</h2>
+              <p>Create a secure company workspace for WhatsApp operations.</p>
+
+              <label>
+                Company Name
+                <input value={registerForm.companyName} onChange={(event) => setRegisterForm({ ...registerForm, companyName: event.target.value })} />
+              </label>
+
+              <label>
+                Industry
+                <input value={registerForm.industry} onChange={(event) => setRegisterForm({ ...registerForm, industry: event.target.value })} />
+              </label>
+
+              <label>
+                Admin Name
+                <input value={registerForm.adminName} onChange={(event) => setRegisterForm({ ...registerForm, adminName: event.target.value })} />
+              </label>
+
+              <label>
+                Email
+                <input value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} />
+              </label>
+
+              <label>
+                Password
+                <input type="password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} />
+              </label>
+
+              <label>
+                Confirm Password
+                <input type="password" value={registerForm.confirmPassword} onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })} />
+              </label>
+
+              <label className="policy-check">
+                <input type="checkbox" checked={registerForm.acceptedPolicy} onChange={(event) => setRegisterForm({ ...registerForm, acceptedPolicy: event.target.checked })} />
+                I accept Privacy Policy and Terms
+              </label>
+
+              {error && <p className="error-text">{error}</p>}
+
+              <button className="public-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Creating...' : 'Create account'}
+              </button>
+            </form>
+          )}
           </div>
         </div>
       )}
@@ -858,14 +1119,14 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
         </div>
 
         <p>
-          Dashboard unlock karne ke liye apna official Meta WhatsApp Business account connect kijiye.
+          Process 1 complete: your customer workspace is created. Process 2: connect your own official WABA so this platform can send and receive messages only for your business account.
           Meta login popup me credentials Meta ke paas hi rahenge. Backend sirf secure token exchange karke encrypted storage karega.
         </p>
 
         <div className="flow-list">
-          <p><b>1</b><span>Meta Business login / permission</span></p>
-          <p><b>2</b><span>Business portfolio, WABA aur phone number select/create</span></p>
-          <p><b>3</b><span>Backend token encrypt karke tenant ke saath save karega</span></p>
+          <p><b>1</b><span>Customer onboarding creates your tenant workspace</span></p>
+          <p><b>2</b><span>Meta Business portfolio, WABA aur phone number select/create</span></p>
+          <p><b>3</b><span>Backend token encrypt karke sirf aapke tenant ke saath save karega</span></p>
           <p><b>4</b><span>Connection complete hone ke baad CRM dashboard unlock hoga</span></p>
         </div>
 
@@ -946,6 +1207,8 @@ const [authChecking, setAuthChecking] = useState(true)
   const [whatsappConfig, setWhatsappConfig] = useState(null)
   const [whatsappOnboarding, setWhatsappOnboarding] = useState(null)
   const [whatsappHealth, setWhatsappHealth] = useState(null)
+  const [tenantUsage, setTenantUsage] = useState(null)
+  const [billingSummary, setBillingSummary] = useState(null)
   const [connectingWhatsApp, setConnectingWhatsApp] = useState(false)
   const [assignmentHistory, setAssignmentHistory] = useState([])
   const [timeline, setTimeline] = useState([])
@@ -1007,7 +1270,7 @@ const [authChecking, setAuthChecking] = useState(true)
     name: '',
     slug: '',
     industry: 'General',
-    plan: 'starter',
+    plan: 'trial',
     status: 'active',
     businessPhone: '',
     businessEmail: '',
@@ -1136,6 +1399,7 @@ const [authChecking, setAuthChecking] = useState(true)
       },
       { id: 'bot', label: 'Automation', icon: Bot },
       { id: 'integrations', label: 'Integrations', icon: Sparkles },
+      { id: 'billing', label: 'Billing', icon: Shield },
       { id: 'controlCenter', label: 'Control Center', icon: Settings },
     ]
 
@@ -1294,6 +1558,41 @@ const [authChecking, setAuthChecking] = useState(true)
       notify(apiErrorMessage(err, 'Unable to enter client CRM'), 'error')
     }
   }
+
+  async function updateClientSubscription(tenant, action, reason = '') {
+  if (!tenant?.id) {
+    notify('Select a client company first', 'error')
+    return
+  }
+
+  try {
+    const res = await api.patch(`/api/platform/tenants/${tenant.id}/subscription`, {
+      action,
+      plan: tenant.plan || 'starter',
+      reason,
+    })
+
+    const updatedTenant = res.data?.tenant
+
+    if (updatedTenant) {
+      setPlatformTenants((current) =>
+        current.map((item) =>
+          item.id === updatedTenant.id ? updatedTenant : item
+        )
+      )
+    }
+
+    notify(`${tenant.name} subscription updated: ${action}`)
+
+    await loadPlatformTenants()
+
+    if (selectedPlatformTenantId === tenant.id) {
+      await loadPlatformTenantStatus(tenant.id)
+    }
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Subscription update failed'), 'error')
+  }
+}
 
   async function removeClientAccess(tenant) {
     if (!tenant?.id) {
@@ -1491,6 +1790,8 @@ async function syncTallyOrder(orderId, force = false) {
         calls.push(api.get('/api/auto-reply-rules', { silentError: true }).catch(() => ({ data: [] })))
         calls.push(api.get('/api/whatsapp/config', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/whatsapp/health', { silentError: true }).catch(() => ({ data: null })))
+        calls.push(api.get('/api/tenant/usage', { silentError: true }).catch(() => ({ data: null })))
+        calls.push(api.get('/api/billing/summary', { silentError: true }).catch(() => ({ data: null })))
         calls.push(api.get('/api/audit-events').catch(() => ({ data: [] })))
         calls.push(api.get('/api/webhook-events/failed', { silentError: true }).catch(() => ({ data: [] })))
 calls.push(api.get('/api/outbound-messages/failed', { silentError: true }).catch(() => ({ data: [] })))
@@ -1513,6 +1814,8 @@ const [
         autoReplyRulesRes,
         whatsappConfigRes,
         whatsappHealthRes,
+        tenantUsageRes,
+        billingSummaryRes,
         auditRes,
         webhookEventsRes,
         outboundEventsRes,
@@ -1548,6 +1851,8 @@ const [
       if (autoReplyRulesRes) setAutoReplyRules(autoReplyRulesRes.data)
       if (whatsappConfigRes) setWhatsappConfig(whatsappConfigRes.data)
       if (whatsappHealthRes) setWhatsappHealth(whatsappHealthRes.data)
+      if (tenantUsageRes) setTenantUsage(tenantUsageRes.data)
+      if (billingSummaryRes) setBillingSummary(billingSummaryRes.data)
       if (auditRes) setAuditEvents(auditRes.data)
 if (webhookEventsRes) setWebhookEvents(webhookEventsRes.data)
 if (outboundEventsRes) setOutboundEvents(outboundEventsRes.data)
@@ -1609,6 +1914,17 @@ async function loadMessages(contactId, markRead = false, options = {}) {
     loadPlatformTenants()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, isSuperAdminUser])
+
+  useEffect(() => {
+    if (!user?.id || isSuperAdminUser || user.role !== 'admin') return
+    if (!whatsappOnboarding || whatsappOnboarding.connected) return
+
+    const setupPages = new Set(['connectWhatsApp', 'controlCenter', 'billing', 'users'])
+    if (setupPages.has(activePage)) return
+
+    const redirectTimer = window.setTimeout(() => setActivePage('connectWhatsApp'), 0)
+    return () => window.clearTimeout(redirectTimer)
+  }, [activePage, isSuperAdminUser, user?.id, user?.role, whatsappOnboarding])
 
   useEffect(() => {
     if (isSuperAdminUser) return
@@ -1844,6 +2160,7 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId, businessId 
 
     notify('Meta WhatsApp connected successfully')
     await loadAll()
+    setActivePage('dashboard')
     return true
   } catch (err) {
     notify(err.response?.data?.error || err.message || 'Meta WhatsApp connection failed', 'error')
@@ -1853,9 +2170,28 @@ async function completeEmbeddedSignup({ code, phoneNumberId, wabaId, businessId 
   }
 }
 
-function enterWorkspace(authenticatedUser) {
-  setActivePage(authenticatedUser.role === 'super_admin' ? 'platformTenants' : 'inbox')
-  setUser(authenticatedUser)
+async function enterWorkspace(authenticatedUser) {
+  try {
+    const res = await api.get('/api/me', { silentError: true })
+    const fullUser = res.data || authenticatedUser
+    let landingPage = fullUser.role === 'super_admin' ? 'platformTenants' : 'inbox'
+
+    if (fullUser.role === 'admin') {
+      try {
+        const onboardingRes = await api.get('/api/whatsapp/onboarding', { silentError: true })
+        if (onboardingRes?.data) setWhatsappOnboarding(onboardingRes.data)
+        landingPage = onboardingRes?.data?.connected ? 'dashboard' : 'connectWhatsApp'
+      } catch {
+        landingPage = 'connectWhatsApp'
+      }
+    }
+
+    setActivePage(landingPage)
+    setUser(fullUser)
+  } catch {
+    setActivePage(authenticatedUser.role === 'super_admin' ? 'platformTenants' : authenticatedUser.role === 'admin' ? 'connectWhatsApp' : 'inbox')
+    setUser(authenticatedUser)
+  }
 }
 
 if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={appSettings} />
@@ -1928,6 +2264,17 @@ const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing']
   if (platformPages.includes(page)) {
     notify('Super Admin access required', 'error')
     setActivePage('inbox')
+    return
+  }
+
+  const setupPages = ['connectWhatsApp', 'controlCenter', 'settings', 'billing', 'users']
+  if (
+    user?.role === 'admin'
+    && whatsappOnboarding?.connected === false
+    && !setupPages.includes(page)
+  ) {
+    notify('Connect your own Meta WhatsApp account before using the CRM workspace', 'error')
+    setActivePage('connectWhatsApp')
     return
   }
 
@@ -2982,6 +3329,7 @@ async function sendTestMessage(event) {
   }[activePage]
   return (
         <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${darkMode ? 'theme-dark' : 'theme-light'}`}>
+        <SubscriptionBanner user={user} />
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail workspace-sidebar">
         <div className="suite-sidebar-brand">
@@ -3222,6 +3570,7 @@ return (
             onLoadStatus={loadPlatformTenantStatus}
             onEnterClientCrm={enterClientCrm}
             onRemoveClientAccess={removeClientAccess}
+            onSubscriptionAction={updateClientSubscription}
           />
         )}
 
@@ -3287,6 +3636,14 @@ return (
               setSelectedId(contactId)
               showPage('inbox')
             }}
+          />
+        )}
+                {activePage === 'billing' && (
+          <BillingPage
+            billingSummary={billingSummary}
+            tenantUsage={tenantUsage}
+            user={user}
+            onRefresh={loadAll}
           />
         )}
         {!isSuperAdminUser && activePage === 'integrations' && canMonitor && (
@@ -3385,6 +3742,7 @@ return (
             onSaveCustomization={saveCustomization}
             settingsSaved={settingsSaved}
             onSaveSettings={saveSettingsPayload}
+            tenantUsage={tenantUsage}
             currentUser={user}
             users={users}
             newUser={newUser}
@@ -3422,7 +3780,7 @@ return (
             auditEvents={auditEvents}
           />
         )}
-        {!isSuperAdminUser && !chatPages && !featureGate && !['sendSingle', 'sendBulk', 'sendCanned', 'contactsList', 'dashboard', 'inventory', 'bot', 'salesWorkspace', 'users', 'connectWhatsApp', 'controlCenter', 'integrations'].includes(activePage) && (
+{!isSuperAdminUser && !chatPages && !featureGate && !['sendSingle', 'sendBulk', 'sendCanned', 'contactsList', 'dashboard', 'inventory', 'bot', 'salesWorkspace', 'users', 'connectWhatsApp', 'controlCenter', 'integrations', 'billing'].includes(activePage) && (
   <EmptyState
     title="Page not available"
     text="Select a valid page from the sidebar."

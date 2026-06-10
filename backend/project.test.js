@@ -78,13 +78,17 @@ test('requireAuth loads the session user with the token tenant id', async () => 
   assert.equal(nextCalled, true);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(queryCalls[0].params, ['user-1', 'tenant-1']);
-  assert.deepEqual(req.user, {
-    id: 'user-1',
-    tenantId: 'tenant-1',
-    name: 'Admin User',
-    email: 'admin@example.com',
-    role: 'admin',
-  });
+assert.deepEqual(req.user, {
+  id: 'user-1',
+  tenantId: 'tenant-1',
+  name: 'Admin User',
+  email: 'admin@example.com',
+  role: 'admin',
+  supportMode: false,
+  supportActorUserId: null,
+  supportActorTenantId: null,
+  supportExpiresAt: null,
+});
 });
 
 test('requireAuth rejects tokens that do not resolve to an active tenant user', async () => {
@@ -500,6 +504,7 @@ test('embedded signup completion saves a verified WABA phone mapping', async () 
       code: 'code-1',
       phoneNumberId: 'phone-1',
       wabaId: 'waba-1',
+      businessId: 'business-1',
     });
 
     assert.equal(res.statusCode, 200);
@@ -508,6 +513,11 @@ test('embedded signup completion saves a verified WABA phone mapping', async () 
     assert.equal(metaPosts.length, 1);
     assert.match(metaPosts[0], /waba-1\/subscribed_apps$/);
     assert.ok(queryCalls.some((call) => call.sql.includes('INSERT INTO whatsapp_accounts')));
+    assert.ok(queryCalls.some((call) => (
+      call.sql.includes('UPDATE tenants')
+      && call.params[0] === 'tenant-1'
+      && call.params[1] === 'business-1'
+    )));
   });
 });
 
