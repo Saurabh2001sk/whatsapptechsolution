@@ -36,10 +36,10 @@ const pool = hasDatabase
       connectionString: process.env.DATABASE_URL,
       ssl: sslConfig(),
 
-      // Keep pool small and stable for WhatsApp webhook workloads.
-      max: Number(process.env.PG_POOL_MAX || 10),
-      idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
-      connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5000),
+   // Keep pool small in production because managed DB poolers often have low session limits.
+   max: Number(process.env.PG_POOL_MAX || (isProduction ? 2 : 10)),
+   idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || (isProduction ? 10000 : 30000)),
+   connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || (isProduction ? 10000 : 5000)),
 
       // Avoid long-hanging DB queries blocking WhatsApp replies.
       query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS || 15000),
