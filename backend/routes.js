@@ -34,6 +34,7 @@ function registerCoreRoutes(app, ctx) {
     cleanVoiceWeeklyHours,
     cleanUnavailableHours,
     mediaRoot,
+    OUTBOUND_MEDIA_MAX_BYTES,
     port,
     isProduction,
     jwtSecret,
@@ -1970,6 +1971,8 @@ app.get('/api/whatsapp/config', requireAuth, asyncHandler(async (req, res) => {
     testNumbersSet: hasRealValue(process.env.WHATSAPP_TEST_NUMBERS),
     callbackUrl,
     webhookPath: '/webhook',
+    maxOutboundMediaBytes: OUTBOUND_MEDIA_MAX_BYTES,
+    maxOutboundMediaMb: Math.round((Number(OUTBOUND_MEDIA_MAX_BYTES || 0) / (1024 * 1024)) * 10) / 10,
   });
 }));
 
@@ -4735,6 +4738,7 @@ function registerCrmRoutes(app, ctx) {
     uploadWhatsAppMedia,
     sendWhatsAppMedia,
     mediaUpload,
+    OUTBOUND_MEDIA_MAX_BYTES,
     sendWhatsAppInteractiveList,
     sendWhatsAppTemplate,
     sendWhatsAppTemplateToNumber,
@@ -4753,6 +4757,35 @@ function registerCrmRoutes(app, ctx) {
     handleCustomerQuoteInbound,
     assertTenantLimit,
   } = ctx;
+
+  function formatBytes(bytes = 0) {
+    const value = Number(bytes || 0);
+    if (!Number.isFinite(value) || value <= 0) return '0 MB';
+    return `${Math.round((value / (1024 * 1024)) * 10) / 10} MB`;
+  }
+
+  function handleMediaUpload(req, res, next) {
+    mediaUpload.single('mediaFile')(req, res, (error) => {
+      if (!error) return next();
+
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: `Media file is too large. Maximum ${formatBytes(OUTBOUND_MEDIA_MAX_BYTES)} is allowed.`,
+          code: 'MEDIA_FILE_TOO_LARGE',
+          maxBytes: OUTBOUND_MEDIA_MAX_BYTES,
+        });
+      }
+
+      if (String(error.message || '').includes('Unsupported media file type')) {
+        return res.status(400).json({
+          error: 'Unsupported media file type. Choose JPG, PNG, WebP, MP4, 3GP, audio, PDF, Office document, or text file.',
+          code: 'MEDIA_FILE_TYPE_UNSUPPORTED',
+        });
+      }
+
+      return next(error);
+    });
+  }
 
   async function requireActiveTenantSubscription(req, res, next) {
   if (!req.user?.tenantId) {
@@ -5860,7 +5893,7 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
   bucketName: 'conversation-media-upload-send',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, mediaUpload.single('mediaFile'), asyncHandler(async (req, res) => {
+}), requireAuth, handleMediaUpload, asyncHandler(async (req, res) => {
   const contact = await findContact(req.params.id, req.user.tenantId);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
 

@@ -3872,6 +3872,7 @@ const routeContext = {
   uploadWhatsAppMedia,
   sendWhatsAppMedia,
   mediaUpload,
+  OUTBOUND_MEDIA_MAX_BYTES,
   sendWhatsAppInteractiveList,
   sendWhatsAppTemplate,
   sendWhatsAppTemplateToNumber,

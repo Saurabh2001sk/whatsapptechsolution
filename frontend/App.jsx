@@ -2390,6 +2390,14 @@ function handleComposerMediaFileChange(event) {
 
   if (!file) return
 
+  const maxMediaUploadBytes = Number(whatsappConfig?.maxOutboundMediaBytes || 16 * 1024 * 1024)
+  if (file.size > maxMediaUploadBytes) {
+    setSendError(`Media file is too large. Maximum ${formatBytes(maxMediaUploadBytes)} is allowed for this composer.`)
+    clearComposerMedia()
+    return
+  }
+
+  setSendError('')
   setComposerMediaFileName(file.name)
 
   if (file.type?.startsWith('image/') || file.type?.startsWith('video/') || file.type?.startsWith('audio/')) {
@@ -2404,6 +2412,12 @@ function getComposerMediaAccept(type) {
   if (type === 'video') return 'video/mp4,video/3gpp'
   if (type === 'audio') return 'audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg'
   return '.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation'
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0)
+  if (!Number.isFinite(value) || value <= 0) return '0 MB'
+  return `${Math.round((value / (1024 * 1024)) * 10) / 10} MB`
 }
 
 async function sendMessage(event) {
@@ -2426,7 +2440,7 @@ async function sendMessage(event) {
 
   const hasMediaFile = mediaFile instanceof File && mediaFile.size > 0
 
-  const maxMediaUploadBytes = 16 * 1024 * 1024
+  const maxMediaUploadBytes = Number(whatsappConfig?.maxOutboundMediaBytes || 16 * 1024 * 1024)
 
   const allowedMediaMimeTypes = new Set([
     'image/jpeg',
@@ -2480,7 +2494,7 @@ async function sendMessage(event) {
 
       if (hasMediaFile) {
         if (mediaFile.size > maxMediaUploadBytes) {
-          setSendError('Media file is too large. Maximum 16 MB is allowed for this composer.')
+          setSendError(`Media file is too large. Maximum ${formatBytes(maxMediaUploadBytes)} is allowed for this composer.`)
           return
         }
 
@@ -3328,8 +3342,7 @@ async function sendTestMessage(event) {
     },
   }[activePage]
   return (
-        <main className={`app-shell suite-shell ${chatPages ? '' : 'workspace-mode'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${darkMode ? 'theme-dark' : 'theme-light'}`}>
-        <SubscriptionBanner user={user} />
+<main className={`app-shell suite-shell page-${activePage} ${chatPages ? '' : 'workspace-mode'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${darkMode ? 'theme-dark' : 'theme-light'}`}>        <SubscriptionBanner user={user} />
       {notice && <div className={`toast ${notice.type}`}>{notice.text}</div>}
       <aside className="nav-rail workspace-sidebar">
         <div className="suite-sidebar-brand">
@@ -3946,7 +3959,7 @@ return (
           <span style={{ width: `${composerUploadProgress}%` }} />
         </div>
       )}
-      <small>Max 16 MB. Allowed: JPG, PNG, WebP, MP4, 3GP, audio, PDF and Office documents.</small>
+      <small>Max {formatBytes(whatsappConfig?.maxOutboundMediaBytes || 16 * 1024 * 1024)}. Allowed: JPG, PNG, WebP, MP4, 3GP, audio, PDF and Office documents.</small>
     </div>
   )}
 
