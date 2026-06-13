@@ -479,7 +479,24 @@ export function DraftsPanel({ drafts, quoteRates, setQuoteRates, onQuote, onErp 
   )
 }
 
-export function DashboardPage({ dashboard, conversations, drafts, products, lowStockProducts, quotations, orders, onboarding, whatsappHealth, isAdmin, canManage, onOpenPage }) {
+export function DashboardPage({
+  dashboard,
+  conversations,
+  drafts,
+  products,
+  lowStockProducts,
+  quotations,
+  orders,
+  onboarding,
+  whatsappHealth,
+  templates = [],
+  tenantUsage,
+  outboundEvents = [],
+  webhookEvents = [],
+  isAdmin,
+  canManage,
+  onOpenPage,
+}) {
   
     const healthStatusLabel = whatsappHealth?.setupComplete
     ? 'Healthy'
@@ -512,6 +529,80 @@ export function DashboardPage({ dashboard, conversations, drafts, products, lowS
     { label: 'Open Quotes', value: quotations.filter((item) => !['converted', 'lost'].includes(item.status)).length, action: 'quotes' },
     { label: 'Active Orders', value: orders.filter((item) => item.status !== 'closed').length, action: 'activeOrders' },
     { label: 'Pending Dispatch', value: orders.filter((item) => item.dispatch_status !== 'dispatched').length, action: 'orders' },
+  ]
+
+  const replyWindowExpired = conversations.filter((item) => !item.reply_window_open).length
+  const optedOutContacts = conversations.filter((item) => item.opted_out).length
+  const outboundStatusCount = (status) => Number(
+    (whatsappHealth?.activity?.outboundMessages24h || []).find((item) => item.status === status)?.count || 0
+  )
+  const webhookStatusCount = (status) => Number(
+    (whatsappHealth?.activity?.webhookEvents24h || []).find((item) => item.status === status)?.count || 0
+  )
+  const sent24h = outboundStatusCount('sent')
+  const failed24h = outboundStatusCount('failed')
+  const webhookFailed24h = webhookStatusCount('failed')
+  const dailyLimit = tenantUsage?.limits?.outboundMessagesPerDay
+  const outboundToday = tenantUsage?.usage?.outboundMessagesToday ?? sent24h
+  const approvedTemplates = templates.filter((template) => String(template.meta_status || '').toLowerCase() === 'approved').length
+  const sendableTemplates = templates.filter((template) => template.active && String(template.meta_status || '').toLowerCase() === 'approved').length
+  const dailyLimitText = dailyLimit && dailyLimit !== -1
+    ? `${outboundToday} / ${dailyLimit}`
+    : `${outboundToday} / WABA limit`
+
+  const messagingMetrics = [
+    { label: 'Sent 24h', value: sent24h, tone: 'ok', action: 'outbound' },
+    { label: 'Failed 24h', value: failed24h + webhookFailed24h, tone: failed24h || webhookFailed24h ? 'danger' : 'ok', action: failed24h ? 'outbound' : 'webhooks' },
+    { label: 'Daily usage', value: dailyLimitText, tone: 'neutral', action: 'billing' },
+    { label: 'Approved templates', value: approvedTemplates, tone: approvedTemplates ? 'ok' : 'warn', action: 'templates' },
+    { label: 'Sendable templates', value: sendableTemplates, tone: sendableTemplates ? 'ok' : 'warn', action: 'templates' },
+    { label: 'Failed queue', value: outboundEvents.length + webhookEvents.length, tone: outboundEvents.length || webhookEvents.length ? 'danger' : 'ok', action: outboundEvents.length ? 'outbound' : 'webhooks' },
+  ]
+
+  const metaReadinessItems = [
+    ['Embedded Signup', whatsappHealth?.tokenMode === 'tenant_embedded_signup' ? 'Connected' : 'Needs setup', whatsappHealth?.tokenMode === 'tenant_embedded_signup' ? 'ok' : 'warn'],
+    ['Webhook Verify Token', whatsappHealth?.verifyTokenSet ? 'Ready' : 'Missing', whatsappHealth?.verifyTokenSet ? 'ok' : 'warn'],
+    ['App Secret', whatsappHealth?.appSecretSet || !whatsappHealth?.signatureRequired ? 'Ready' : 'Missing', whatsappHealth?.appSecretSet || !whatsappHealth?.signatureRequired ? 'ok' : 'warn'],
+    ['Phone Number ID', whatsappHealth?.account?.phoneNumberId ? 'Mapped' : 'Not mapped', whatsappHealth?.account?.phoneNumberId ? 'ok' : 'warn'],
+    ['Template Approval', sendableTemplates ? 'Ready' : 'Sync needed', sendableTemplates ? 'ok' : 'warn'],
+    ['Billing & Limits', tenantUsage ? 'Visible' : 'Review', tenantUsage ? 'ok' : 'warn'],
+  ]
+
+  const policyReadiness = [
+    {
+      icon: MessageCircle,
+      title: 'Cloud API Connection',
+      status: whatsappHealth?.connected ? 'Ready' : 'Needs setup',
+      tone: whatsappHealth?.connected ? 'ok' : 'warn',
+      text: whatsappHealth?.connected
+        ? 'Official WhatsApp account is connected to this tenant.'
+        : 'Connect Meta Embedded Signup before production messaging.',
+      action: isAdmin && !whatsappHealth?.connected ? 'connectWhatsApp' : 'settings',
+    },
+    {
+      icon: Clock3,
+      title: 'Service Window Guard',
+      status: `${replyWindowExpired} template required`,
+      tone: replyWindowExpired ? 'warn' : 'ok',
+      text: 'Free-form replies are available only inside the 24-hour customer service window.',
+      action: 'inbox',
+    },
+    {
+      icon: Shield,
+      title: 'Opt-out Protection',
+      status: `${optedOutContacts} locked`,
+      tone: optedOutContacts ? 'warn' : 'ok',
+      text: 'Customers marked as opted out remain protected from outbound sending.',
+      action: 'optOuts',
+    },
+    {
+      icon: Activity,
+      title: 'Scale Readiness',
+      status: whatsappHealth?.setupComplete ? 'Monitor quality' : 'Review setup',
+      tone: whatsappHealth?.setupComplete ? 'ok' : 'warn',
+      text: 'Before high-volume campaigns, review templates, webhooks, billing, and phone quality in Meta.',
+      action: 'settings',
+    },
   ]
   return (
     <section className="workspace-page">
@@ -605,6 +696,62 @@ export function DashboardPage({ dashboard, conversations, drafts, products, lowS
             <button type="button" onClick={() => onOpenPage('settings')}>
               Open WhatsApp Settings
             </button>
+          </div>
+        </section>
+      )}
+
+      {canManage && (
+        <section className="message-ops-panel">
+          <div className="settings-card-title split">
+            <div>
+              <Activity size={22} />
+              <h3>Messaging Operations</h3>
+            </div>
+            <button type="button" onClick={() => onOpenPage(failed24h || outboundEvents.length ? 'outbound' : 'webhooks')}>
+              Review Failures
+            </button>
+          </div>
+
+          <div className="message-ops-grid">
+            {messagingMetrics.map((metric) => (
+              <button className={`message-ops-card ${metric.tone}`} type="button" key={metric.label} onClick={() => onOpenPage(metric.action)}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+              </button>
+            ))}
+          </div>
+
+          <div className="meta-readiness-strip">
+            {metaReadinessItems.map(([label, value, tone]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <strong className={tone}>{value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {canManage && (
+        <section className="policy-readiness-panel">
+          <div className="settings-card-title split">
+            <div>
+              <Shield size={22} />
+              <h3>Policy & Scale Readiness</h3>
+            </div>
+            <button type="button" onClick={() => onOpenPage('templates')}>
+              Review Templates
+            </button>
+          </div>
+          <div className="policy-readiness-grid">
+            {policyReadiness.map(({ icon: Icon, title, status, tone, text, action }) => (
+              <button type="button" key={title} onClick={() => onOpenPage(action)}>
+                <span className={`policy-icon ${tone}`}><Icon size={19} /></span>
+                <strong>{title}</strong>
+                <b className={`policy-status ${tone}`}>{status}</b>
+                <small>{text}</small>
+              </button>
+            ))}
           </div>
         </section>
       )}
@@ -2014,20 +2161,20 @@ export function ControlCenterPage({
   auditEvents,
   ...settingsProps
 }) {
-  const tabs = [
-    { id: 'settings', label: 'Settings & Templates', icon: Settings },
-    { id: 'webhooks', label: 'Webhooks', icon: Activity, count: webhookEvents.length },
-    { id: 'outbound', label: 'Outbound', icon: Send, count: outboundEvents.length },
-    { id: 'optOuts', label: 'Opt-outs', icon: Shield, count: optOutContacts.length },
-    { id: 'audit', label: 'Audit Log', icon: ClipboardList },
-  ]
+const tabs = [
+  { id: 'settings', label: 'Business Settings', icon: Settings },
+  { id: 'templates', label: 'Templates', icon: ClipboardList, count: settingsProps.templates?.length || 0 },
+  { id: 'webhooks', label: 'Webhooks', icon: Activity, count: webhookEvents.length },
+  { id: 'outbound', label: 'Outbound', icon: Send, count: outboundEvents.length },
+  { id: 'optOuts', label: 'Opt-outs', icon: Shield, count: optOutContacts.length },
+  { id: 'audit', label: 'Audit Log', icon: ClipboardList },
+]
 
   return (
     <section className="workspace-page workspace-hub-page">
       <WorkspaceHeading
-        title="Control Center"
-        description="Business setup, Meta monitoring and compliance checks are grouped into secure operational subpages."
-      />
+      title="Settings"
+      description="Manage business profile, WhatsApp setup, templates, monitoring and compliance in clean separate pages."      />
       <WorkspaceTabs tabs={tabs} activeTab={activeTab} onChangeTab={onChangeTab} />
 
       {activeTab === 'settings' && (
@@ -2064,6 +2211,21 @@ export function ControlCenterPage({
           <SettingsPage {...settingsProps} userRole={userRole} />
         </>
       )}
+
+      {activeTab === 'templates' && (
+  <TemplatesPage
+    templates={settingsProps.templates}
+    templateForm={settingsProps.templateForm}
+    setTemplateForm={settingsProps.setTemplateForm}
+    editingTemplateId={settingsProps.editingTemplateId}
+    onSaveTemplate={settingsProps.onSaveTemplate}
+    onEditTemplate={settingsProps.onEditTemplate}
+    onToggleTemplate={settingsProps.onToggleTemplate}
+    onCancelTemplateEdit={settingsProps.onCancelTemplateEdit}
+    onSyncTemplates={settingsProps.onSyncTemplates}
+    templateSyncing={settingsProps.templateSyncing}
+  />
+)}
 
       {activeTab === 'webhooks' && (
         <WebhookEventsPage
@@ -2839,6 +3001,423 @@ export function KnowledgeBaseManager() {
   )
 }
 
+function getMetaComponents(template = {}) {
+  const components = Array.isArray(template.meta_payload?.components)
+    ? template.meta_payload.components
+    : []
+
+  return {
+    header: components.find((component) => String(component.type || '').toUpperCase() === 'HEADER') || null,
+    body: components.find((component) => String(component.type || '').toUpperCase() === 'BODY') || null,
+    footer: components.find((component) => String(component.type || '').toUpperCase() === 'FOOTER') || null,
+    buttons: components.find((component) => String(component.type || '').toUpperCase() === 'BUTTONS') || null,
+  }
+}
+
+function componentText(component, fallback = '') {
+  return String(component?.text || component?.body || fallback || '').trim()
+}
+
+function extractTemplateVariables(...values) {
+  const found = new Set()
+
+  values.forEach((value) => {
+    const text = String(value || '')
+    for (const match of text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+      found.add(match[1])
+    }
+  })
+
+  return [...found].sort((first, second) => Number(first) - Number(second))
+}
+
+function sampleVariableValue(index) {
+  const samples = ['Customer', 'QT-WA-1024', 'INR 42,500', '14 Jun 2026', 'Blue Ocean Steels']
+  return samples[Number(index) - 1] || `Sample ${index}`
+}
+
+function fillTemplateSamples(text = '') {
+  return String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (_, index) => sampleVariableValue(index))
+}
+
+function templateStatusTone(status = '') {
+  const cleanStatus = String(status || '').toLowerCase()
+  if (cleanStatus === 'approved') return 'ok'
+  if (['rejected', 'disabled'].includes(cleanStatus)) return 'danger'
+  if (['pending', 'in_appeal', 'paused'].includes(cleanStatus)) return 'warn'
+  return 'neutral'
+}
+
+function templateButtons(buttonsComponent) {
+  const buttons = Array.isArray(buttonsComponent?.buttons) ? buttonsComponent.buttons : []
+
+  return buttons.map((button, index) => ({
+    id: `${button.type || 'button'}-${index}`,
+    type: String(button.type || 'QUICK_REPLY').replace(/_/g, ' '),
+    text: button.text || button.phone_number || button.url || button.flow_id || `Button ${index + 1}`,
+  }))
+}
+
+function MetaTemplatePreview({ template }) {
+  if (!template) {
+    return (
+      <section className="meta-preview-panel empty">
+        <ClipboardList size={34} />
+        <strong>Select a template</strong>
+        <span>Approved Meta templates and local draft records will preview here.</span>
+      </section>
+    )
+  }
+
+  const components = getMetaComponents(template)
+  const headerFormat = String(components.header?.format || '').toUpperCase()
+  const headerText = componentText(components.header)
+  const bodyText = componentText(components.body, template.body)
+  const footerText = componentText(components.footer)
+  const variables = extractTemplateVariables(headerText, bodyText, footerText)
+  const buttons = templateButtons(components.buttons)
+  const status = String(template.meta_status || 'manual').toLowerCase()
+  const sendEligible = template.active && status === 'approved'
+
+  return (
+    <section className="meta-preview-panel">
+      <div className="meta-preview-head">
+        <div>
+          <span>WhatsApp Manager Preview</span>
+          <strong>{template.name}</strong>
+        </div>
+        <i className={`meta-status-pill ${templateStatusTone(status)}`}>{status}</i>
+      </div>
+
+      <div className="phone-preview-shell">
+        <div className="phone-preview-top">WhatsApp Business</div>
+        <div className="phone-message-bubble">
+          {components.header && (
+            <div className={`wa-template-header ${headerFormat ? 'media' : 'text'}`}>
+              {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) ? (
+                <>
+                  <FileText size={24} />
+                  <strong>{headerFormat}</strong>
+                  <span>{headerFormat === 'DOCUMENT' ? 'Document header' : `${headerFormat.toLowerCase()} header`}</span>
+                </>
+              ) : (
+                <strong>{fillTemplateSamples(headerText)}</strong>
+              )}
+            </div>
+          )}
+
+          <p>{fillTemplateSamples(bodyText || template.body || 'Template body will appear here.')}</p>
+          {footerText && <small>{fillTemplateSamples(footerText)}</small>}
+
+          {buttons.length > 0 && (
+            <div className="wa-template-buttons">
+              {buttons.map((button) => (
+                <button type="button" key={button.id}>{button.text}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="template-component-grid">
+        <div>
+          <span>Category</span>
+          <strong>{template.category || 'utility'}</strong>
+        </div>
+        <div>
+          <span>Language</span>
+          <strong>{template.language || 'en'}</strong>
+        </div>
+        <div>
+          <span>Header</span>
+          <strong>{headerFormat || (headerText ? 'TEXT' : 'None')}</strong>
+        </div>
+        <div>
+          <span>Send Status</span>
+          <strong className={sendEligible ? 'ok' : 'warn'}>{sendEligible ? 'Send eligible' : 'Approval required'}</strong>
+        </div>
+      </div>
+
+      <div className="template-variable-panel">
+        <strong>Variables</strong>
+        {variables.length ? (
+          <div>
+            {variables.map((variable) => (
+              <span key={variable}>{`{{${variable}}}`} = {sampleVariableValue(variable)}</span>
+            ))}
+          </div>
+        ) : (
+          <p>No variables detected in this template.</p>
+        )}
+      </div>
+
+      <div className="template-component-list">
+        <strong>Components</strong>
+        <span>Header: {components.header ? headerFormat || 'TEXT' : 'Not used'}</span>
+        <span>Body: {bodyText ? `${bodyText.length} characters` : 'Missing'}</span>
+        <span>Footer: {footerText || 'Not used'}</span>
+        <span>Buttons: {buttons.length ? buttons.map((button) => `${button.type}: ${button.text}`).join(', ') : 'Not used'}</span>
+      </div>
+    </section>
+  )
+}
+
+export function TemplatesPage({
+  templates = [],
+  templateForm,
+  setTemplateForm,
+  editingTemplateId,
+  onSaveTemplate,
+  onEditTemplate,
+  onToggleTemplate,
+  onCancelTemplateEdit,
+  onSyncTemplates,
+  templateSyncing,
+}) {
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || templates[0] || null
+  const approvedTemplates = templates.filter((template) => String(template.meta_status || '').toLowerCase() === 'approved')
+  const sendableTemplates = approvedTemplates.filter((template) => template.active)
+  const mediaHeaderTemplates = templates.filter((template) => {
+    const header = getMetaComponents(template).header
+    return ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(String(header?.format || '').toUpperCase())
+  })
+
+  const categoryCount = (category) => templates.filter((template) => (
+    String(template.category || '').toLowerCase() === category
+  )).length
+
+  const templatePolicyCards = [
+    {
+      icon: Megaphone,
+      title: 'Marketing',
+      count: categoryCount('marketing'),
+      text: 'Promotions, offers, announcements, and re-engagement. Use only for customers with valid opt-in.',
+    },
+    {
+      icon: ClipboardList,
+      title: 'Utility',
+      count: categoryCount('utility'),
+      text: 'Order updates, payment reminders, quote status, dispatch notices, and account information.',
+    },
+    {
+      icon: Shield,
+      title: 'Authentication',
+      count: categoryCount('authentication'),
+      text: 'OTP and login verification templates. Keep content strictly security-related.',
+    },
+    {
+      icon: Clock3,
+      title: 'Service Window',
+      count: templates.filter((template) => template.active).length,
+      text: 'Inside 24 hours, use free-form replies. Outside 24 hours, switch to an approved active template.',
+    },
+  ]
+
+  return (
+    <div className="settings-stack templates-page">
+      <section className="settings-card templates-hero-card meta-template-hero">
+        <div className="settings-card-title split">
+          <div>
+            <ClipboardList size={22} />
+            <h3>WhatsApp Template Manager</h3>
+          </div>
+          <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
+            {templateSyncing ? 'Syncing...' : 'Sync from Meta'}
+          </button>
+        </div>
+        <p className="settings-muted">
+          Manage templates like a WhatsApp Manager workspace. Sync Meta-approved templates, inspect variables,
+          media headers, buttons, and send eligibility before using them in campaigns or expired 24-hour conversations.
+        </p>
+        <div className="meta-template-stats">
+          <span><strong>{templates.length}</strong>Total</span>
+          <span><strong>{approvedTemplates.length}</strong>Approved by Meta</span>
+          <span><strong>{sendableTemplates.length}</strong>Send eligible</span>
+          <span><strong>{mediaHeaderTemplates.length}</strong>Media headers</span>
+        </div>
+      </section>
+
+      <section className="template-policy-grid">
+        {templatePolicyCards.map(({ icon: Icon, title, count, text }) => (
+          <article key={title}>
+            <Icon size={20} />
+            <strong>{title}</strong>
+            <b>{count}</b>
+            <span>{text}</span>
+          </article>
+        ))}
+      </section>
+
+      <section className="meta-template-workbench">
+        <div className="meta-template-list">
+          <div className="meta-list-head">
+            <div>
+              <strong>Templates</strong>
+              <span>Only active approved records are available for sending.</span>
+            </div>
+            <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
+              <RefreshCw size={15} /> Sync
+            </button>
+          </div>
+
+          {!templates.length && (
+            <EmptyState title="No templates" text="Sync approved Meta templates or create a local draft mapping." />
+          )}
+
+          {templates.map((template) => {
+            const status = String(template.meta_status || 'manual').toLowerCase()
+            const components = getMetaComponents(template)
+            const variables = extractTemplateVariables(componentText(components.header), componentText(components.body, template.body), componentText(components.footer))
+            const isSelected = selectedTemplate?.id === template.id
+            const isSendable = template.active && status === 'approved'
+
+            return (
+              <button
+                className={`meta-template-card ${isSelected ? 'active' : ''}`}
+                type="button"
+                key={template.id}
+                onClick={() => setSelectedTemplateId(template.id)}
+              >
+                <span className={`template-card-icon ${isSendable ? 'ok' : templateStatusTone(status)}`}>
+                  <MessageCircle size={18} />
+                </span>
+                <span>
+                  <strong>{template.name}</strong>
+                  <small>{template.language || 'en'} | {template.category || 'utility'} | {variables.length} variable(s)</small>
+                </span>
+                <i className={`meta-status-pill ${templateStatusTone(status)}`}>{status}</i>
+              </button>
+            )
+          })}
+        </div>
+
+        <MetaTemplatePreview template={selectedTemplate} />
+      </section>
+
+      <section className="settings-card meta-template-create-card">
+        <div className="settings-card-title split">
+          <div>
+            <MessageCircle size={22} />
+            <h3>{editingTemplateId ? 'Edit Local Template Record' : 'Create Local Template Record'}</h3>
+          </div>
+          <span className="connection-pill warn">Meta approval still required</span>
+        </div>
+        <p className="settings-muted">
+          Use this to map or draft a template locally. In production, the backend still sends only active templates synced as approved from Meta.
+        </p>
+
+        <form className="custom-form template-form-grid" onSubmit={onSaveTemplate}>
+          <label>
+            Template Name
+            <input
+              placeholder="quotation_followup"
+              value={templateForm.name}
+              onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Language
+            <input
+              placeholder="en_US"
+              value={templateForm.language}
+              onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })}
+            />
+          </label>
+
+          <label className="template-body-field">
+            Body
+            <textarea
+              placeholder="Hello {{1}}, your quotation {{2}} is ready. Reply YES to confirm."
+              value={templateForm.body}
+              onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
+            />
+            <small>{extractTemplateVariables(templateForm.body).length} variable(s) detected. Use Meta format like {`{{1}}`}.</small>
+          </label>
+
+          <label className="settings-switch-row">
+            <SwitchControl
+              checked={Boolean(templateForm.active)}
+              onChange={(checked) => setTemplateForm({ ...templateForm, active: checked })}
+            />
+            Active
+          </label>
+
+          <div className="user-form-actions">
+            <button className="user-action-primary" type="submit">
+              {editingTemplateId ? 'Update Template' : 'Save Template'}
+            </button>
+            {editingTemplateId && (
+              <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-title split">
+          <div>
+            <ClipboardList size={22} />
+            <h3>Template Compliance Table</h3>
+          </div>
+          <span className="connection-pill ok">{sendableTemplates.length} sendable</span>
+        </div>
+
+        {!templates.length && (
+          <EmptyState title="No templates" text="Add or sync approved Meta templates for expired 24-hour conversations." />
+        )}
+
+        {!!templates.length && (
+          <div className="user-table template-list-table">
+            <div className="user-table-head template-table-head">
+              <span>Name</span>
+              <span>Language</span>
+              <span>Meta Status</span>
+              <span>Category</span>
+              <span>Active</span>
+              <span>Body</span>
+              <span>Actions</span>
+            </div>
+
+            {templates.map((template) => (
+              <div className="user-row" key={template.id}>
+                <div className="user-name-cell">
+                  <strong>{template.name}</strong>
+                  <small>ID: {String(template.id).slice(0, 8)}</small>
+                </div>
+                <span>{template.language}</span>
+                <i className={`meta-status-pill ${templateStatusTone(template.meta_status || 'manual')}`}>
+                  {template.meta_status || 'manual'}
+                </i>
+                <span>{template.category || '-'}</span>
+                <i className={template.active ? 'status-active' : 'status-inactive'}>
+                  {template.active ? 'Active' : 'Inactive'}
+                </i>
+                <span>{template.body}</span>
+                <div className="user-actions">
+                  <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>
+                    Edit
+                  </button>
+                  <button
+                    className={template.active ? 'user-action-pause' : 'user-action-enable'}
+                    type="button"
+                    onClick={() => onToggleTemplate(template)}
+                  >
+                    {template.active ? 'Deactivate' : 'Activate'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
 export function SettingsPage({
   status,
   whatsappConfig,
@@ -2855,16 +3434,6 @@ export function SettingsPage({
   onSaveCustomization,
   onSaveSettings,
   settingsSaved,
-  templates,
-  templateForm,
-  setTemplateForm,
-  editingTemplateId,
-  onSaveTemplate,
-  onEditTemplate,
-  onToggleTemplate,
-  onCancelTemplateEdit,
-  onSyncTemplates,
-  templateSyncing,
   userRole,
   isProduction,
   currentUser,
@@ -2889,15 +3458,63 @@ export function SettingsPage({
   const voiceWeeklyHours = normalizeVoiceWeeklyHours(customForm.voiceWeeklyHours)
   const unavailableHours = Array.isArray(customForm.voiceUnavailableHours) ? customForm.voiceUnavailableHours : []
 
-const settingsTabs = [
-  { id: 'profile', label: 'Profile' },
-  { id: 'agents', label: 'Agents and Permissions' },
-  { id: 'waba', label: 'WABA Settings' },
-  { id: 'billing', label: 'Billing & GST Details' },
-  { id: 'usage', label: 'Usage & Limits' },
-  { id: 'voice', label: 'Voice Call Settings' },
-  { id: 'inbox', label: 'Inbox Settings' },
+const settingsGroups = [
+  {
+    title: 'Business',
+    tabs: [
+      { id: 'profile', label: 'Profile' },
+      { id: 'billing', label: 'Billing & GST Details' },
+      { id: 'usage', label: 'Usage & Limits' },
+    ],
+  },
+  {
+    title: 'Team',
+    tabs: [
+      { id: 'agents', label: 'Agents and Permissions' },
+    ],
+  },
+  {
+    title: 'WhatsApp',
+    tabs: [
+      { id: 'waba', label: 'WABA Settings' },
+      { id: 'inbox', label: 'Inbox Settings' },
+      { id: 'voice', label: 'Voice Call Settings' },
+    ],
+  },
 ]
+
+  const wabaReadinessItems = [
+    {
+      label: 'Embedded Signup',
+      value: whatsappConfig?.configured ? 'Configured' : 'Needs setup',
+      tone: whatsappConfig?.configured ? 'ok' : 'warn',
+    },
+    {
+      label: 'Webhook Security',
+      value: whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'Ready' : 'App secret missing',
+      tone: whatsappConfig?.appSecretSet || !whatsappConfig?.webhookSignatureRequired ? 'ok' : 'warn',
+    },
+    {
+      label: 'Phone Mapping',
+      value: whatsappConfig?.phoneNumberMapped ? 'Mapped' : 'Not mapped',
+      tone: whatsappConfig?.phoneNumberMapped ? 'ok' : 'warn',
+    },
+    {
+      label: 'MM Lite Preference',
+      value: customForm.wabaMmLiteEnabled ? 'Requested' : 'Off',
+      tone: customForm.wabaMmLiteEnabled ? 'ok' : 'neutral',
+    },
+    {
+      label: 'Conversion Events',
+      value: customForm.wabaConversionEventsEnabled ? 'Requested' : 'Off',
+      tone: customForm.wabaConversionEventsEnabled ? 'ok' : 'neutral',
+    },
+    {
+      label: 'Calling Controls',
+      value: customForm.voiceCallsEnabled ? 'Tenant enabled' : 'Off',
+      tone: customForm.voiceCallsEnabled ? 'ok' : 'neutral',
+    },
+  ]
 
   function patchForm(patch) {
     setCustomForm({ ...customForm, ...patch })
@@ -2988,13 +3605,25 @@ const settingsTabs = [
 
   return (
     <div className="settings-reference-shell">
-      <nav className="settings-reference-tabs" aria-label="Settings pages">
-        {settingsTabs.map((tab) => (
-          <button key={tab.id} className={activeSettingsTab === tab.id ? 'active' : ''} type="button" onClick={() => setActiveSettingsTab(tab.id)}>
+<nav className="settings-reference-tabs settings-grouped-tabs" aria-label="Settings pages">
+  {settingsGroups.map((group) => (
+    <div className="settings-tab-group" key={group.title}>
+      <strong>{group.title}</strong>
+      <div>
+        {group.tabs.map((tab) => (
+          <button
+            key={tab.id}
+            className={activeSettingsTab === tab.id ? 'active' : ''}
+            type="button"
+            onClick={() => setActiveSettingsTab(tab.id)}
+          >
             {tab.label}
           </button>
         ))}
-      </nav>
+      </div>
+    </div>
+  ))}
+</nav>
 
       {activeSettingsTab === 'profile' && (
         <div className="settings-profile-grid">
@@ -3090,7 +3719,7 @@ const settingsTabs = [
                 <form className="settings-agent-form" onSubmit={submitAgent}>
                   <label>Name<input placeholder="Full name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} /></label>
                   <label>Email<input placeholder="name@company.com" value={newUser.email} disabled={Boolean(editingUserId)} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} /></label>
-                  <label>Password<input placeholder={editingUserId ? 'Leave blank to keep old password' : '12+ chars with number & symbol'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
+                  <label>Password<input type="password" autoComplete="new-password" placeholder={editingUserId ? 'Leave blank to keep old password' : '12+ chars with number & symbol'} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
                   <label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select></label>
                   <div className="settings-form-actions">
                     <button className="settings-primary-button" type="submit">{editingUserId ? 'Update Agent' : 'Save Agent'}</button>
@@ -3147,6 +3776,32 @@ const settingsTabs = [
 
       {activeSettingsTab === 'waba' && (
         <div className="settings-stack">
+          <section className="settings-card waba-readiness-card">
+            <div className="settings-card-title split">
+              <div>
+                <MessageCircle size={22} />
+                <h3>Official WhatsApp API Readiness</h3>
+              </div>
+              <span className="connection-pill ok">Backend protected</span>
+            </div>
+            <p className="settings-muted">
+              These controls help your team prepare for Meta Cloud API operations. Local preferences do not replace Meta approval,
+              business verification, template review, phone quality, billing, or product eligibility.
+            </p>
+            <div className="waba-readiness-grid">
+              {wabaReadinessItems.map((item) => (
+                <div key={item.label}>
+                  <span>{item.label}</span>
+                  <strong className={item.tone}>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="suite-policy-note">
+              Before running campaigns, confirm customer opt-in, approved template category, active billing, webhook delivery,
+              and phone-number quality in Meta WhatsApp Manager.
+            </div>
+          </section>
+
           <SettingToggleCard title="Marketing Messages Lite (MM Lite Status)" checked={Boolean(customForm.wabaMmLiteEnabled)} onChange={(checked) => savePatch({ wabaMmLiteEnabled: checked }, 'WABA setting saved')} />
           <SettingToggleCard title="Healthy Ecosystem Message Retry" checked={Boolean(customForm.wabaHealthyRetryEnabled)} onChange={(checked) => savePatch({ wabaHealthyRetryEnabled: checked }, 'WABA setting saved')} />
           <SettingToggleCard title="Whatsapp conversion events push to Meta" checked={Boolean(customForm.wabaConversionEventsEnabled)} onChange={(checked) => savePatch({ wabaConversionEventsEnabled: checked }, 'WABA setting saved')} />
@@ -3198,44 +3853,6 @@ const settingsTabs = [
           </section>
 
           <KnowledgeBaseManager />
-
-          <section className="settings-card">
-            <div className="module-title template-sync-head">
-              <div><MessageCircle size={18} /><h3>Approved WhatsApp Templates</h3></div>
-              <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>{templateSyncing ? 'Syncing...' : 'Sync from Meta'}</button>
-            </div>
-            <small className="setup-copy">Add only templates that are already approved in Meta WhatsApp Manager. This does not create templates inside Meta.</small>
-            <form className="custom-form" onSubmit={onSaveTemplate}>
-              <label>Template Name<input placeholder="quotation_followup" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} /></label>
-              <label>Language<input placeholder="en_US" value={templateForm.language} onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })} /></label>
-              <label>Body Preview<textarea placeholder="Your quotation is ready. Please confirm." value={templateForm.body} onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })} /></label>
-              <label className="settings-switch-row"><SwitchControl checked={Boolean(templateForm.active)} onChange={(checked) => setTemplateForm({ ...templateForm, active: checked })} /> Active</label>
-              <div className="user-form-actions">
-                <button className="user-action-primary" type="submit">{editingTemplateId ? 'Update Template' : 'Save Template'}</button>
-                {editingTemplateId && <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>Cancel</button>}
-              </div>
-            </form>
-            {!templates.length && <EmptyState title="No templates" text="Add approved Meta templates for expired 24-hour conversations." />}
-            {!!templates.length && (
-              <div className="user-table">
-                <div className="user-table-head template-table-head"><span>Name</span><span>Language</span><span>Meta Status</span><span>Category</span><span>Active</span><span>Body</span><span>Actions</span></div>
-                {templates.map((template) => (
-                  <div className="user-row" key={template.id}>
-                    <div className="user-name-cell"><strong>{template.name}</strong><small>ID: {String(template.id).slice(0, 8)}</small></div>
-                    <span>{template.language}</span>
-                    <i className={`meta-status-pill ${template.meta_status || 'manual'}`}>{template.meta_status || 'manual'}</i>
-                    <span>{template.category || '-'}</span>
-                    <i className={template.active ? 'status-active' : 'status-inactive'}>{template.active ? 'Active' : 'Inactive'}</i>
-                    <span>{template.body}</span>
-                    <div className="user-actions">
-                      <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>Edit</button>
-                      <button className={template.active ? 'user-action-pause' : 'user-action-enable'} type="button" onClick={() => onToggleTemplate(template)}>{template.active ? 'Deactivate' : 'Activate'}</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
         </div>
       )}
 

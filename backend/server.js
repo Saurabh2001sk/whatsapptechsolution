@@ -91,6 +91,54 @@ const ALLOWED_OUTBOUND_MEDIA_MIME = new Set([
 
 const OUTBOUND_MEDIA_MAX_BYTES = Number(process.env.OUTBOUND_MEDIA_MAX_BYTES || 16 * 1024 * 1024);
 
+function isPathInside(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function hasSignature(buffer, signatures) {
+  return signatures.some((signature) => (
+    buffer.length >= signature.length
+    && signature.every((byte, index) => buffer[index] === byte)
+  ));
+}
+
+function isLikelyPlainText(buffer) {
+  const sample = buffer.subarray(0, Math.min(buffer.length, 512));
+  if (!sample.length) return false;
+  return sample.every((byte) => byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte <= 126));
+}
+
+function isAllowedOutboundMediaContent(file = {}) {
+  const buffer = file.buffer;
+  const mimeType = String(file.mimetype || '').toLowerCase();
+
+  if (!buffer?.length) return false;
+
+  if (mimeType === 'image/jpeg') return hasSignature(buffer, [[0xff, 0xd8, 0xff]]);
+  if (mimeType === 'image/png') return hasSignature(buffer, [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]]);
+  if (mimeType === 'image/webp') {
+    return buffer.length >= 12
+      && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+      && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+  if (mimeType === 'application/pdf') return buffer.subarray(0, 4).toString('ascii') === '%PDF';
+  if (mimeType === 'text/plain') return isLikelyPlainText(buffer);
+  if (mimeType === 'video/mp4' || mimeType === 'audio/mp4') return buffer.subarray(4, 8).toString('ascii') === 'ftyp';
+  if (mimeType === 'video/3gpp') return buffer.subarray(4, 8).toString('ascii') === 'ftyp';
+  if (mimeType === 'audio/mpeg') return hasSignature(buffer, [[0x49, 0x44, 0x33], [0xff, 0xfb], [0xff, 0xf3], [0xff, 0xf2]]);
+  if (mimeType === 'audio/ogg') return buffer.subarray(0, 4).toString('ascii') === 'OggS';
+  if (mimeType === 'audio/aac') return hasSignature(buffer, [[0xff, 0xf1], [0xff, 0xf9]]);
+  if (mimeType === 'audio/amr') return buffer.subarray(0, 6).toString('ascii') === '#!AMR\n';
+  if (mimeType === 'application/msword') return hasSignature(buffer, [[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]]);
+  if (mimeType.startsWith('application/vnd.openxmlformats-officedocument.')) return hasSignature(buffer, [[0x50, 0x4b, 0x03, 0x04], [0x50, 0x4b, 0x05, 0x06], [0x50, 0x4b, 0x07, 0x08]]);
+  if (mimeType === 'application/vnd.ms-excel' || mimeType === 'application/vnd.ms-powerpoint') {
+    return hasSignature(buffer, [[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]]);
+  }
+
+  return false;
+}
+
 const mediaUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -136,6 +184,8 @@ const {
   isSuperAdmin,
   canMonitor,
   requireSuperAdmin,
+  getSubscriptionBlockReason,
+  requireActiveSubscription,
 } = createAuthService({
   jwt,
   jwtSecret,
@@ -256,6 +306,12 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+
+  if (req.path.startsWith('/api/') || req.path.startsWith('/media/')) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+  }
 
   if (isProduction) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
@@ -327,7 +383,7 @@ app.get('/media/whatsapp/:fileName', requireAuth, asyncHandler(async (req, res) 
   const localFileName = mediaMessage.media_storage_key || fileName;
   const filePath = mediaMessage.media_local_path || path.join(mediaRoot, localFileName);
 
-  if (!filePath.startsWith(mediaRoot)) {
+  if (!isPathInside(mediaRoot, filePath)) {
     return res.status(400).json({ error: 'Invalid media path' });
   }
 
@@ -3770,6 +3826,8 @@ const routeContext = {
   isSuperAdmin,
   canMonitor,
   requireSuperAdmin,
+  getSubscriptionBlockReason,
+  requireActiveSubscription,
   normalizeTenantSlug,
   publicTenant,
   countActiveTenantAdmins,
@@ -3873,6 +3931,7 @@ const routeContext = {
   sendWhatsAppMedia,
   mediaUpload,
   OUTBOUND_MEDIA_MAX_BYTES,
+  isAllowedOutboundMediaContent,
   sendWhatsAppInteractiveList,
   sendWhatsAppTemplate,
   sendWhatsAppTemplateToNumber,
@@ -4072,6 +4131,7 @@ module.exports = {
   extractEnquiry,
   extractText,
   getBotIntent,
+  isAllowedOutboundMediaContent,
   normalizeProduct,
   normalizeSalesItem,
   parseQuantity,

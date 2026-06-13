@@ -46,6 +46,7 @@ function registerCoreRoutes(app, ctx) {
     isSuperAdmin,
     canMonitor,
     requireSuperAdmin,
+    requireActiveSubscription,
     normalizeTenantSlug,
     publicTenant,
     countActiveTenantAdmins,
@@ -1698,7 +1699,7 @@ app.get('/api/app-settings', requireAuth, asyncHandler(async (req, res) => {
   res.json(await getAppSettings(req.user.tenantId));
 }));
 
-app.put('/api/app-settings', requireAuth, rateLimit({
+app.put('/api/app-settings', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'app-settings-update',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
@@ -1800,7 +1801,7 @@ app.get('/api/knowledge-base', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/knowledge-base', requireAuth, rateLimit({
+app.post('/api/knowledge-base', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'knowledge-create',
   maxRequests: 80,
   windowMs: 60 * 60 * 1000,
@@ -1832,7 +1833,7 @@ app.post('/api/knowledge-base', requireAuth, rateLimit({
   res.status(201).json(result.rows[0]);
 }));
 
-app.patch('/api/knowledge-base/:id', requireAuth, rateLimit({
+app.patch('/api/knowledge-base/:id', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'knowledge-update',
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
@@ -1885,7 +1886,7 @@ app.patch('/api/knowledge-base/:id', requireAuth, rateLimit({
   res.json(result.rows[0]);
 }));
 
-app.delete('/api/knowledge-base/:id', requireAuth, rateLimit({
+app.delete('/api/knowledge-base/:id', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'knowledge-delete',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
@@ -2418,7 +2419,7 @@ async function resolveEmbeddedSignupAccount({ apiVersion, accessToken, phoneNumb
   };
 }
 
-app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
+app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'embedded-signup-complete',
   maxRequests: 10,
   windowMs: 15 * 60 * 1000,
@@ -2650,7 +2651,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, rateLimit({
   });
 }));
 
-app.post('/api/whatsapp/map-current-phone', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/whatsapp/map-current-phone', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -2768,6 +2769,7 @@ function registerWhatsAppRoutes(app, ctx) {
     isSuperAdmin,
     canMonitor,
     requireSuperAdmin,
+    requireActiveSubscription,
     normalizeTenantSlug,
     publicTenant,
     countActiveTenantAdmins,
@@ -3160,7 +3162,7 @@ app.post('/webhook', rateLimit({
 }));
 
 
-app.post('/api/local/inbound-message', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/local/inbound-message', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (isProduction) {
     return res.status(403).json({ error: 'Local inbound simulator is disabled in production' });
   }
@@ -3212,7 +3214,7 @@ app.post('/api/whatsapp/test-message', rateLimit({
   bucketName: 'whatsapp-test-message',
   maxRequests: 20,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3344,7 +3346,7 @@ app.post('/api/users', rateLimit({
   bucketName: 'user-create',
   maxRequests: 30,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3416,7 +3418,7 @@ app.patch('/api/users/:id', rateLimit({
   bucketName: 'user-update',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
 
   const { name, role, active, password } = req.body;
@@ -3500,7 +3502,7 @@ app.delete('/api/users/:id', rateLimit({
   bucketName: 'user-delete',
   maxRequests: 30,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
 
   if (req.params.id === req.user.id) {
@@ -3604,7 +3606,7 @@ app.post('/api/webhook-events/cleanup', rateLimit({
   bucketName: 'webhook-events-cleanup',
   maxRequests: 10,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3668,7 +3670,7 @@ app.post('/api/webhook-events/recover-stuck', rateLimit({
   bucketName: 'webhook-events-recover-stuck',
   maxRequests: 20,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3712,7 +3714,7 @@ app.post('/api/system/maintenance', rateLimit({
   bucketName: 'system-maintenance',
   maxRequests: 10,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -3977,7 +3979,7 @@ app.post('/api/webhook-events/:id/retry', rateLimit({
   bucketName: 'webhook-event-retry',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -4113,7 +4115,7 @@ app.post('/api/outbound-messages/:id/retry', rateLimit({
   bucketName: 'outbound-message-retry',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -4403,7 +4405,7 @@ app.post('/api/outbound-messages/retry-failed', rateLimit({
   bucketName: 'outbound-retry-failed',
   maxRequests: 20,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -4739,6 +4741,7 @@ function registerCrmRoutes(app, ctx) {
     sendWhatsAppMedia,
     mediaUpload,
     OUTBOUND_MEDIA_MAX_BYTES,
+    isAllowedOutboundMediaContent,
     sendWhatsAppInteractiveList,
     sendWhatsAppTemplate,
     sendWhatsAppTemplateToNumber,
@@ -4834,6 +4837,30 @@ function registerCrmRoutes(app, ctx) {
     });
   }
 
+  if (
+    tenant.subscription_status === 'trial'
+    && tenant.trial_ends_at
+    && new Date(tenant.trial_ends_at).getTime() < Date.now()
+  ) {
+    return res.status(402).json({
+      error: 'Trial expired',
+      subscriptionStatus: 'trial',
+      suspendedReason: tenant.suspended_reason || '',
+    });
+  }
+
+  if (
+    tenant.subscription_status === 'active'
+    && tenant.subscription_ends_at
+    && new Date(tenant.subscription_ends_at).getTime() < Date.now()
+  ) {
+    return res.status(402).json({
+      error: 'Subscription expired',
+      subscriptionStatus: 'active',
+      suspendedReason: tenant.suspended_reason || '',
+    });
+  }
+
   return next();
 }
 
@@ -4864,7 +4891,7 @@ app.get('/api/auto-reply-rules', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/auto-reply-rules', requireAuth, rateLimit({
+app.post('/api/auto-reply-rules', requireAuth, asyncHandler(requireActiveTenantSubscription), rateLimit({
   bucketName: 'auto-reply-rule-create',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
@@ -4935,7 +4962,7 @@ app.post('/api/auto-reply-rules', requireAuth, rateLimit({
   res.status(201).json(result.rows[0]);
 }));
 
-app.patch('/api/auto-reply-rules/:id', requireAuth, rateLimit({
+app.patch('/api/auto-reply-rules/:id', requireAuth, asyncHandler(requireActiveTenantSubscription), rateLimit({
   bucketName: 'auto-reply-rule-update',
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
@@ -5046,7 +5073,7 @@ app.patch('/api/auto-reply-rules/:id', requireAuth, rateLimit({
   res.json(result.rows[0]);
 }));
 
-app.delete('/api/auto-reply-rules/:id', requireAuth, rateLimit({
+app.delete('/api/auto-reply-rules/:id', requireAuth, asyncHandler(requireActiveTenantSubscription), rateLimit({
   bucketName: 'auto-reply-rule-delete',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
@@ -5921,6 +5948,12 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
     return res.status(400).json({ error: 'Media file is required' });
   }
 
+  if (!isAllowedOutboundMediaContent(file)) {
+    return res.status(400).json({
+      error: 'Uploaded media content does not match the selected file type.',
+    });
+  }
+
   const caption = String(req.body?.caption || '').trim();
   const requestedMediaType = String(req.body?.mediaType || '').trim().toLowerCase();
   const detectedMediaType = mediaTypeFromMime(file.mimetype);
@@ -6078,7 +6111,7 @@ app.get('/api/templates/manage', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const result = await query(
-    `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
+    `SELECT id, name, language, body, active, category, meta_status, meta_payload, last_synced_at, created_at
      FROM whatsapp_templates
      WHERE tenant_id = $1
      ORDER BY active DESC, name, language`,
@@ -8122,6 +8155,12 @@ function registerCampaignRoutes(app, ctx) {
 
     if (!rows.length) {
       return res.status(400).json({ error: 'Campaign contacts CSV required' });
+    }
+
+    if (rows.length > 25000) {
+      return res.status(400).json({
+        error: 'Maximum 25000 campaign rows can be submitted at once. Split larger imports before sending.',
+      });
     }
 
     const campaignDailyLimit = getCampaignDailyLimit();

@@ -377,14 +377,21 @@ const resetTokenFromUrl = new URLSearchParams(window.location.search).get('reset
   }
 
   const capabilities = [
-    { icon: MessageCircle, title: 'Meta WhatsApp Setup', copy: 'Connect an official WhatsApp Business account through secure Embedded Signup.' },
-    { icon: Inbox, title: 'Shared Team Inbox', copy: 'Organize customer conversations, assignment and reply-window controls in one place.' },
-    { icon: ClipboardList, title: 'Templates & Quotations', copy: 'Manage approved templates and transform enquiries into controlled sales documents.' },
-    { icon: ShoppingCart, title: 'Orders & Follow-up', copy: 'Track converted orders, payment progress and dispatch activity from the same workflow.' },
-    { icon: Users, title: 'Contacts & Customers', copy: 'Maintain tenant-isolated customer history, labels, stages and ownership.' },
-    { icon: Settings, title: 'Business Controls', copy: 'Configure business profile, branding, automations and monitoring settings.' },
-    { icon: UserRound, title: 'Team Access', copy: 'Keep administrators, managers and sales users inside their permitted workspace.' },
-    { icon: Shield, title: 'Audit & Compliance', copy: 'Track operational activity while enforcing opt-out and reply-window protection.' },
+    { icon: MessageCircle, title: 'Official Cloud API Setup', copy: 'Connect a real WhatsApp Business Account through Meta Embedded Signup and backend-only token handling.' },
+    { icon: Inbox, title: 'Shared Service Inbox', copy: 'Manage customer replies with assignment, unread status, and 24-hour customer service window visibility.' },
+    { icon: ClipboardList, title: 'Template Operations', copy: 'Keep Marketing, Utility, and Authentication templates organized before using them outside the reply window.' },
+    { icon: Sparkles, title: 'Flows-Ready Journeys', copy: 'Prepare structured customer journeys such as lead capture, quote requests, support forms, and order updates.' },
+    { icon: ShoppingCart, title: 'Quotes to Orders', copy: 'Turn WhatsApp enquiries into controlled quotations, manager approval, customer confirmation, and sales orders.' },
+    { icon: Bot, title: 'Automation Controls', copy: 'Use bot replies, knowledge base answers, and handoff keywords without bypassing opt-out or service-window rules.' },
+    { icon: Users, title: 'Tenant Team Access', copy: 'Keep administrators, managers, and sales agents inside their permitted company workspace.' },
+    { icon: Shield, title: 'Compliance Monitoring', copy: 'Track audit history, opt-outs, webhook health, outbound retries, and sensitive operational risks.' },
+  ]
+
+  const officialChannels = [
+    { icon: CheckCircle2, title: 'Service Window', copy: 'Free-form replies stay tied to the customer 24-hour window.' },
+    { icon: Megaphone, title: 'Template Categories', copy: 'Marketing, Utility, and Authentication messaging stay visible to operators.' },
+    { icon: Activity, title: 'Quality & Scale', copy: 'Admins see setup, webhook, and throughput readiness before scaling.' },
+    { icon: Link2, title: 'Meta Surface', copy: 'Built around Cloud API, Embedded Signup, templates, Flows, and calling readiness.' },
   ]
 
   function openAccess(nextMode) {
@@ -576,11 +583,11 @@ onAuthenticate(res.data.user)
 
       <section className="public-hero" id="home">
         <div className="hero-copy">
-          <span className="hero-kicker"><Shield size={15} /> WhatsApp Business Management Platform</span>
-          <h1>Manage WhatsApp sales, customers and operations in one place</h1>
+          <span className="hero-kicker"><Shield size={15} /> Official WhatsApp API SaaS Platform</span>
+          <h1>{platformName}</h1>
           <p>
-            Connect Meta WhatsApp, manage customer conversations, create templates, track
-            quotations and orders, and run your business with a secure professional workspace.
+            Operate Meta WhatsApp Cloud API conversations, templates, sales workflows,
+            automation, billing visibility, and team access from one policy-aware workspace.
           </p>
           <div className="hero-actions">
             <a className="public-primary" href="#capabilities">Explore features <ArrowRight size={18} /></a>
@@ -597,8 +604,8 @@ onAuthenticate(res.data.user)
             <div className="console-top"><span /><span /><span /><small>Operations command center</small></div>
             <div className="console-status">
               <div><strong>Connected</strong><span>Meta Cloud API</span></div>
-              <div><strong>24h</strong><span>Reply guard</span></div>
-              <div><strong>Secure</strong><span>Tenant access</span></div>
+              <div><strong>Templates</strong><span>Category controls</span></div>
+              <div><strong>Scale</strong><span>Quality readiness</span></div>
             </div>
             <div className="console-layout">
               <div className="console-menu">
@@ -619,10 +626,10 @@ onAuthenticate(res.data.user)
       </section>
 
       <section className="public-metrics" aria-label="Platform value">
-        <article><strong>1</strong><span>Secure shared workspace for every business</span></article>
+        <article><strong>Cloud</strong><span>Official Meta WhatsApp API operating model</span></article>
         <article><strong>24h</strong><span>Customer service window controls</span></article>
-        <article><strong>360</strong><span>Customer journey from inbox to order</span></article>
-        <article><strong>Meta</strong><span>Official WhatsApp Cloud API connection</span></article>
+        <article><strong>3</strong><span>Template categories: Marketing, Utility, Authentication</span></article>
+        <article><strong>Flows</strong><span>Structured customer journeys ready for expansion</span></article>
       </section>
 
       <section className="public-section" id="capabilities">
@@ -642,6 +649,23 @@ onAuthenticate(res.data.user)
         </div>
       </section>
 
+      <section className="public-section official-api-section">
+        <div className="section-heading">
+          <span>Meta-ready operations</span>
+          <h2>Designed around the official WhatsApp Business Platform model</h2>
+          <p>The workspace highlights the controls teams need before they scale outbound messaging or add richer WhatsApp experiences.</p>
+        </div>
+        <div className="official-api-grid">
+          {officialChannels.map(({ icon: Icon, title, copy }) => (
+            <article key={title}>
+              <Icon size={21} />
+              <strong>{title}</strong>
+              <span>{copy}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="public-workflow" id="workflow">
         <div className="section-heading">
           <span>Workflow</span>
@@ -649,9 +673,9 @@ onAuthenticate(res.data.user)
         </div>
         <div className="workflow-steps">
           <article><b>01</b><h3>Register business</h3><p>Create a protected company workspace and admin account.</p></article>
-          <article><b>02</b><h3>Connect Meta</h3><p>Use official Embedded Signup to connect your WhatsApp Business account.</p></article>
-          <article><b>03</b><h3>Configure operations</h3><p>Set business profile, templates, users and automation controls.</p></article>
-          <article><b>04</b><h3>Manage customers</h3><p>Handle inbox, quotations and orders with policy-safe messaging.</p></article>
+          <article><b>02</b><h3>Connect Meta</h3><p>Use official Embedded Signup to connect your WhatsApp Business account and phone number.</p></article>
+          <article><b>03</b><h3>Prepare policy controls</h3><p>Set templates, opt-out handling, webhook monitoring, users, and automation controls.</p></article>
+          <article><b>04</b><h3>Operate and scale</h3><p>Handle inbox, quotations, orders, Flows-ready journeys, and quality-aware messaging.</p></article>
         </div>
       </section>
 
@@ -1354,7 +1378,7 @@ const [authChecking, setAuthChecking] = useState(true)
 
     if (canMonitor) {
       const administrationItems = [
-        { id: 'controlCenter', label: 'Control Center', icon: Settings },
+        { id: 'controlCenter', label: 'Settings', icon: Settings },
       ]
       if (user?.role === 'admin') administrationItems.push({ id: 'users', label: 'Team & Roles', icon: Users })
       groups.push({ label: 'Administration', items: administrationItems })
@@ -1400,7 +1424,8 @@ const [authChecking, setAuthChecking] = useState(true)
       { id: 'bot', label: 'Automation', icon: Bot },
       { id: 'integrations', label: 'Integrations', icon: Sparkles },
       { id: 'billing', label: 'Billing', icon: Shield },
-      { id: 'controlCenter', label: 'Control Center', icon: Settings },
+      { id: 'controlCenter', label: 'Settings', icon: Settings },
+      { id: 'templates', label: 'Templates', icon: ClipboardList },
     ]
 
     if (user?.role === 'admin') {
@@ -2197,7 +2222,7 @@ async function enterWorkspace(authenticatedUser) {
 if (!user) return <PublicWebsite onAuthenticate={enterWorkspace} appSettings={appSettings} />
 
 const salesSubPages = ['quotes', 'orders', 'activeOrders']
-const controlSubPages = ['settings', 'webhooks', 'outbound', 'optOuts', 'audit']
+const controlSubPages = ['settings', 'templates', 'webhooks', 'outbound', 'optOuts', 'audit']
 
 function pageMatchesNavTarget(page) {
   if (!page) return false
@@ -2222,6 +2247,7 @@ function pageMatchesNavTarget(page) {
       'activeOrders',
       'controlCenter',
       'settings',
+      'templates',
       'webhooks',
       'outbound',
       'optOuts',
@@ -2229,7 +2255,7 @@ function pageMatchesNavTarget(page) {
       'users',
       'integrations',
     ]
-const monitorOnlyPages = ['controlCenter', 'settings', 'webhooks', 'outbound', 'optOuts', 'audit', 'sendBulk', 'integrations', 'billing', 'voice', 'automation']
+const monitorOnlyPages = ['controlCenter', 'settings', 'templates', 'webhooks', 'outbound', 'optOuts', 'audit', 'sendBulk', 'integrations', 'billing', 'voice', 'automation']
 const adminOnlyPages = ['users', 'connectWhatsApp', 'settings', 'billing']
 
   if (isSuperAdminUser) {
@@ -3674,7 +3700,7 @@ return (
           />
         )}
         {!isSuperAdminUser && featureGate && <FeatureGatePage title={featureGate.title} text={featureGate.text} actionLabel={featureGate.actionLabel} actionPage={featureGate.actionPage} onOpenPage={showPage} />}
-        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
+        {!isSuperAdminUser && activePage === 'dashboard' && <DashboardPage dashboard={dashboard} conversations={conversations} drafts={drafts} products={products} lowStockProducts={lowStockProducts} quotations={quotations} orders={orders} onboarding={whatsappOnboarding} whatsappHealth={whatsappHealth} templates={managedTemplates.length ? managedTemplates : templates} tenantUsage={tenantUsage} outboundEvents={outboundEvents} webhookEvents={webhookEvents} isAdmin={user.role === 'admin'} canManage={canMonitor} onOpenPage={showPage} />}
         {!isSuperAdminUser && activePage === 'inventory' && (
           <section className="workspace-page">
             <WorkspaceHeading title="Inventory & Product Catalog" description="Manage product stock, pricing and searchable fields used in sales workflows." />

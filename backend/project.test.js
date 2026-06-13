@@ -89,6 +89,14 @@ assert.deepEqual(req.user, {
   supportActorTenantId: null,
   supportExpiresAt: null,
 });
+assert.deepEqual(req.tenant, {
+  id: 'tenant-1',
+  status: 'active',
+  subscriptionStatus: 'trial',
+  trialEndsAt: null,
+  subscriptionEndsAt: null,
+  suspendedReason: '',
+});
 });
 
 test('requireAuth rejects tokens that do not resolve to an active tenant user', async () => {
@@ -144,6 +152,62 @@ test('publicUser exposes only safe user session fields', () => {
   });
   assert.equal(Object.hasOwn(publicUser, 'password_hash'), false);
   assert.equal(Object.hasOwn(publicUser, 'totp_secret_encrypted'), false);
+});
+
+test('requireActiveSubscription allows active trial tenants', () => {
+  const service = createAuthService({
+    jwt,
+    jwtSecret: 'test-secret-with-more-than-32-characters',
+    isProduction: true,
+    getCookie: () => '',
+    query: async () => ({ rows: [] }),
+  });
+
+  const req = {
+    tenant: {
+      status: 'active',
+      subscriptionStatus: 'trial',
+      trialEndsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
+  };
+  const res = createResponse();
+  let nextCalled = false;
+
+  service.requireActiveSubscription(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, true);
+  assert.equal(res.statusCode, 200);
+});
+
+test('requireActiveSubscription blocks expired trial tenants', () => {
+  const service = createAuthService({
+    jwt,
+    jwtSecret: 'test-secret-with-more-than-32-characters',
+    isProduction: true,
+    getCookie: () => '',
+    query: async () => ({ rows: [] }),
+  });
+
+  const req = {
+    tenant: {
+      status: 'active',
+      subscriptionStatus: 'trial',
+      trialEndsAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    },
+  };
+  const res = createResponse();
+  let nextCalled = false;
+
+  service.requireActiveSubscription(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.error, 'Trial expired');
+  assert.equal(res.body.billingBlocked, true);
 });
 
 test('production auth cookie is httpOnly, secure, and cross-site compatible', () => {
@@ -253,6 +317,7 @@ const {
   extractEnquiry,
   extractText,
   getBotIntent,
+  isAllowedOutboundMediaContent,
   normalizeProduct,
   normalizeSalesItem,
   parseQuantity,
@@ -288,6 +353,23 @@ test('parses quantities and non-text WhatsApp messages', () => {
   assert.deepEqual(parseQuantity('12 kg'), { quantity: 12, unit: 'kg' });
   assert.equal(extractText({ type: 'image', image: { caption: 'Product photo', id: 'img-1' } }), 'Product photo');
   assert.equal(extractText({ type: 'document', document: { filename: 'invoice.pdf' } }), 'invoice.pdf');
+});
+
+test('outbound media validator rejects spoofed file content', () => {
+  assert.equal(isAllowedOutboundMediaContent({
+    mimetype: 'image/png',
+    buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
+  }), true);
+
+  assert.equal(isAllowedOutboundMediaContent({
+    mimetype: 'image/png',
+    buffer: Buffer.from('<script>alert(1)</script>'),
+  }), false);
+
+  assert.equal(isAllowedOutboundMediaContent({
+    mimetype: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.7\n'),
+  }), true);
 });
 
 test('builds policy-safe bot replies for greeting and order intent', () => {
@@ -356,8 +438,14 @@ function createRouteHarness({ axios, query }) {
         tenantId: 'tenant-1',
         role: 'admin',
       };
+      req.tenant = {
+        id: 'tenant-1',
+        status: 'active',
+        subscriptionStatus: 'active',
+      };
       next();
     },
+    requireActiveSubscription: (req, res, next) => next(),
     maskValue: (value = '') => (value ? `masked:${String(value).slice(-4)}` : ''),
     hasRealValue: (value) => Boolean(value && !String(value).startsWith('your-')),
     encryptSecret: (value) => ({

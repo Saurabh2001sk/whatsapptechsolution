@@ -1,5 +1,7 @@
 # Production Checklist
 
+Before production scale, review `../docs/SAAS_META_PLATFORM_STRATEGY.md` so Meta-owned data, tenant-owned data, retention, and token-handling boundaries are clear.
+
 ## Required environment
 
 - NODE_ENV=production
@@ -42,6 +44,8 @@
 - Do not log full tokens, passwords, or raw Authorization headers
 - Media must be served through protected backend routes
 - Use S3/R2/Spaces with signed access before production scale
+- Keep raw webhook and retry payload retention bounded; do not store unneeded Meta payloads forever
+- Keep CRM, consent, audit, quote/order, and tenant records locally because Meta does not replace the SaaS workflow database
 - Add Redis-backed rate limits before multi-instance deployment
 - Add backups and retention policy before customer launch
 

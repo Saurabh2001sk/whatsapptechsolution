@@ -572,7 +572,11 @@ function createAuthService({
            users.email,
            users.role,
            users.active,
-           tenants.status AS tenant_status
+           tenants.status AS tenant_status,
+           tenants.subscription_status,
+           tenants.trial_ends_at,
+           tenants.subscription_ends_at,
+           tenants.suspended_reason
          FROM users
          JOIN tenants ON tenants.id = users.tenant_id
          WHERE users.id = $1
@@ -599,6 +603,15 @@ function createAuthService({
         supportExpiresAt: decoded.supportExpiresAt || null,
       };
 
+      req.tenant = {
+        id: user.tenant_id,
+        status: user.tenant_status,
+        subscriptionStatus: user.subscription_status || 'trial',
+        trialEndsAt: user.trial_ends_at || null,
+        subscriptionEndsAt: user.subscription_ends_at || null,
+        suspendedReason: user.suspended_reason || '',
+      };
+
       return next();
     } catch (error) {
       return res.status(401).json({ error: 'Invalid or expired token' });
@@ -621,6 +634,64 @@ function createAuthService({
     return next();
   }
 
+  function getSubscriptionBlockReason(tenant) {
+    if (!tenant) return 'Company account missing';
+
+    const tenantStatus = String(tenant.status || '').trim().toLowerCase();
+    const subscriptionStatus = String(tenant.subscriptionStatus || tenant.subscription_status || '').trim().toLowerCase();
+    const suspendedReason = tenant.suspendedReason || tenant.suspended_reason || '';
+
+    if (tenantStatus === 'suspended') {
+      return suspendedReason || 'Company account suspended';
+    }
+
+    if (tenantStatus === 'inactive') {
+      return 'Company account inactive';
+    }
+
+    if (subscriptionStatus === 'suspended') {
+      return suspendedReason || 'Subscription suspended';
+    }
+
+    if (subscriptionStatus === 'expired') {
+      return suspendedReason || 'Subscription expired';
+    }
+
+    const trialEndsAt = tenant.trialEndsAt || tenant.trial_ends_at;
+    const subscriptionEndsAt = tenant.subscriptionEndsAt || tenant.subscription_ends_at;
+
+    if (
+      subscriptionStatus === 'trial'
+      && trialEndsAt
+      && new Date(trialEndsAt).getTime() < Date.now()
+    ) {
+      return 'Trial expired';
+    }
+
+    if (
+      subscriptionStatus === 'active'
+      && subscriptionEndsAt
+      && new Date(subscriptionEndsAt).getTime() < Date.now()
+    ) {
+      return 'Subscription expired';
+    }
+
+    return '';
+  }
+
+  function requireActiveSubscription(req, res, next) {
+    const reason = getSubscriptionBlockReason(req.tenant);
+
+    if (reason) {
+      return res.status(403).json({
+        error: reason,
+        billingBlocked: true,
+      });
+    }
+
+    return next();
+  }
+
   return {
     signUser,
     publicUser,
@@ -631,6 +702,8 @@ function createAuthService({
     isSuperAdmin,
     canMonitor,
     requireSuperAdmin,
+    getSubscriptionBlockReason,
+    requireActiveSubscription,
   };
 }
 
@@ -1072,6 +1145,11 @@ function safeFileName(fileName = 'media.bin') {
   return clean || 'media.bin';
 }
 
+function isPathInside(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
 function encodeStorageKey(key = '') {
   return Buffer.from(String(key), 'utf8').toString('base64url');
 }
@@ -1163,7 +1241,7 @@ function createMediaStorage({ mediaRoot }) {
     const localName = `${Date.now()}-${crypto.randomUUID()}-${safeFileName(fileName)}`;
     const localPath = path.join(mediaRoot, localName);
 
-    if (!localPath.startsWith(mediaRoot)) {
+    if (!isPathInside(mediaRoot, localPath)) {
       throw new Error('Invalid local media path');
     }
 
