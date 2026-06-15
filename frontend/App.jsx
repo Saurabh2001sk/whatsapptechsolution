@@ -1173,6 +1173,99 @@ function WhatsAppConnectGate({ onboarding, connecting, onComplete, onLogout }) {
   )
 }
 
+function buildTemplatePayloadFromForm(form = {}) {
+  const body = String(form.body || '').trim()
+  const headerFormat = String(form.headerFormat || 'NONE').toUpperCase()
+  const mediaHeaderFormats = ['IMAGE', 'VIDEO', 'DOCUMENT', 'GIF']
+  const headerSampleHandle = String(form.headerSampleHandle || '').trim()
+  const headerSampleFileName = String(form.headerSampleFileName || '').trim()
+  const variableSamples = Array.isArray(form.variableSamples)
+    ? form.variableSamples.slice(0, 20).map((sample) => String(sample || '').trim().slice(0, 120))
+    : []
+  const components = []
+
+  if (headerFormat === 'TEXT' && String(form.headerText || '').trim()) {
+    components.push({
+      type: 'HEADER',
+      format: 'TEXT',
+      text: String(form.headerText || '').trim().slice(0, 60),
+    })
+  } else if ([...mediaHeaderFormats, 'LOCATION'].includes(headerFormat)) {
+    const headerComponent = {
+      type: 'HEADER',
+      format: headerFormat,
+    }
+
+    if (mediaHeaderFormats.includes(headerFormat) && headerSampleHandle) {
+      headerComponent.example = {
+        header_handle: [headerSampleHandle],
+      }
+    }
+
+    if (mediaHeaderFormats.includes(headerFormat) && headerSampleFileName) {
+      headerComponent.sampleFileName = headerSampleFileName.slice(0, 140)
+    }
+
+    components.push(headerComponent)
+  }
+
+  if (body) {
+    components.push({
+      type: 'BODY',
+      text: body,
+    })
+  }
+
+  if (String(form.footer || '').trim()) {
+    components.push({
+      type: 'FOOTER',
+      text: String(form.footer || '').trim().slice(0, 60),
+    })
+  }
+
+  const buttons = Array.isArray(form.buttons) ? form.buttons : []
+  const cleanButtons = buttons.slice(0, 10).map((button) => {
+    const type = String(button.type || 'QUICK_REPLY').toUpperCase()
+    const cleanButton = {
+      type,
+      text: String(button.text || '').trim().slice(0, 40),
+    }
+
+    if (type === 'URL') cleanButton.url = String(button.url || '').trim()
+    if (type === 'PHONE_NUMBER') cleanButton.phone_number = String(button.phone_number || '').trim()
+    if (type === 'COPY_CODE') cleanButton.example = String(button.example || '').trim().slice(0, 20)
+
+    return cleanButton
+  }).filter((button) => button.text)
+
+  if (cleanButtons.length) {
+    components.push({
+      type: 'BUTTONS',
+      buttons: cleanButtons,
+    })
+  }
+
+  return {
+    name: String(form.name || '').trim().toLowerCase(),
+    language: String(form.language || 'en').trim() || 'en',
+    category: String(form.category || 'utility').trim().toLowerCase(),
+    body,
+    active: Boolean(form.active),
+    metaPayload: {
+      builderVersion: 1,
+      category: String(form.category || 'utility').trim().toLowerCase(),
+      templateType: String(form.templateType || 'default'),
+      variableType: String(form.variableType || 'number'),
+      variableSamples,
+      validityPeriod: {
+        enabled: Boolean(form.validityEnabled),
+        minutes: Number(form.validityMinutes || 10),
+      },
+      components,
+    },
+  }
+}
+
 function App() {
   const defaultTallySettings = {
     enabled: false,
@@ -1200,7 +1293,25 @@ const [authChecking, setAuthChecking] = useState(true)
   const [messages, setMessages] = useState([])
   const [templates, setTemplates] = useState([])
   const [managedTemplates, setManagedTemplates] = useState([])
-  const emptyTemplate = { name: '', language: 'en', body: '', active: true }
+  const [templateSampleUploading, setTemplateSampleUploading] = useState(false)
+  const emptyTemplate = {
+    name: '',
+    language: 'en',
+    category: 'marketing',
+    templateType: 'default',
+    variableType: 'number',
+    headerFormat: 'NONE',
+    headerText: '',
+    headerSampleHandle: '',
+    headerSampleFileName: '',
+    body: '',
+    footer: '',
+    buttons: [],
+    variableSamples: [],
+    validityEnabled: false,
+    validityMinutes: 10,
+    active: false,
+  }
   const [templateForm, setTemplateForm] = useState(emptyTemplate)
   const [editingTemplateId, setEditingTemplateId] = useState('')
   const [templateSyncing, setTemplateSyncing] = useState(false)
@@ -2846,12 +2957,7 @@ async function deleteUser(userItem) {
     return
   }
 
-  const payload = {
-    name: templateForm.name.trim().toLowerCase(),
-    language: templateForm.language.trim() || 'en',
-    body: templateForm.body.trim(),
-    active: Boolean(templateForm.active),
-  }
+  const payload = buildTemplatePayloadFromForm(templateForm)
 
   if (!payload.name || !payload.body) {
     notify('Template name and body required', 'error')
@@ -2875,12 +2981,95 @@ async function deleteUser(userItem) {
   }
 }
 
+  async function submitTemplateForReview(event) {
+  event.preventDefault()
+
+  if (!canMonitor) {
+    notify('Manager/Admin access required', 'error')
+    return
+  }
+
+  const payload = buildTemplatePayloadFromForm({
+    ...templateForm,
+    active: false,
+  })
+
+  if (!payload.name || !payload.body) {
+    notify('Template name and body required', 'error')
+    return
+  }
+
+  try {
+    await api.post('/api/templates/submit-meta', payload)
+    notify('Template submitted to Meta for review')
+    setTemplateForm(emptyTemplate)
+    setEditingTemplateId('')
+    await loadAll()
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Meta template submission failed'), 'error')
+  }
+}
+
+async function uploadTemplateSampleMedia({ file, headerFormat }) {
+  if (!file) {
+    notify('Choose a sample media file first', 'error')
+    return
+  }
+
+  const uploadPayload = new FormData()
+  uploadPayload.append('headerFormat', headerFormat || templateForm.headerFormat || 'IMAGE')
+  uploadPayload.append('mediaFile', file)
+  uploadPayload.append('fileName', file.name || '')
+
+  setTemplateSampleUploading(true)
+
+  try {
+    const response = await api.post('/api/templates/media-upload', uploadPayload, {
+      timeout: 120_000,
+    })
+
+    setTemplateForm((current) => ({
+      ...current,
+      headerFormat: response.data?.headerFormat || headerFormat || current.headerFormat,
+      headerSampleHandle: response.data?.headerHandle || '',
+      headerSampleFileName: response.data?.fileName || file.name || '',
+    }))
+    notify('Sample media uploaded to Meta')
+  } catch (err) {
+    notify(apiErrorMessage(err, 'Meta sample media upload failed'), 'error')
+  } finally {
+    setTemplateSampleUploading(false)
+  }
+}
+
 function editTemplate(template) {
+  const metaPayload = template.meta_payload || {}
+  const components = Array.isArray(metaPayload.components) ? metaPayload.components : []
+  const header = components.find((component) => String(component.type || '').toUpperCase() === 'HEADER') || {}
+  const footer = components.find((component) => String(component.type || '').toUpperCase() === 'FOOTER') || {}
+  const buttonsComponent = components.find((component) => String(component.type || '').toUpperCase() === 'BUTTONS') || {}
+  const headerExample = header.example && typeof header.example === 'object' ? header.example : {}
+  const headerHandle = Array.isArray(headerExample.header_handle)
+    ? headerExample.header_handle[0]
+    : headerExample.header_handle || header.header_handle || header.headerHandle || ''
+
   setEditingTemplateId(template.id)
   setTemplateForm({
     name: template.name || '',
     language: template.language || 'en',
+    category: template.category || metaPayload.category || 'utility',
+    templateType: metaPayload.templateType || 'default',
+    variableType: metaPayload.variableType || 'number',
+    headerFormat: header.format || 'NONE',
+    headerText: header.text || '',
+    headerSampleHandle: headerHandle || '',
+    headerSampleFileName: header.sampleFileName || header.sample_file_name || header.fileName || '',
     body: template.body || '',
+    footer: footer.text || '',
+    buttons: Array.isArray(buttonsComponent.buttons) ? buttonsComponent.buttons : [],
+    variableSamples: Array.isArray(metaPayload.variableSamples) ? metaPayload.variableSamples : [],
+    validityEnabled: Boolean(metaPayload.validityPeriod?.enabled),
+    validityMinutes: metaPayload.validityPeriod?.minutes || 10,
     active: template.active !== false,
   })
 }
@@ -3797,6 +3986,9 @@ return (
             setTemplateForm={setTemplateForm}
             editingTemplateId={editingTemplateId}
             onSaveTemplate={saveTemplate}
+            onSubmitTemplate={submitTemplateForReview}
+            onUploadTemplateSample={uploadTemplateSampleMedia}
+            templateSampleUploading={templateSampleUploading}
             onEditTemplate={editTemplate}
             onToggleTemplate={toggleTemplate}
             onCancelTemplateEdit={cancelTemplateEdit}

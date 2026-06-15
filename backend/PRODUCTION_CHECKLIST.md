@@ -7,6 +7,9 @@ Before production scale, review `../docs/SAAS_META_PLATFORM_STRATEGY.md` so Meta
 - NODE_ENV=production
 - DATABASE_URL set
 - JWT_SECRET set to a real random 32+ character value
+- PASSWORD_RESET_EMAIL_PROVIDER=resend
+- RESEND_API_KEY set
+- PASSWORD_RESET_FROM_EMAIL set
 - FRONTEND_URL set to the production frontend origin
 - PUBLIC_BASE_URL set to the production backend origin
 - WHATSAPP_APP_SECRET set
@@ -42,6 +45,7 @@ Before production scale, review `../docs/SAAS_META_PLATFORM_STRATEGY.md` so Meta
 ## Data/security
 
 - Do not log full tokens, passwords, or raw Authorization headers
+- Do not log password reset links or reset tokens; send them only through the configured email provider
 - Media must be served through protected backend routes
 - Use S3/R2/Spaces with signed access before production scale
 - Keep raw webhook and retry payload retention bounded; do not store unneeded Meta payloads forever

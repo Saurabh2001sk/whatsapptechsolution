@@ -198,6 +198,83 @@ function signTotpLoginChallenge(user) {
     return String(value || '').trim().slice(0, maxLength);
   }
 
+  const PASSWORD_RESET_GENERIC_RESPONSE = {
+    ok: true,
+    message: 'If this email exists, reset instructions will be sent.',
+  };
+
+  function escapeEmailHtml(value = '') {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function isPasswordResetEmailConfigured() {
+    const provider = String(process.env.PASSWORD_RESET_EMAIL_PROVIDER || '').trim().toLowerCase();
+
+    return provider === 'resend'
+      && hasRealValue(process.env.RESEND_API_KEY)
+      && hasRealValue(process.env.PASSWORD_RESET_FROM_EMAIL);
+  }
+
+  async function sendPasswordResetEmail({ to, resetUrl }) {
+    const provider = String(process.env.PASSWORD_RESET_EMAIL_PROVIDER || '').trim().toLowerCase();
+
+    if (provider !== 'resend') {
+      const error = new Error('Password reset email provider is not configured');
+      error.statusCode = 503;
+      throw error;
+    }
+
+    const from = String(process.env.PASSWORD_RESET_FROM_EMAIL || '').trim();
+    const replyTo = String(process.env.PASSWORD_RESET_REPLY_TO || '').trim();
+    const appName = String(process.env.PASSWORD_RESET_APP_NAME || process.env.APP_NAME || 'BOS WhatsApp CRM').trim();
+    const supportEmail = String(process.env.PASSWORD_RESET_SUPPORT_EMAIL || replyTo || from).trim();
+    const safeAppName = escapeEmailHtml(appName);
+    const safeResetUrl = escapeEmailHtml(resetUrl);
+    const safeSupportEmail = escapeEmailHtml(supportEmail);
+
+    if (!hasRealValue(process.env.RESEND_API_KEY) || !hasRealValue(from)) {
+      const error = new Error('Password reset email delivery is not configured');
+      error.statusCode = 503;
+      throw error;
+    }
+
+    await axios.post(
+      'https://api.resend.com/emails',
+      {
+        from,
+        to: [to],
+        reply_to: replyTo || undefined,
+        subject: `Reset your ${appName} password`,
+        text: [
+          `Reset your ${appName} password`,
+          '',
+          'Use this secure link within 30 minutes:',
+          resetUrl,
+          '',
+          'If you did not request this, you can ignore this email.',
+        ].join('\n'),
+        html: [
+          `<p>Reset your ${safeAppName} password.</p>`,
+          `<p><a href="${safeResetUrl}">Reset password</a></p>`,
+          '<p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>',
+          safeSupportEmail ? `<p>Support: ${safeSupportEmail}</p>` : '',
+        ].join(''),
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      },
+    );
+  }
+
   function cleanPlatformPlan(value = 'trial') {
     const cleanValue = String(value || 'trial').trim().toLowerCase() || 'trial';
     if (cleanValue === 'starter') return 'trial';
@@ -413,7 +490,7 @@ app.post('/api/auth/forgot-password', rateLimit({
   const email = String(req.body?.email || '').trim().toLowerCase();
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.json({ ok: true, message: 'If this email exists, reset instructions will be sent.' });
+    return res.json(PASSWORD_RESET_GENERIC_RESPONSE);
   }
 
   const userResult = await query(
@@ -428,7 +505,15 @@ app.post('/api/auth/forgot-password', rateLimit({
   const user = userResult.rows[0];
 
   if (!user || !user.active || user.tenant_status !== 'active') {
-    return res.json({ ok: true, message: 'If this email exists, reset instructions will be sent.' });
+    return res.json(PASSWORD_RESET_GENERIC_RESPONSE);
+  }
+
+  if (isProduction && !isPasswordResetEmailConfigured()) {
+    console.error('Password reset email delivery is not configured:', {
+      email: maskEmail(user.email),
+    });
+
+    return res.json(PASSWORD_RESET_GENERIC_RESPONSE);
   }
 
   const plainToken = crypto.randomBytes(32).toString('hex');
@@ -468,12 +553,23 @@ app.post('/api/auth/forgot-password', rateLimit({
     });
   }
 
-  console.log('Password reset requested:', {
-    email: maskEmail(user.email),
-    resetUrl,
-  });
+  try {
+    await sendPasswordResetEmail({
+      to: user.email,
+      resetUrl,
+    });
 
-  return res.json({ ok: true, message: 'If this email exists, reset instructions will be sent.' });
+    console.log('Password reset email queued:', {
+      email: maskEmail(user.email),
+    });
+  } catch (error) {
+    console.error('Password reset email delivery failed:', {
+      email: maskEmail(user.email),
+      ...safeErrorLog(error, true),
+    });
+  }
+
+  return res.json(PASSWORD_RESET_GENERIC_RESPONSE);
 }));
 
 app.post('/api/auth/reset-password', rateLimit({
@@ -4512,7 +4608,7 @@ app.post('/api/outbound-messages/retry-failed', rateLimit({
           summary.skipped += 1;
           summary.errors.push({
             id: outbound.id,
-            reason: 'template_not_active',
+            reason: 'template_not_meta_approved',
             error: String(error.message || error).slice(0, 300),
           });
           continue;
@@ -4638,6 +4734,7 @@ function registerCrmRoutes(app, ctx) {
     isSuperAdmin,
     canMonitor,
     requireSuperAdmin,
+    requireActiveSubscription,
     normalizeTenantSlug,
     publicTenant,
     countActiveTenantAdmins,
@@ -5657,7 +5754,7 @@ app.post('/api/conversations/:id/messages', rateLimit({
   bucketName: 'conversation-message-send',
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const {
     text,
     templateName,
@@ -5727,18 +5824,16 @@ app.post('/api/conversations/:id/messages', rateLimit({
          AND name = $2
          AND language = $3
          AND active = true
-         AND ($4::boolean = false OR meta_status = 'approved')
+         AND lower(COALESCE(meta_status, '')) = 'approved'
        LIMIT 1`,
-      [req.user.tenantId, cleanTemplateName, cleanLanguage, isProduction],
+      [req.user.tenantId, cleanTemplateName, cleanLanguage],
     );
 
     templateRecord = templateResult.rows[0];
 
     if (!templateRecord) {
       return res.status(400).json({
-        error: isProduction
-          ? 'Template is not approved by Meta for this company. Sync approved templates from Meta before sending.'
-          : 'Template is not active or not found for this company',
+        error: 'Template is not approved by Meta for this company. Sync approved templates from Meta before sending.',
       });
     }
   }
@@ -5920,7 +6015,7 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
   bucketName: 'conversation-media-upload-send',
   maxRequests: 60,
   windowMs: 60 * 60 * 1000,
-}), requireAuth, handleMediaUpload, asyncHandler(async (req, res) => {
+}), requireAuth, requireActiveSubscription, handleMediaUpload, asyncHandler(async (req, res) => {
   const contact = await findContact(req.params.id, req.user.tenantId);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
@@ -6091,15 +6186,436 @@ app.post('/api/conversations/:id/messages/media-upload', rateLimit({
 // ROUTES — TEMPLATES
 // =========================================================
 
+const TEMPLATE_CATEGORIES = new Set(['marketing', 'utility', 'authentication']);
+const TEMPLATE_HEADER_FORMATS = new Set(['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT', 'GIF', 'LOCATION']);
+const TEMPLATE_MEDIA_HEADER_FORMATS = new Set(['IMAGE', 'VIDEO', 'DOCUMENT', 'GIF']);
+const TEMPLATE_BUTTON_TYPES = new Set(['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'COPY_CODE']);
+const TEMPLATE_SAMPLE_MEDIA_MIME_BY_FORMAT = {
+  IMAGE: new Set(['image/jpeg', 'image/png', 'image/webp']),
+  VIDEO: new Set(['video/mp4', 'video/3gpp']),
+  DOCUMENT: new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain',
+  ]),
+  GIF: new Set(['image/gif']),
+};
+
+function cleanTemplateCategory(value) {
+  const category = String(value || 'utility').trim().toLowerCase();
+  return TEMPLATE_CATEGORIES.has(category) ? category : 'utility';
+}
+
+function templateVariableIndexes(text = '') {
+  const found = new Set();
+
+  for (const match of String(text || '').matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+    found.add(match[1]);
+  }
+
+  return [...found].sort((first, second) => Number(first) - Number(second));
+}
+
+function cleanTemplateVariableSamples(value) {
+  const samples = Array.isArray(value) ? value : [];
+  return samples
+    .slice(0, 20)
+    .map((sample) => String(sample || '').trim().slice(0, 120));
+}
+
+function sampleTemplateVariableValue(index, samples = []) {
+  const defaultSamples = [
+    'Riya Sharma',
+    'INV-WA-1024',
+    'INR 42,500',
+    '18 Jun 2026',
+    'Blue Ocean Steels',
+    'https://example.com/invoices/INV-WA-1024.pdf',
+  ];
+  const sampleIndex = Number(index) - 1;
+  const customSample = String(samples[sampleIndex] || '').trim();
+  return customSample || defaultSamples[sampleIndex] || `Sample ${index}`;
+}
+
+function extractTemplateHeaderHandle(component = {}) {
+  const example = component.example && typeof component.example === 'object' ? component.example : {};
+  const headerHandle = Array.isArray(example.header_handle)
+    ? example.header_handle[0]
+    : example.header_handle
+      || component.header_handle
+      || component.headerHandle
+      || component.exampleHeaderHandle;
+
+  return String(headerHandle || '').trim().slice(0, 500);
+}
+
+function inferTemplateHeaderFormatFromMime(mimeType = '') {
+  const cleanMime = String(mimeType || '').toLowerCase();
+  if (cleanMime === 'image/gif') return 'GIF';
+  if (cleanMime.startsWith('image/')) return 'IMAGE';
+  if (cleanMime.startsWith('video/')) return 'VIDEO';
+  return 'DOCUMENT';
+}
+
+function cleanTemplateSampleHeaderFormat(value, mimeType = '') {
+  const format = String(value || '').trim().toUpperCase();
+  if (TEMPLATE_MEDIA_HEADER_FORMATS.has(format)) return format;
+  return inferTemplateHeaderFormatFromMime(mimeType);
+}
+
+function validateTemplateSampleMediaFile(file, headerFormat) {
+  if (!file?.buffer?.length) {
+    return 'Sample media file is required';
+  }
+
+  const mimeType = String(file.mimetype || '').toLowerCase();
+  const allowedForHeader = TEMPLATE_SAMPLE_MEDIA_MIME_BY_FORMAT[headerFormat] || new Set();
+
+  if (!allowedForHeader.has(mimeType)) {
+    return `${headerFormat} template header does not support ${mimeType || 'this file type'}`;
+  }
+
+  if (typeof isAllowedOutboundMediaContent === 'function' && !isAllowedOutboundMediaContent(file)) {
+    return 'Sample media file content does not match the selected file type';
+  }
+
+  return '';
+}
+
+async function uploadTemplateSampleMediaToMeta({ tenantId, file, headerFormat }) {
+  const config = await getWhatsAppTemplateSyncConfig(tenantId);
+
+  if (!config) {
+    const error = new Error('Meta template media upload is not configured. Connect WhatsApp through Embedded Signup or set WHATSAPP_WABA_ID + WHATSAPP_ACCESS_TOKEN for local/demo.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const appId = String(process.env.META_APP_ID || '').trim();
+
+  if (!hasRealValue(appId)) {
+    const error = new Error('META_APP_ID is required for Meta template sample media upload.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const fileName = String(file.originalname || file.filename || `template-${headerFormat.toLowerCase()}-sample`).trim().slice(0, 140);
+  const mimeType = String(file.mimetype || '').toLowerCase();
+
+  const sessionResponse = await axios.post(
+    `https://graph.facebook.com/${config.apiVersion}/${appId}/uploads`,
+    null,
+    {
+      headers: {
+        Authorization: `Bearer ${config.accessToken}`,
+      },
+      params: {
+        file_name: fileName,
+        file_length: file.size || file.buffer.length,
+        file_type: mimeType,
+      },
+      timeout: Number(process.env.WHATSAPP_TEMPLATE_MEDIA_UPLOAD_TIMEOUT_MS || 30000),
+    },
+  );
+
+  const uploadSessionId = sessionResponse.data?.id;
+
+  if (!uploadSessionId) {
+    const error = new Error('Meta did not return an upload session id.');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  const uploadResponse = await axios.post(
+    `https://graph.facebook.com/${config.apiVersion}/${uploadSessionId}`,
+    file.buffer,
+    {
+      headers: {
+        Authorization: `OAuth ${config.accessToken}`,
+        'Content-Type': 'application/octet-stream',
+        file_offset: 0,
+      },
+      timeout: Number(process.env.WHATSAPP_TEMPLATE_MEDIA_UPLOAD_TIMEOUT_MS || 30000),
+      maxBodyLength: OUTBOUND_MEDIA_MAX_BYTES + 1024 * 1024,
+      maxContentLength: OUTBOUND_MEDIA_MAX_BYTES + 1024 * 1024,
+    },
+  );
+
+  const handle = String(uploadResponse.data?.h || uploadResponse.data?.handle || '').trim();
+
+  if (!handle) {
+    const error = new Error('Meta did not return a template media handle.');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    handle,
+    fileName,
+    mimeType,
+    headerFormat,
+    source: config.source,
+  };
+}
+
+async function assertTemplateCreateLimitIfNeeded(tenantId, name, language) {
+  const existing = await query(
+    `SELECT id
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+     LIMIT 1`,
+    [tenantId, name, language],
+  );
+
+  if (existing.rows[0]) {
+    return;
+  }
+
+  await assertTenantLimit({
+    tenantId,
+    resource: 'templates',
+    add: 1,
+  });
+}
+
+function sanitizeTemplateButtons(value) {
+  const buttons = Array.isArray(value) ? value : [];
+
+  return buttons.slice(0, 10).map((button) => {
+    const type = String(button?.type || 'QUICK_REPLY').trim().toUpperCase();
+    const safeType = TEMPLATE_BUTTON_TYPES.has(type) ? type : 'QUICK_REPLY';
+    const cleanButton = {
+      type: safeType,
+      text: String(button?.text || '').trim().slice(0, 40),
+    };
+
+    if (safeType === 'URL') {
+      cleanButton.url = String(button?.url || '').trim().slice(0, 2000);
+    }
+
+    if (safeType === 'PHONE_NUMBER') {
+      cleanButton.phone_number = String(button?.phone_number || button?.phoneNumber || '')
+        .trim()
+        .slice(0, 32);
+    }
+
+    if (safeType === 'COPY_CODE') {
+      cleanButton.example = String(button?.example || button?.code || '').trim().slice(0, 20);
+    }
+
+    return cleanButton;
+  }).filter((button) => button.text);
+}
+
+function sanitizeTemplateMetaPayload(value, cleanBody, category) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const components = Array.isArray(source.components) ? source.components : [];
+  const sanitizedComponents = [];
+  const variableSamples = cleanTemplateVariableSamples(source.variableSamples || source.variable_samples);
+
+  for (const component of components) {
+    const type = String(component?.type || '').trim().toUpperCase();
+
+    if (type === 'HEADER') {
+      const format = String(component?.format || 'TEXT').trim().toUpperCase();
+      if (!TEMPLATE_HEADER_FORMATS.has(format)) continue;
+
+      const cleanHeader = { type: 'HEADER', format };
+      const text = String(component?.text || '').trim().slice(0, 60);
+
+      if (format === 'TEXT' && text) {
+        cleanHeader.text = text;
+      }
+
+      if (TEMPLATE_MEDIA_HEADER_FORMATS.has(format)) {
+        const headerHandle = extractTemplateHeaderHandle(component);
+        const sampleFileName = String(
+          component?.sampleFileName
+          || component?.sample_file_name
+          || component?.fileName
+          || '',
+        ).trim().slice(0, 140);
+
+        if (headerHandle) {
+          cleanHeader.example = { header_handle: [headerHandle] };
+        }
+
+        if (sampleFileName) {
+          cleanHeader.sampleFileName = sampleFileName;
+        }
+      }
+
+      sanitizedComponents.push(cleanHeader);
+    }
+
+    if (type === 'BODY') {
+      const text = String(component?.text || cleanBody || '').trim().slice(0, 1024);
+      if (text) sanitizedComponents.push({ type: 'BODY', text });
+    }
+
+    if (type === 'FOOTER') {
+      const text = String(component?.text || '').trim().slice(0, 60);
+      if (text) sanitizedComponents.push({ type: 'FOOTER', text });
+    }
+
+    if (type === 'BUTTONS') {
+      const buttons = sanitizeTemplateButtons(component?.buttons);
+      if (buttons.length) sanitizedComponents.push({ type: 'BUTTONS', buttons });
+    }
+  }
+
+  if (!sanitizedComponents.some((component) => component.type === 'BODY') && cleanBody) {
+    sanitizedComponents.push({ type: 'BODY', text: cleanBody.slice(0, 1024) });
+  }
+
+  return {
+    builderVersion: 1,
+    category,
+    templateType: String(source.templateType || 'default').trim().slice(0, 40),
+    variableType: String(source.variableType || 'number').trim().slice(0, 20),
+    validityPeriod: source.validityPeriod && typeof source.validityPeriod === 'object'
+      ? {
+          enabled: Boolean(source.validityPeriod.enabled),
+          minutes: Math.min(Math.max(Number(source.validityPeriod.minutes || 10), 1), 43200),
+        }
+      : { enabled: false, minutes: 10 },
+    variableSamples,
+    components: sanitizedComponents,
+  };
+}
+
+function validateTemplateSubmitMetaPayload(metaPayload) {
+  for (const component of metaPayload.components || []) {
+    if (
+      component.type === 'HEADER'
+      && TEMPLATE_MEDIA_HEADER_FORMATS.has(String(component.format || '').toUpperCase())
+      && !extractTemplateHeaderHandle(component)
+    ) {
+      return 'Media header requires a Meta uploaded sample media handle before submission';
+    }
+
+    if (component.type !== 'BUTTONS') continue;
+
+    for (const button of component.buttons || []) {
+      if (button.type === 'URL') {
+        if (!button.url) return 'URL button requires a destination URL';
+
+        let parsedUrl;
+        try {
+          parsedUrl = new URL(button.url);
+        } catch {
+          return 'URL button destination must be a valid HTTPS URL';
+        }
+
+        if (parsedUrl.protocol !== 'https:') {
+          return 'URL button destination must use HTTPS';
+        }
+
+        const host = parsedUrl.hostname.toLowerCase();
+        if (
+          host === 'localhost'
+          || host.endsWith('.local')
+          || host === '127.0.0.1'
+          || host === '0.0.0.0'
+          || host.startsWith('10.')
+          || host.startsWith('192.168.')
+          || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+        ) {
+          return 'URL button destination must be a public HTTPS URL';
+        }
+      }
+
+      if (button.type === 'PHONE_NUMBER') {
+        const digits = String(button.phone_number || '').replace(/\D/g, '');
+        if (digits.length < 8 || digits.length > 15) {
+          return 'Phone button requires a valid country-code phone number';
+        }
+      }
+
+      if (button.type === 'COPY_CODE' && !String(button.example || '').trim()) {
+        return 'Copy-code button requires an example code';
+      }
+    }
+  }
+
+  return '';
+}
+
+function buildTemplateSubmissionPayload({ name, language, category, metaPayload }) {
+  const variableSamples = cleanTemplateVariableSamples(metaPayload.variableSamples || metaPayload.variable_samples);
+  const components = (metaPayload.components || []).map((component) => {
+    if (component.type === 'BODY') {
+      const variables = templateVariableIndexes(component.text);
+      const bodyComponent = { ...component };
+
+      if (variables.length) {
+        bodyComponent.example = {
+          body_text: [variables.map((variable) => sampleTemplateVariableValue(variable, variableSamples))],
+        };
+      }
+
+      return bodyComponent;
+    }
+
+    if (component.type === 'HEADER' && component.format === 'TEXT') {
+      const variables = templateVariableIndexes(component.text);
+      const headerComponent = { ...component };
+
+      if (variables.length) {
+        headerComponent.example = {
+          header_text: [sampleTemplateVariableValue(variables[0], variableSamples)],
+        };
+      }
+
+      return headerComponent;
+    }
+
+    if (
+      component.type === 'HEADER'
+      && TEMPLATE_MEDIA_HEADER_FORMATS.has(String(component.format || '').toUpperCase())
+    ) {
+      const headerHandle = extractTemplateHeaderHandle(component);
+      const headerComponent = {
+        type: 'HEADER',
+        format: component.format,
+      };
+
+      if (headerHandle) {
+        headerComponent.example = {
+          header_handle: [headerHandle],
+        };
+      }
+
+      return headerComponent;
+    }
+
+    return component;
+  });
+
+  return {
+    name,
+    language,
+    category: category.toUpperCase(),
+    components,
+  };
+}
+
 app.get('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT id, name, language, body, active, category, meta_status, last_synced_at, created_at
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND active = true
-       AND ($2::boolean = false OR meta_status = 'approved')
+       AND lower(COALESCE(meta_status, '')) = 'approved'
      ORDER BY name, language`,
-    [req.user.tenantId, isProduction],
+    [req.user.tenantId],
   );
 
   res.json(result.rows);
@@ -6121,7 +6637,69 @@ app.get('/api/templates/manage', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/templates/media-upload', requireAuth, requireActiveSubscription, rateLimit({
+  bucketName: 'template-media-upload',
+  maxRequests: 30,
+  windowMs: 60 * 60 * 1000,
+}), handleMediaUpload, asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const file = req.file;
+  const headerFormat = cleanTemplateSampleHeaderFormat(req.body?.headerFormat, file?.mimetype);
+  const validationIssue = validateTemplateSampleMediaFile(file, headerFormat);
+
+  if (validationIssue) {
+    return res.status(400).json({ error: validationIssue });
+  }
+
+  let uploaded;
+
+  try {
+    uploaded = await uploadTemplateSampleMediaToMeta({
+      tenantId: req.user.tenantId,
+      file,
+      headerFormat,
+    });
+  } catch (error) {
+    console.error('Meta template sample media upload failed:', {
+      tenantId: req.user.tenantId,
+      headerFormat,
+      fileName: file?.originalname,
+      mimeType: file?.mimetype,
+      ...safeMetaError(error),
+    });
+
+    return res.status(error.statusCode || error.response?.status || 502).json({
+      error: error.response?.data?.error?.message || error.message || 'Meta template sample media upload failed',
+    });
+  }
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'template.sample_media_uploaded',
+    entityType: 'whatsapp_template',
+    entityId: null,
+    metadata: {
+      headerFormat,
+      fileName: uploaded.fileName,
+      mimeType: uploaded.mimeType,
+      source: uploaded.source,
+    },
+  });
+
+  res.status(201).json({
+    ok: true,
+    headerFormat: uploaded.headerFormat,
+    headerHandle: uploaded.handle,
+    fileName: uploaded.fileName,
+    mimeType: uploaded.mimeType,
+  });
+}));
+
+app.post('/api/templates', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -6129,13 +6707,19 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   const cleanName = String(req.body?.name || '').trim().toLowerCase();
   const cleanLanguage = String(req.body?.language || 'en').trim() || 'en';
   const cleanBody = String(req.body?.body || '').trim();
-  const active = isProduction ? false : (req.body?.active === undefined ? true : Boolean(req.body.active));
+  const cleanCategory = cleanTemplateCategory(req.body?.category);
+  const metaPayload = sanitizeTemplateMetaPayload(
+    req.body?.metaPayload || req.body?.meta_payload,
+    cleanBody,
+    cleanCategory,
+  );
+  const active = false;
 
   if (!cleanName || !cleanBody) {
     return res.status(400).json({ error: 'Template name and body required' });
   }
 
-  if (!/^[a-z0-9_]{2,80}$/.test(cleanName)) {
+  if (!/^[a-z0-9_]{2,512}$/.test(cleanName)) {
     return res.status(400).json({
       error: 'Template name should match Meta template name format: lowercase letters, numbers, underscore only',
     });
@@ -6145,25 +6729,23 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid language code. Example: en, en_US, hi' });
   }
 
-  if (cleanBody.length > 1000) {
-    return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
+  if (cleanBody.length > 1024) {
+    return res.status(400).json({ error: 'Template body maximum 1024 characters allowed' });
   }
 
-  await assertTenantLimit({
-  tenantId: req.user.tenantId,
-  resource: 'templates',
-  add: 1,
-});
+  await assertTemplateCreateLimitIfNeeded(req.user.tenantId, cleanName, cleanLanguage);
 
   const result = await query(
-    `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active, category, meta_status)
-     VALUES ($1, $2, $3, $4, $5, 'manual', 'manual')
+    `INSERT INTO whatsapp_templates (tenant_id, name, language, body, active, category, meta_status, meta_payload)
+     VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7)
      ON CONFLICT (tenant_id, name, language)
      DO UPDATE SET body = EXCLUDED.body,
                    active = EXCLUDED.active,
+                   category = EXCLUDED.category,
+                   meta_payload = EXCLUDED.meta_payload,
                    meta_status = COALESCE(NULLIF(whatsapp_templates.meta_status, ''), 'manual')
-     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
-    [req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
+     RETURNING id, name, language, body, active, category, meta_status, meta_payload, last_synced_at, created_at`,
+    [req.user.tenantId, cleanName, cleanLanguage, cleanBody, active, cleanCategory, metaPayload],
   );
 
   await recordAudit({
@@ -6175,6 +6757,7 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
     metadata: {
       name: cleanName,
       language: cleanLanguage,
+      category: cleanCategory,
       active,
     },
   });
@@ -6182,7 +6765,154 @@ app.post('/api/templates', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
-app.post('/api/templates/sync-meta', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/templates/submit-meta', requireAuth, requireActiveSubscription, rateLimit({
+  bucketName: 'template-submit-meta',
+  maxRequests: 30,
+  windowMs: 60 * 60 * 1000,
+}), asyncHandler(async (req, res) => {
+  if (!canMonitor(req.user)) {
+    return res.status(403).json({ error: 'Manager/Admin only' });
+  }
+
+  const cleanName = String(req.body?.name || '').trim().toLowerCase();
+  const cleanLanguage = String(req.body?.language || 'en').trim() || 'en';
+  const cleanBody = String(req.body?.body || '').trim();
+  const cleanCategory = cleanTemplateCategory(req.body?.category);
+  const metaPayload = sanitizeTemplateMetaPayload(
+    req.body?.metaPayload || req.body?.meta_payload,
+    cleanBody,
+    cleanCategory,
+  );
+
+  if (!cleanName || !cleanBody) {
+    return res.status(400).json({ error: 'Template name and body required' });
+  }
+
+  if (!/^[a-z0-9_]{2,512}$/.test(cleanName)) {
+    return res.status(400).json({
+      error: 'Template name should match Meta template name format: lowercase letters, numbers, underscore only',
+    });
+  }
+
+  if (!/^[a-z]{2,3}(?:_[a-z]{2})?$/i.test(cleanLanguage)) {
+    return res.status(400).json({ error: 'Invalid language code. Example: en, en_US, hi' });
+  }
+
+  if (cleanBody.length > 1024) {
+    return res.status(400).json({ error: 'Template body maximum 1024 characters allowed' });
+  }
+
+  if (!metaPayload.components.some((component) => component.type === 'BODY')) {
+    return res.status(400).json({ error: 'Template body component is required' });
+  }
+
+  const templatePayloadIssue = validateTemplateSubmitMetaPayload(metaPayload);
+  if (templatePayloadIssue) {
+    return res.status(400).json({ error: templatePayloadIssue });
+  }
+
+  const config = await getWhatsAppTemplateSyncConfig(req.user.tenantId);
+
+  if (!config) {
+    return res.status(400).json({
+      error: 'Meta template submission is not configured. Connect WhatsApp through Embedded Signup or set WHATSAPP_WABA_ID + WHATSAPP_ACCESS_TOKEN for local/demo.',
+    });
+  }
+
+  const submitPayload = buildTemplateSubmissionPayload({
+    name: cleanName,
+    language: cleanLanguage,
+    category: cleanCategory,
+    metaPayload,
+  });
+
+  await assertTemplateCreateLimitIfNeeded(req.user.tenantId, cleanName, cleanLanguage);
+
+  let metaResponse;
+
+  try {
+    metaResponse = await axios.post(
+      `https://graph.facebook.com/${config.apiVersion}/${config.wabaId}/message_templates`,
+      submitPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 15000,
+      },
+    );
+  } catch (error) {
+    console.error('Meta template submission failed:', {
+      tenantId: req.user.tenantId,
+      templateName: cleanName,
+      ...safeMetaError(error),
+    });
+
+    return res.status(error.response?.status || 502).json({
+      error: error.response?.data?.error?.message || 'Meta template submission failed',
+    });
+  }
+
+  const metaStatus = normalizeMetaTemplateStatus(metaResponse.data?.status || 'pending');
+
+  const result = await query(
+    `INSERT INTO whatsapp_templates
+       (tenant_id, name, language, body, active, category, meta_status, last_synced_at, meta_payload)
+     VALUES ($1, $2, $3, $4, false, $5, $6, now(), $7)
+     ON CONFLICT (tenant_id, name, language)
+     DO UPDATE SET body = EXCLUDED.body,
+                   active = false,
+                   category = EXCLUDED.category,
+                   meta_status = EXCLUDED.meta_status,
+                   last_synced_at = now(),
+                   meta_payload = EXCLUDED.meta_payload
+     RETURNING id, name, language, body, active, category, meta_status, meta_payload, last_synced_at, created_at`,
+    [
+      req.user.tenantId,
+      cleanName,
+      cleanLanguage,
+      cleanBody,
+      cleanCategory,
+      metaStatus,
+      {
+        ...metaPayload,
+        metaSubmission: {
+          id: metaResponse.data?.id || null,
+          status: metaStatus,
+          submittedAt: new Date().toISOString(),
+          source: config.source,
+        },
+      },
+    ],
+  );
+
+  await recordAudit({
+    tenantId: req.user.tenantId,
+    actorUserId: req.user.id,
+    action: 'template.submitted_to_meta',
+    entityType: 'whatsapp_template',
+    entityId: result.rows[0].id,
+    metadata: {
+      name: cleanName,
+      language: cleanLanguage,
+      category: cleanCategory,
+      metaStatus,
+      source: config.source,
+    },
+  });
+
+  res.status(201).json({
+    ok: true,
+    template: result.rows[0],
+    meta: {
+      id: metaResponse.data?.id || null,
+      status: metaStatus,
+    },
+  });
+}));
+
+app.post('/api/templates/sync-meta', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -6270,13 +7000,13 @@ app.post('/api/templates/sync-meta', requireAuth, asyncHandler(async (req, res) 
   });
 }));
 
-app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
+app.patch('/api/templates/:id', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
 
   const existingResult = await query(
-    `SELECT id, name, language, body, active, meta_status
+    `SELECT id, name, language, body, active, category, meta_status, meta_payload
      FROM whatsapp_templates
      WHERE id = $1
        AND tenant_id = $2
@@ -6302,14 +7032,41 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
     ? existing.body
     : String(req.body.body || '').trim();
 
+  const cleanCategory = req.body?.category === undefined
+    ? cleanTemplateCategory(existing.category)
+    : cleanTemplateCategory(req.body.category);
+
+  const metaPayload = sanitizeTemplateMetaPayload(
+    req.body?.metaPayload || req.body?.meta_payload || existing.meta_payload,
+    cleanBody,
+    cleanCategory,
+  );
+
   const requestedActive = req.body?.active === undefined ? existing.active : Boolean(req.body.active);
-  const active = isProduction && existing.meta_status !== 'approved' ? false : requestedActive;
+  const existingApproved = String(existing.meta_status || '').toLowerCase() === 'approved';
+  const contentChanged = cleanName !== existing.name
+    || cleanLanguage !== existing.language
+    || cleanBody !== existing.body
+    || cleanCategory !== cleanTemplateCategory(existing.category)
+    || JSON.stringify(metaPayload || {}) !== JSON.stringify(sanitizeTemplateMetaPayload(
+      existing.meta_payload,
+      existing.body,
+      cleanTemplateCategory(existing.category),
+    ) || {});
+
+  if (existingApproved && contentChanged) {
+    return res.status(400).json({
+      error: 'Approved Meta templates cannot be edited locally. Edit the template in Meta/WhatsApp Manager or create and submit a new draft.',
+    });
+  }
+
+  const active = existingApproved ? requestedActive : false;
 
   if (!cleanName || !cleanBody) {
     return res.status(400).json({ error: 'Template name and body required' });
   }
 
-  if (!/^[a-z0-9_]{2,80}$/.test(cleanName)) {
+  if (!/^[a-z0-9_]{2,512}$/.test(cleanName)) {
     return res.status(400).json({
       error: 'Template name should match Meta template name format: lowercase letters, numbers, underscore only',
     });
@@ -6319,8 +7076,8 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid language code. Example: en, en_US, hi' });
   }
 
-  if (cleanBody.length > 1000) {
-    return res.status(400).json({ error: 'Template body maximum 1000 characters allowed' });
+  if (cleanBody.length > 1024) {
+    return res.status(400).json({ error: 'Template body maximum 1024 characters allowed' });
   }
 
     const duplicateTemplate = await query(
@@ -6343,11 +7100,13 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
      SET name = $3,
          language = $4,
          body = $5,
-         active = $6
+         active = $6,
+         category = $7,
+         meta_payload = $8
      WHERE id = $1
        AND tenant_id = $2
-     RETURNING id, name, language, body, active, category, meta_status, last_synced_at, created_at`,
-    [req.params.id, req.user.tenantId, cleanName, cleanLanguage, cleanBody, active],
+     RETURNING id, name, language, body, active, category, meta_status, meta_payload, last_synced_at, created_at`,
+    [req.params.id, req.user.tenantId, cleanName, cleanLanguage, cleanBody, active, cleanCategory, metaPayload],
   );
 
   await recordAudit({
@@ -6359,6 +7118,7 @@ app.patch('/api/templates/:id', requireAuth, asyncHandler(async (req, res) => {
     metadata: {
       name: cleanName,
       language: cleanLanguage,
+      category: cleanCategory,
       active,
     },
   });
@@ -6443,7 +7203,7 @@ app.get('/api/products', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/products', requireAuth, rateLimit({
+app.post('/api/products', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'product-create',
   maxRequests: 120,
   windowMs: 60 * 60 * 1000,
@@ -6466,7 +7226,7 @@ app.post('/api/products', requireAuth, rateLimit({
   res.status(201).json(result.rows[0]);
 }));
 
-app.patch('/api/products/:id', requireAuth, rateLimit({
+app.patch('/api/products/:id', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'product-update',
   maxRequests: 180,
   windowMs: 60 * 60 * 1000,
@@ -6502,7 +7262,7 @@ app.patch('/api/products/:id', requireAuth, rateLimit({
   res.json(result.rows[0]);
 }));
 
-app.post('/api/products/import', requireAuth, rateLimit({
+app.post('/api/products/import', requireAuth, requireActiveSubscription, rateLimit({
   bucketName: 'product-import',
   maxRequests: 10,
   windowMs: 60 * 60 * 1000,
@@ -6560,7 +7320,7 @@ app.post('/api/products/import', requireAuth, rateLimit({
   res.json({ inserted, updated, skipped });
 }));
 
-app.delete('/api/products/:id', requireAuth, asyncHandler(async (req, res) => {
+app.delete('/api/products/:id', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) return res.status(403).json({ error: 'Manager/Admin only' });
   const linked = await query(
     `SELECT
@@ -6641,6 +7401,7 @@ function registerSalesRoutes(app, ctx) {
     isSuperAdmin,
     canMonitor,
     requireSuperAdmin,
+    requireActiveSubscription,
     normalizeTenantSlug,
     publicTenant,
     countActiveTenantAdmins,
@@ -6855,7 +7616,7 @@ app.get('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/quotations', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const contactId = String(req.body?.contact_id || '').trim();
 
   if (!contactId) {
@@ -6907,7 +7668,7 @@ app.post('/api/quotations', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json(quote);
 }));
 
-app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/quotations/:id/send-manager-approval', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -6934,12 +7695,13 @@ app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(
   }
 
   const templateResult = await query(
-    `SELECT id, name, language, active
+    `SELECT id, name, language, active, meta_status
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND name = $2
        AND language = $3
        AND active = true
+       AND lower(COALESCE(meta_status, '')) = 'approved'
      LIMIT 1`,
     [req.user.tenantId, templateName, templateLanguage],
   );
@@ -6948,7 +7710,7 @@ app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(
 
   if (!templateRecord) {
     return res.status(400).json({
-      error: 'Manager approval template is not active/found in Templates. Add the approved Meta template name and language first.',
+      error: 'Manager approval template is not Meta-approved for this company. Sync approved templates from Meta before sending.',
     });
   }
 
@@ -7115,7 +7877,7 @@ app.post('/api/quotations/:id/send-manager-approval', requireAuth, asyncHandler(
   });
 }));
 
-app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/quotations/:id/send-to-customer', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   if (!canMonitor(req.user)) {
     return res.status(403).json({ error: 'Manager/Admin only' });
   }
@@ -7170,12 +7932,13 @@ app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async
   }
 
   const templateResult = await query(
-    `SELECT id, name, language, active
+    `SELECT id, name, language, active, meta_status
      FROM whatsapp_templates
      WHERE tenant_id = $1
        AND name = $2
        AND language = $3
        AND active = true
+       AND lower(COALESCE(meta_status, '')) = 'approved'
      LIMIT 1`,
     [req.user.tenantId, templateName, templateLanguage],
   );
@@ -7184,7 +7947,7 @@ app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async
 
   if (!templateRecord) {
     return res.status(400).json({
-      error: 'Customer quote template is not active/found in Templates. Add the approved Meta template name and language first.',
+      error: 'Customer quote template is not Meta-approved for this company. Sync approved templates from Meta before sending.',
     });
   }
 
@@ -7303,7 +8066,7 @@ app.post('/api/quotations/:id/send-to-customer', requireAuth, asyncHandler(async
   });
 }));
 
-app.patch('/api/quotations/:id', requireAuth, asyncHandler(async (req, res) => {
+app.patch('/api/quotations/:id', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const { status, valid_until, notes } = req.body;
 
   if (status !== undefined) {
@@ -7365,7 +8128,7 @@ app.get('/api/quotations/:id/print-text', requireAuth, asyncHandler(async (req, 
   res.type('text/plain').send(lines.join('\n'));
 }));
 
-app.post('/api/quotations/:id/convert-order', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/quotations/:id/convert-order', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const quoteResult = await query(
     `SELECT *
      FROM quotations
@@ -7541,7 +8304,7 @@ app.get('/api/orders', requireAuth, asyncHandler(async (req, res) => {
   res.json(result.rows);
 }));
 
-app.post('/api/orders', requireAuth, asyncHandler(async (req, res) => {
+app.post('/api/orders', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const contactId = String(req.body?.contact_id || '').trim();
 
   if (!contactId) {
@@ -7604,7 +8367,7 @@ app.post('/api/orders', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json(order);
 }));
 
-app.patch('/api/orders/:id', requireAuth, asyncHandler(async (req, res) => {
+app.patch('/api/orders/:id', requireAuth, requireActiveSubscription, asyncHandler(async (req, res) => {
   const { status, payment_status, dispatch_status, notes } = req.body;
 
   if (status !== undefined) {
@@ -7699,6 +8462,7 @@ function registerCampaignRoutes(app, ctx) {
     asyncHandler,
     rateLimit,
     requireAuth,
+    requireActiveSubscription,
     canMonitor,
     isProduction,
     createOutboundMessageRecord,
@@ -8129,7 +8893,7 @@ function registerCampaignRoutes(app, ctx) {
     res.json(result.rows);
   }));
 
-  app.post('/api/campaigns', requireAuth, rateLimit({
+  app.post('/api/campaigns', requireAuth, requireActiveSubscription, rateLimit({
     bucketName: 'campaign-create',
     maxRequests: 20,
     windowMs: 60 * 60 * 1000,

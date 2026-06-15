@@ -417,7 +417,12 @@ function createResponse() {
   };
 }
 
-function createRouteHarness({ axios, query }) {
+function createRouteHarness({
+  axios,
+  query,
+  routePath = '/api/whatsapp/embedded-signup/complete',
+  isProduction = false,
+}) {
   const routes = [];
   const app = new Proxy({}, {
     get(target, method) {
@@ -429,9 +434,11 @@ function createRouteHarness({ axios, query }) {
 
   registerCoreRoutes(app, {
     axios,
+    crypto: require('node:crypto'),
     query,
     asyncHandler,
     rateLimit: () => (req, res, next) => next(),
+    isProduction,
     requireAuth: (req, res, next) => {
       req.user = {
         id: 'user-1',
@@ -447,6 +454,7 @@ function createRouteHarness({ axios, query }) {
     },
     requireActiveSubscription: (req, res, next) => next(),
     maskValue: (value = '') => (value ? `masked:${String(value).slice(-4)}` : ''),
+    maskEmail: (value = '') => String(value).replace(/^(.{2}).*(@.*)$/, '$1***$2'),
     hasRealValue: (value) => Boolean(value && !String(value).startsWith('your-')),
     encryptSecret: (value) => ({
       encrypted: `encrypted:${value}`,
@@ -457,14 +465,18 @@ function createRouteHarness({ axios, query }) {
       status: error?.response?.status || null,
       message: error?.message || 'test error',
     }),
+    safeErrorLog: (error) => ({
+      message: error?.message || 'test error',
+      code: error?.code || null,
+    }),
     recordAudit: async () => {},
   });
 
   const route = routes.find((item) => (
-    item.method === 'post' && item.path === '/api/whatsapp/embedded-signup/complete'
+    item.method === 'post' && item.path === routePath
   ));
 
-  assert.ok(route, 'embedded signup completion route should be registered');
+  assert.ok(route, `${routePath} route should be registered`);
 
   async function run(body = {}) {
     const req = {
@@ -517,6 +529,100 @@ function withMetaEnv(fn) {
       }
     });
 }
+
+function withEnv(patch, fn) {
+  const previous = {};
+
+  for (const key of Object.keys(patch)) {
+    previous[key] = process.env[key];
+    if (patch[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = patch[key];
+    }
+  }
+
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    });
+}
+
+test('production forgot-password emails reset link without returning or logging it', async () => {
+  await withEnv({
+    PASSWORD_RESET_EMAIL_PROVIDER: 'resend',
+    RESEND_API_KEY: 'resend-test-api-key',
+    PASSWORD_RESET_FROM_EMAIL: 'security@example.com',
+    PASSWORD_RESET_REPLY_TO: 'support@example.com',
+    FRONTEND_URL: 'https://app.example.com',
+  }, async () => {
+    const emailPosts = [];
+    const queryCalls = [];
+
+    const axios = {
+      async post(url, payload, config) {
+        emailPosts.push({ url, payload, config });
+        return { data: { id: 'email-1' } };
+      },
+    };
+
+    async function query(sql, params) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('FROM users') && sql.includes('JOIN tenants')) {
+        return {
+          rows: [{
+            id: 'user-1',
+            tenant_id: 'tenant-1',
+            email: 'admin@example.com',
+            active: true,
+            tenant_status: 'active',
+          }],
+        };
+      }
+
+      if (sql.includes('INSERT INTO password_reset_tokens')) {
+        return { rows: [] };
+      }
+
+      return { rows: [] };
+    }
+
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args);
+
+    let res;
+    try {
+      const { run } = createRouteHarness({
+        routePath: '/api/auth/forgot-password',
+        axios,
+        query,
+        isProduction: true,
+      });
+
+      res = await run({ email: 'Admin@Example.com' });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.resetUrl, undefined);
+    assert.equal(emailPosts.length, 1);
+    assert.equal(emailPosts[0].url, 'https://api.resend.com/emails');
+    assert.match(emailPosts[0].payload.text, /https:\/\/app\.example\.com\/\?resetToken=/);
+    assert.match(emailPosts[0].config.headers.Authorization, /^Bearer resend-test-api-key$/);
+    assert.ok(queryCalls.some((call) => call.sql.includes('INSERT INTO password_reset_tokens')));
+    assert.doesNotMatch(JSON.stringify(logs), /resetToken|app\.example\.com/);
+  });
+});
 
 test('embedded signup completion saves a verified WABA phone mapping', async () => {
   await withMetaEnv(async () => {

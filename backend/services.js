@@ -235,7 +235,16 @@ function maskId(value) {
 }
 
 function hasRealValue(value) {
-  return Boolean(value && !value.startsWith('your-') && !value.startsWith('change-'));
+  const text = String(value || '').trim();
+  return Boolean(
+    text
+    && !text.startsWith('your-')
+    && !text.startsWith('your_')
+    && !text.startsWith('change-')
+    && !text.startsWith('change_')
+    && !text.startsWith('replace-')
+    && !text.startsWith('replace_')
+  );
 }
 
 function toFiniteNumber(value, fallback = 0) {

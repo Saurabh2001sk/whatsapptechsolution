@@ -72,6 +72,7 @@ const ALLOWED_OUTBOUND_MEDIA_MIME = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/gif',
   'video/mp4',
   'video/3gpp',
   'audio/aac',
@@ -122,6 +123,7 @@ function isAllowedOutboundMediaContent(file = {}) {
       && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
       && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
   }
+  if (mimeType === 'image/gif') return hasSignature(buffer, [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]]);
   if (mimeType === 'application/pdf') return buffer.subarray(0, 4).toString('ascii') === '%PDF';
   if (mimeType === 'text/plain') return isLikelyPlainText(buffer);
   if (mimeType === 'video/mp4' || mimeType === 'audio/mp4') return buffer.subarray(4, 8).toString('ascii') === 'ftyp';
@@ -166,6 +168,8 @@ if (isProduction) {
     rawJwtSecret.length < 32 ||
     rawJwtSecret.startsWith('your-') ||
     rawJwtSecret.startsWith('change-') ||
+    rawJwtSecret.startsWith('replace-') ||
+    rawJwtSecret.startsWith('replace_') ||
     rawJwtSecret === 'dev-only-local-secret';
 
   if (jwtLooksUnsafe) {
@@ -634,6 +638,26 @@ function getFatalProductionConfigErrors() {
 
   if (!memoryRateLimitAllowed && !hasRealValue(process.env.RATE_LIMIT_REDIS_URL || process.env.REDIS_URL)) {
     errors.push('RATE_LIMIT_REDIS_URL or REDIS_URL is required for production Redis-backed rate limiting.');
+  }
+
+  const passwordResetEmailDisabled = String(process.env.PASSWORD_RESET_EMAIL_DISABLED || '')
+    .trim()
+    .toLowerCase() === 'true';
+
+  if (!passwordResetEmailDisabled) {
+    const passwordResetProvider = String(process.env.PASSWORD_RESET_EMAIL_PROVIDER || '').trim().toLowerCase();
+
+    if (passwordResetProvider !== 'resend') {
+      errors.push('PASSWORD_RESET_EMAIL_PROVIDER=resend is required for production password reset delivery.');
+    }
+
+    if (!hasRealValue(process.env.RESEND_API_KEY)) {
+      errors.push('RESEND_API_KEY is required for production password reset delivery.');
+    }
+
+    if (!hasRealValue(process.env.PASSWORD_RESET_FROM_EMAIL)) {
+      errors.push('PASSWORD_RESET_FROM_EMAIL is required for production password reset delivery.');
+    }
   }
 
   return errors;
@@ -1593,19 +1617,42 @@ async function validateTemplateRetryAllowed(tenantId, templateName, language = '
        AND name = $2
        AND language = $3
        AND active = true
-       AND ($4::boolean = false OR meta_status = 'approved')
+       AND lower(COALESCE(meta_status, '')) = 'approved'
      LIMIT 1`,
-    [tenantId, cleanTemplateName, cleanLanguage, isProduction],
+    [tenantId, cleanTemplateName, cleanLanguage],
   );
 
   if (!result.rows[0]) {
-    const error = new Error(
-      isProduction
-        ? 'Template is not approved by Meta for this company. Sync approved templates from Meta before retrying.'
-        : 'Template is not active for this company. Sync/add the approved Meta template before retrying.',
-    );
+    const error = new Error('Template is not approved by Meta for this company. Sync approved templates from Meta before retrying.');
     error.statusCode = 400;
     throw error;
+  }
+
+  return result.rows[0];
+}
+
+async function assertApprovedTemplateForSend(tenantId, templateName, language = 'en') {
+  const cleanTemplateName = String(templateName || '').trim().toLowerCase();
+  const cleanLanguage = String(language || 'en').trim() || 'en';
+
+  if (!tenantId || !cleanTemplateName) {
+    throw new Error('Approved Meta template is required before sending.');
+  }
+
+  const result = await query(
+    `SELECT id, name, language
+     FROM whatsapp_templates
+     WHERE tenant_id = $1
+       AND name = $2
+       AND language = $3
+       AND active = true
+       AND lower(COALESCE(meta_status, '')) = 'approved'
+     LIMIT 1`,
+    [tenantId, cleanTemplateName, cleanLanguage],
+  );
+
+  if (!result.rows[0]) {
+    throw new Error('Template is not approved by Meta for this company. Sync approved templates from Meta before sending.');
   }
 
   return result.rows[0];
@@ -2890,6 +2937,8 @@ async function sendWhatsAppInteractiveList(contact, menuPayload, tenantId) {
 }
 
 async function sendWhatsAppTemplate(contact, templateName, language = 'en', tenantId) {
+  await assertApprovedTemplateForSend(tenantId, templateName, language);
+
   const config = await getWhatsAppSendConfig(tenantId);
 
   if (!config) {
@@ -2915,6 +2964,8 @@ async function sendWhatsAppTemplate(contact, templateName, language = 'en', tena
 }
 
 async function sendWhatsAppTemplateToNumber({ tenantId, to, templateName, language = 'en', bodyParams = [] }) {
+  await assertApprovedTemplateForSend(tenantId, templateName, language);
+
   const config = await getWhatsAppSendConfig(tenantId);
 
   if (!config) {
@@ -3043,15 +3094,15 @@ async function sendOrderAcknowledgementToCustomer({ tenantId, userId, order, quo
        AND name = $2
        AND language = $3
        AND active = true
-       AND ($4::boolean = false OR meta_status = 'approved')
+       AND lower(COALESCE(meta_status, '')) = 'approved'
      LIMIT 1`,
-    [tenantId, templateName, templateLanguage, isProduction],
+    [tenantId, templateName, templateLanguage],
   );
 
   if (!templateResult.rows[0]) {
     return {
       sent: false,
-      reason: isProduction ? 'template_not_meta_approved' : 'template_not_active',
+      reason: 'template_not_meta_approved',
     };
   }
 

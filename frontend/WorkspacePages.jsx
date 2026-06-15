@@ -497,315 +497,235 @@ export function DashboardPage({
   canManage,
   onOpenPage,
 }) {
-  
-    const healthStatusLabel = whatsappHealth?.setupComplete
-    ? 'Healthy'
-    : whatsappHealth?.connected
-      ? 'Needs Review'
-      : 'Not Connected'
+  const totalConversations = dashboard?.total_conversations || conversations.length
+  const openWindows = dashboard?.open_windows || 0
+  const draftEnquiries = drafts.filter((item) => item.status === 'draft').length
+  const activeOrders = orders.filter((item) => item.status !== 'closed').length
+  const pendingDispatch = orders.filter((item) => item.dispatch_status !== 'dispatched').length
+  const openQuotes = quotations.filter((item) => !['converted', 'lost'].includes(item.status)).length
+  const approvedTemplates = templates.filter((template) => String(template.meta_status || '').toLowerCase() === 'approved').length
 
-  const healthStatusClass = whatsappHealth?.setupComplete
-    ? 'ok'
+  const outboundStatusCount = (status) => Number(
+    (whatsappHealth?.activity?.outboundMessages24h || []).find((item) => item.status === status)?.count || 0
+  )
+
+  const webhookStatusCount = (status) => Number(
+    (whatsappHealth?.activity?.webhookEvents24h || []).find((item) => item.status === status)?.count || 0
+  )
+
+  const sent24h = outboundStatusCount('sent')
+  const failed24h = outboundStatusCount('failed') + webhookStatusCount('failed')
+  const failedQueue = outboundEvents.length + webhookEvents.length
+  const dailyLimit = tenantUsage?.limits?.outboundMessagesPerDay
+  const outboundToday = tenantUsage?.usage?.outboundMessagesToday ?? sent24h
+  const dailyUsageText = dailyLimit && dailyLimit !== -1
+    ? `${outboundToday} / ${dailyLimit}`
+    : `${outboundToday} / WABA`
+
+  const healthTone = whatsappHealth?.setupComplete
+    ? 'good'
     : whatsappHealth?.connected
       ? 'warn'
       : 'danger'
 
-  const tokenModeLabel = whatsappHealth?.tokenMode === 'tenant_embedded_signup'
-    ? 'Tenant Embedded Signup'
-    : whatsappHealth?.tokenMode === 'env_fallback'
-      ? 'Environment Fallback'
-      : 'Not Configured'
+  const healthLabel = whatsappHealth?.setupComplete
+    ? 'WhatsApp Ready'
+    : whatsappHealth?.connected
+      ? 'Needs Review'
+      : 'Not Connected'
 
-  const formatHealthTime = (value) => (
-    value ? new Date(value).toLocaleString() : '-'
-  )
-  
-  const cards = [
-    { label: 'Conversations', value: dashboard?.total_conversations || conversations.length, action: 'inbox' },
-    { label: 'Open Windows', value: dashboard?.open_windows || 0, action: 'inbox' },
-    { label: 'Draft Enquiries', value: drafts.filter((item) => item.status === 'draft').length, action: 'new' },
-    { label: 'Products', value: products.length, action: 'inventory' },
-    { label: 'Low Stock', value: lowStockProducts.length, action: 'inventory' },
-    { label: 'Open Quotes', value: quotations.filter((item) => !['converted', 'lost'].includes(item.status)).length, action: 'quotes' },
-    { label: 'Active Orders', value: orders.filter((item) => item.status !== 'closed').length, action: 'activeOrders' },
-    { label: 'Pending Dispatch', value: orders.filter((item) => item.dispatch_status !== 'dispatched').length, action: 'orders' },
+  const connectionLabel = onboarding?.connected || whatsappHealth?.connected
+    ? 'Meta connected'
+    : 'Setup pending'
+
+  const metricCards = [
+    { label: 'Conversations', value: totalConversations, helper: 'Total active chats', action: 'inbox' },
+    { label: 'Open Windows', value: openWindows, helper: 'Can reply freely', action: 'inbox' },
+    { label: 'Draft Enquiries', value: draftEnquiries, helper: 'Need sales review', action: 'new' },
+    { label: 'Products', value: products.length, helper: 'Inventory records', action: 'inventory' },
+    { label: 'Open Quotes', value: openQuotes, helper: 'Pending customer action', action: 'quotes' },
+    { label: 'Active Orders', value: activeOrders, helper: 'Currently running', action: 'activeOrders' },
   ]
 
-  const replyWindowExpired = conversations.filter((item) => !item.reply_window_open).length
-  const optedOutContacts = conversations.filter((item) => item.opted_out).length
-  const outboundStatusCount = (status) => Number(
-    (whatsappHealth?.activity?.outboundMessages24h || []).find((item) => item.status === status)?.count || 0
-  )
-  const webhookStatusCount = (status) => Number(
-    (whatsappHealth?.activity?.webhookEvents24h || []).find((item) => item.status === status)?.count || 0
-  )
-  const sent24h = outboundStatusCount('sent')
-  const failed24h = outboundStatusCount('failed')
-  const webhookFailed24h = webhookStatusCount('failed')
-  const dailyLimit = tenantUsage?.limits?.outboundMessagesPerDay
-  const outboundToday = tenantUsage?.usage?.outboundMessagesToday ?? sent24h
-  const approvedTemplates = templates.filter((template) => String(template.meta_status || '').toLowerCase() === 'approved').length
-  const sendableTemplates = templates.filter((template) => template.active && String(template.meta_status || '').toLowerCase() === 'approved').length
-  const dailyLimitText = dailyLimit && dailyLimit !== -1
-    ? `${outboundToday} / ${dailyLimit}`
-    : `${outboundToday} / WABA limit`
-
-  const messagingMetrics = [
-    { label: 'Sent 24h', value: sent24h, tone: 'ok', action: 'outbound' },
-    { label: 'Failed 24h', value: failed24h + webhookFailed24h, tone: failed24h || webhookFailed24h ? 'danger' : 'ok', action: failed24h ? 'outbound' : 'webhooks' },
-    { label: 'Daily usage', value: dailyLimitText, tone: 'neutral', action: 'billing' },
-    { label: 'Approved templates', value: approvedTemplates, tone: approvedTemplates ? 'ok' : 'warn', action: 'templates' },
-    { label: 'Sendable templates', value: sendableTemplates, tone: sendableTemplates ? 'ok' : 'warn', action: 'templates' },
-    { label: 'Failed queue', value: outboundEvents.length + webhookEvents.length, tone: outboundEvents.length || webhookEvents.length ? 'danger' : 'ok', action: outboundEvents.length ? 'outbound' : 'webhooks' },
+  const operationCards = [
+    { label: 'Sent 24h', value: sent24h, tone: 'good', action: 'outbound' },
+    { label: 'Failed 24h', value: failed24h, tone: failed24h ? 'danger' : 'good', action: failed24h ? 'outbound' : 'webhooks' },
+    { label: 'Daily Usage', value: dailyUsageText, tone: 'neutral', action: 'billing' },
+    { label: 'Queue Issues', value: failedQueue, tone: failedQueue ? 'danger' : 'good', action: failedQueue ? 'outbound' : 'webhooks' },
   ]
 
-  const metaReadinessItems = [
-    ['Embedded Signup', whatsappHealth?.tokenMode === 'tenant_embedded_signup' ? 'Connected' : 'Needs setup', whatsappHealth?.tokenMode === 'tenant_embedded_signup' ? 'ok' : 'warn'],
-    ['Webhook Verify Token', whatsappHealth?.verifyTokenSet ? 'Ready' : 'Missing', whatsappHealth?.verifyTokenSet ? 'ok' : 'warn'],
-    ['App Secret', whatsappHealth?.appSecretSet || !whatsappHealth?.signatureRequired ? 'Ready' : 'Missing', whatsappHealth?.appSecretSet || !whatsappHealth?.signatureRequired ? 'ok' : 'warn'],
-    ['Phone Number ID', whatsappHealth?.account?.phoneNumberId ? 'Mapped' : 'Not mapped', whatsappHealth?.account?.phoneNumberId ? 'ok' : 'warn'],
-    ['Template Approval', sendableTemplates ? 'Ready' : 'Sync needed', sendableTemplates ? 'ok' : 'warn'],
-    ['Billing & Limits', tenantUsage ? 'Visible' : 'Review', tenantUsage ? 'ok' : 'warn'],
-  ]
-
-  const policyReadiness = [
+  const setupSteps = [
     {
-      icon: MessageCircle,
-      title: 'Cloud API Connection',
-      status: whatsappHealth?.connected ? 'Ready' : 'Needs setup',
-      tone: whatsappHealth?.connected ? 'ok' : 'warn',
-      text: whatsappHealth?.connected
-        ? 'Official WhatsApp account is connected to this tenant.'
-        : 'Connect Meta Embedded Signup before production messaging.',
+      title: 'WhatsApp Connection',
+      text: connectionLabel,
+      done: onboarding?.connected || whatsappHealth?.connected,
       action: isAdmin && !whatsappHealth?.connected ? 'connectWhatsApp' : 'settings',
     },
     {
-      icon: Clock3,
-      title: 'Service Window Guard',
-      status: `${replyWindowExpired} template required`,
-      tone: replyWindowExpired ? 'warn' : 'ok',
-      text: 'Free-form replies are available only inside the 24-hour customer service window.',
-      action: 'inbox',
+      title: 'Approved Templates',
+      text: `${approvedTemplates} approved`,
+      done: approvedTemplates > 0,
+      action: 'templates',
     },
     {
-      icon: Shield,
-      title: 'Opt-out Protection',
-      status: `${optedOutContacts} locked`,
-      tone: optedOutContacts ? 'warn' : 'ok',
-      text: 'Customers marked as opted out remain protected from outbound sending.',
-      action: 'optOuts',
+      title: 'Inventory Check',
+      text: lowStockProducts.length ? `${lowStockProducts.length} low stock` : 'Stock healthy',
+      done: lowStockProducts.length === 0,
+      action: 'inventory',
     },
     {
-      icon: Activity,
-      title: 'Scale Readiness',
-      status: whatsappHealth?.setupComplete ? 'Monitor quality' : 'Review setup',
-      tone: whatsappHealth?.setupComplete ? 'ok' : 'warn',
-      text: 'Before high-volume campaigns, review templates, webhooks, billing, and phone quality in Meta.',
-      action: 'settings',
+      title: 'Dispatch Attention',
+      text: pendingDispatch ? `${pendingDispatch} pending` : 'No pending dispatch',
+      done: pendingDispatch === 0,
+      action: 'orders',
     },
   ]
+
+  const recentChats = conversations.slice(0, 4)
+  const lowStockPreview = lowStockProducts.slice(0, 4)
+
   return (
-    <section className="workspace-page">
-      <div className="workspace-head">
-        <div>
-          <h2>Control Dashboard</h2>
-          <span>Sales, inventory, quotations, and WhatsApp activity in one view.</span>
-        </div>
-      </div>
-      <section className="dashboard-launchpad">
-        <div className="launchpad-copy">
-          <span className="launchpad-kicker">Workspace setup</span>
-          <h3>{onboarding?.connected ? 'Your WhatsApp operations workspace is connected.' : 'Complete your business workspace setup.'}</h3>
-          <p>
-            {onboarding?.connected
-              ? 'Manage conversations, templates and operations controls from the secure dashboard.'
-              : 'Connect Meta WhatsApp, configure templates and prepare your team before customer messaging.'}
-          </p>
-        </div>
-        <div className="launchpad-actions">
-          {isAdmin && (
-            <button type="button" className={onboarding?.connected ? 'complete' : 'primary'} onClick={() => onOpenPage(onboarding?.connected ? 'settings' : 'connectWhatsApp')}>
-              <MessageCircle size={17} />
-              {onboarding?.connected ? 'Meta Connected' : 'Connect Meta WhatsApp'}
+    <section className="workspace-page clean-dashboard-page">
+      <section className="clean-dashboard-hero">
+        <div className="clean-dashboard-copy">
+          <span className="clean-eyebrow">Workspace overview</span>
+          <h2>Clean business dashboard</h2>
+          <p>Track WhatsApp readiness, chats, sales activity, orders, and inventory from one simple screen.</p>
+
+          <div className="clean-dashboard-actions">
+            <button type="button" onClick={() => onOpenPage('inbox')}>
+              <Inbox size={17} />
+              Open Inbox
             </button>
-          )}
-          {canManage && <button type="button" onClick={() => onOpenPage('settings')}><Settings size={17} /> Settings & Templates</button>}
-          <button type="button" onClick={() => onOpenPage('inbox')}><Inbox size={17} /> Inbox & Contacts</button>
-          <button type="button" onClick={() => onOpenPage('orders')}><ShoppingCart size={17} /> Orders</button>
+            {canManage && (
+              <button type="button" className="secondary" onClick={() => onOpenPage('templates')}>
+                <FileText size={17} />
+                Templates
+              </button>
+            )}
+            {isAdmin && !whatsappHealth?.connected && (
+              <button type="button" className="secondary" onClick={() => onOpenPage('connectWhatsApp')}>
+                <MessageCircle size={17} />
+                Connect Meta
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className={`clean-status-card ${healthTone}`}>
+          <span>{healthLabel}</span>
+          <strong>{connectionLabel}</strong>
+          <small>{whatsappHealth?.account?.displayPhoneNumber || 'No phone number mapped yet'}</small>
         </div>
       </section>
 
-      {canManage && (
-        <section className="whatsapp-health-card">
-          <div className="health-head">
-            <div>
-              <span className="launchpad-kicker">WhatsApp Health</span>
-              <h3>Connection & activity status</h3>
-            </div>
-            <span className={`health-pill ${healthStatusClass}`}>
-              {healthStatusLabel}
-            </span>
-          </div>
-
-          <div className="health-grid">
-            <div>
-              <small>Connection</small>
-              <strong>{whatsappHealth?.connected ? 'Connected' : 'Not connected'}</strong>
-            </div>
-            <div>
-              <small>Token Mode</small>
-              <strong>{tokenModeLabel}</strong>
-            </div>
-            <div>
-              <small>Phone</small>
-              <strong>{whatsappHealth?.account?.displayPhoneNumber || '-'}</strong>
-            </div>
-            <div>
-              <small>Phone Number ID</small>
-              <strong>{whatsappHealth?.account?.phoneNumberId || '-'}</strong>
-            </div>
-            <div>
-              <small>Last Inbound</small>
-              <strong>{formatHealthTime(whatsappHealth?.activity?.lastInboundAt)}</strong>
-            </div>
-            <div>
-              <small>Last Outbound</small>
-              <strong>{formatHealthTime(whatsappHealth?.activity?.lastOutboundAt)}</strong>
-            </div>
-          </div>
-
-          <div className="health-webhook">
-            <small>Webhook URL</small>
-            <code>{whatsappHealth?.webhookUrl || '-'}</code>
-          </div>
-
-          {whatsappHealth?.setupIssues?.length > 0 && (
-            <div className="health-issues">
-              {whatsappHealth.setupIssues.map((issue) => (
-                <p key={issue}>{issue}</p>
-              ))}
-            </div>
-          )}
-
-          <div className="inline-actions">
-            {isAdmin && !whatsappHealth?.connected && (
-              <button type="button" onClick={() => onOpenPage('connectWhatsApp')}>
-                Connect Meta WhatsApp
-              </button>
-            )}
-            <button type="button" onClick={() => onOpenPage('settings')}>
-              Open WhatsApp Settings
-            </button>
-          </div>
-        </section>
-      )}
-
-      {canManage && (
-        <section className="message-ops-panel">
-          <div className="settings-card-title split">
-            <div>
-              <Activity size={22} />
-              <h3>Messaging Operations</h3>
-            </div>
-            <button type="button" onClick={() => onOpenPage(failed24h || outboundEvents.length ? 'outbound' : 'webhooks')}>
-              Review Failures
-            </button>
-          </div>
-
-          <div className="message-ops-grid">
-            {messagingMetrics.map((metric) => (
-              <button className={`message-ops-card ${metric.tone}`} type="button" key={metric.label} onClick={() => onOpenPage(metric.action)}>
-                <span>{metric.label}</span>
-                <strong>{metric.value}</strong>
-              </button>
-            ))}
-          </div>
-
-          <div className="meta-readiness-strip">
-            {metaReadinessItems.map(([label, value, tone]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong className={tone}>{value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {canManage && (
-        <section className="policy-readiness-panel">
-          <div className="settings-card-title split">
-            <div>
-              <Shield size={22} />
-              <h3>Policy & Scale Readiness</h3>
-            </div>
-            <button type="button" onClick={() => onOpenPage('templates')}>
-              Review Templates
-            </button>
-          </div>
-          <div className="policy-readiness-grid">
-            {policyReadiness.map(({ icon: Icon, title, status, tone, text, action }) => (
-              <button type="button" key={title} onClick={() => onOpenPage(action)}>
-                <span className={`policy-icon ${tone}`}><Icon size={19} /></span>
-                <strong>{title}</strong>
-                <b className={`policy-status ${tone}`}>{status}</b>
-                <small>{text}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <div className="kpi-grid">
-        {cards.map((card) => (
+      <section className="clean-metrics-grid">
+        {metricCards.map((card) => (
           <button type="button" key={card.label} onClick={() => onOpenPage(card.action)}>
-            <strong>{card.value}</strong>
             <span>{card.label}</span>
+            <strong>{card.value}</strong>
+            <small>{card.helper}</small>
           </button>
         ))}
-      </div>
-      <div className="dashboard-grid">
-        <section className="table-module">
-          <div className="module-title"><Inbox size={18} /><h3>Recent Chats</h3></div>
-          {conversations.slice(0, 5).map((item) => (
-            <div className="mini-row" key={item.id}>
-              <strong>{item.name || item.phone}</strong>
-              <span>{item.label} - {item.last_message || 'No message yet'}</span>
+      </section>
+
+      <section className="clean-dashboard-grid">
+        <div className="clean-panel clean-wide-panel">
+          <div className="clean-panel-head">
+            <div>
+              <span className="clean-eyebrow">Operations</span>
+              <h3>Messaging health</h3>
             </div>
-          ))}
-          {!conversations.length && <EmptyState title="No chats yet" text="Incoming WhatsApp conversations will appear here." />}
-        </section>
-        <section className="table-module">
-          <div className="module-title"><PackageCheck size={18} /><h3>Inventory Alerts</h3></div>
-          {lowStockProducts.slice(0, 5).map((item) => (
-            <div className="mini-row" key={item.id}>
-              <strong>{item.sku} - {item.name}</strong>
-              <span>{Number(item.stock_qty || 0).toLocaleString('en-IN')} {item.unit || 'pcs'} remaining</span>
+            {canManage && (
+              <button type="button" onClick={() => onOpenPage(failedQueue ? 'outbound' : 'webhooks')}>
+                Review
+              </button>
+            )}
+          </div>
+
+          <div className="clean-ops-grid">
+            {operationCards.map((item) => (
+              <button type="button" className={item.tone} key={item.label} onClick={() => onOpenPage(item.action)}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="clean-panel">
+          <div className="clean-panel-head">
+            <div>
+              <span className="clean-eyebrow">Setup</span>
+              <h3>Readiness checklist</h3>
             </div>
-          ))}
-          {!lowStockProducts.length && <EmptyState title="Stock healthy" text="No active product is currently at low stock threshold." />}
-        </section>
-        <section className="table-module">
-          <div className="module-title"><FileText size={18} /><h3>Enquiry Drafts</h3></div>
-          {drafts.slice(0, 5).map((item) => (
-            <div className="mini-row" key={item.id}>
-              <strong>{item.contact_name || 'Customer'} - {item.status}</strong>
-              <span>{[item.grade, item.size, item.shape, item.quantity].filter(Boolean).join(' | ') || 'Needs review'}</span>
+          </div>
+
+          <div className="clean-checklist">
+            {setupSteps.map((step) => (
+              <button type="button" key={step.title} onClick={() => onOpenPage(step.action)}>
+                <CheckCircle2 size={18} className={step.done ? 'done' : 'pending'} />
+                <div>
+                  <strong>{step.title}</strong>
+                  <span>{step.text}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="clean-panel">
+          <div className="clean-panel-head">
+            <div>
+              <span className="clean-eyebrow">Recent</span>
+              <h3>Latest chats</h3>
             </div>
-          ))}
-          {!drafts.length && <EmptyState title="No drafts" text="Product enquiries extracted from WhatsApp will appear here." />}
-        </section>
-        <section className="table-module">
-          <div className="module-title"><Clock3 size={18} /><h3>Order Attention</h3></div>
-          {orders.filter((item) => item.status !== 'closed' || item.payment_status !== 'paid' || item.dispatch_status !== 'dispatched').slice(0, 5).map((item) => (
-            <div className="mini-row" key={item.id}>
-              <strong>{item.order_no}</strong>
-              <span>Pay: {item.payment_status} | Dispatch: {item.dispatch_status}</span>
+            <button type="button" onClick={() => onOpenPage('inbox')}>View all</button>
+          </div>
+
+          <div className="clean-list">
+            {recentChats.map((item) => (
+              <button type="button" key={item.id} onClick={() => onOpenPage('inbox')}>
+                <div>
+                  <strong>{item.name || item.phone}</strong>
+                  <span>{item.last_message || 'No message yet'}</span>
+                </div>
+                <b>{item.reply_window_open ? 'Open' : 'Template'}</b>
+              </button>
+            ))}
+
+            {!recentChats.length && (
+              <div className="clean-empty">No chats yet.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="clean-panel">
+          <div className="clean-panel-head">
+            <div>
+              <span className="clean-eyebrow">Inventory</span>
+              <h3>Stock alerts</h3>
             </div>
-          ))}
-          {!orders.length && <EmptyState title="No orders" text="Converted quotations and confirmed WhatsApp orders will appear here." />}
-        </section>
-      </div>
+            <button type="button" onClick={() => onOpenPage('inventory')}>Open</button>
+          </div>
+
+          <div className="clean-list">
+            {lowStockPreview.map((item) => (
+              <button type="button" key={item.id} onClick={() => onOpenPage('inventory')}>
+                <div>
+                  <strong>{item.sku} - {item.name}</strong>
+                  <span>{Number(item.stock_qty || 0).toLocaleString('en-IN')} {item.unit || 'pcs'} remaining</span>
+                </div>
+                <b className="warn">Low</b>
+              </button>
+            ))}
+
+            {!lowStockPreview.length && (
+              <div className="clean-empty">Stock is healthy.</div>
+            )}
+          </div>
+        </div>
+      </section>
     </section>
   )
 }
@@ -2219,6 +2139,7 @@ const tabs = [
     setTemplateForm={settingsProps.setTemplateForm}
     editingTemplateId={settingsProps.editingTemplateId}
     onSaveTemplate={settingsProps.onSaveTemplate}
+    onSubmitTemplate={settingsProps.onSubmitTemplate}
     onEditTemplate={settingsProps.onEditTemplate}
     onToggleTemplate={settingsProps.onToggleTemplate}
     onCancelTemplateEdit={settingsProps.onCancelTemplateEdit}
@@ -3031,13 +2952,39 @@ function extractTemplateVariables(...values) {
   return [...found].sort((first, second) => Number(first) - Number(second))
 }
 
-function sampleVariableValue(index) {
-  const samples = ['Customer', 'QT-WA-1024', 'INR 42,500', '14 Jun 2026', 'Blue Ocean Steels']
-  return samples[Number(index) - 1] || `Sample ${index}`
+function sampleVariableValue(index, samples = []) {
+  const defaults = [
+    'Riya Sharma',
+    'INV-WA-1024',
+    'INR 42,500',
+    '18 Jun 2026',
+    'Blue Ocean Steels',
+    'https://example.com/invoices/INV-WA-1024.pdf',
+  ]
+  const sampleIndex = Number(index) - 1
+  return String(samples[sampleIndex] || '').trim() || defaults[sampleIndex] || `Sample ${index}`
 }
 
-function fillTemplateSamples(text = '') {
-  return String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (_, index) => sampleVariableValue(index))
+function fillTemplateSamples(text = '', samples = []) {
+  return String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (_, index) => sampleVariableValue(index, samples))
+}
+
+function templateVariableSamples(template = {}) {
+  const samples = template.meta_payload?.variableSamples
+  return Array.isArray(samples) ? samples : []
+}
+
+function templateHeaderHandle(component = {}) {
+  const example = component?.example && typeof component.example === 'object' ? component.example : {}
+  return String(
+    Array.isArray(example.header_handle)
+      ? example.header_handle[0]
+      : example.header_handle || component?.header_handle || component?.headerHandle || '',
+  ).trim()
+}
+
+function templateHeaderFileName(component = {}) {
+  return String(component?.sampleFileName || component?.sample_file_name || component?.fileName || '').trim()
 }
 
 function templateStatusTone(status = '') {
@@ -3074,10 +3021,12 @@ function MetaTemplatePreview({ template }) {
   const headerText = componentText(components.header)
   const bodyText = componentText(components.body, template.body)
   const footerText = componentText(components.footer)
+  const variableSamples = templateVariableSamples(template)
   const variables = extractTemplateVariables(headerText, bodyText, footerText)
   const buttons = templateButtons(components.buttons)
   const status = String(template.meta_status || 'manual').toLowerCase()
   const sendEligible = template.active && status === 'approved'
+  const sampleFileName = templateHeaderFileName(components.header)
 
   return (
     <section className="meta-preview-panel">
@@ -3094,20 +3043,20 @@ function MetaTemplatePreview({ template }) {
         <div className="phone-message-bubble">
           {components.header && (
             <div className={`wa-template-header ${headerFormat ? 'media' : 'text'}`}>
-              {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) ? (
+              {['IMAGE', 'VIDEO', 'DOCUMENT', 'GIF'].includes(headerFormat) ? (
                 <>
                   <FileText size={24} />
                   <strong>{headerFormat}</strong>
-                  <span>{headerFormat === 'DOCUMENT' ? 'Document header' : `${headerFormat.toLowerCase()} header`}</span>
+                  <span>{sampleFileName || (headerFormat === 'DOCUMENT' ? 'Invoice sample document' : `${headerFormat.toLowerCase()} sample media`)}</span>
                 </>
               ) : (
-                <strong>{fillTemplateSamples(headerText)}</strong>
+                <strong>{fillTemplateSamples(headerText, variableSamples)}</strong>
               )}
             </div>
           )}
 
-          <p>{fillTemplateSamples(bodyText || template.body || 'Template body will appear here.')}</p>
-          {footerText && <small>{fillTemplateSamples(footerText)}</small>}
+          <p>{fillTemplateSamples(bodyText || template.body || 'Template body will appear here.', variableSamples)}</p>
+          {footerText && <small>{fillTemplateSamples(footerText, variableSamples)}</small>}
 
           {buttons.length > 0 && (
             <div className="wa-template-buttons">
@@ -3143,7 +3092,7 @@ function MetaTemplatePreview({ template }) {
         {variables.length ? (
           <div>
             {variables.map((variable) => (
-              <span key={variable}>{`{{${variable}}}`} = {sampleVariableValue(variable)}</span>
+              <span key={variable}>{`{{${variable}}}`} = {sampleVariableValue(variable, variableSamples)}</span>
             ))}
           </div>
         ) : (
@@ -3154,6 +3103,9 @@ function MetaTemplatePreview({ template }) {
       <div className="template-component-list">
         <strong>Components</strong>
         <span>Header: {components.header ? headerFormat || 'TEXT' : 'Not used'}</span>
+        {['IMAGE', 'VIDEO', 'DOCUMENT', 'GIF'].includes(headerFormat) && (
+          <span>Sample media handle: {templateHeaderHandle(components.header) ? 'Attached' : 'Missing'}</span>
+        )}
         <span>Body: {bodyText ? `${bodyText.length} characters` : 'Missing'}</span>
         <span>Footer: {footerText || 'Not used'}</span>
         <span>Buttons: {buttons.length ? buttons.map((button) => `${button.type}: ${button.text}`).join(', ') : 'Not used'}</span>
@@ -3162,12 +3114,172 @@ function MetaTemplatePreview({ template }) {
   )
 }
 
+const templateCategoryOptions = [
+  { id: 'marketing', label: 'Marketing', icon: Megaphone, text: 'Promotions, offers, announcements, newsletters, and re-engagement.' },
+  { id: 'utility', label: 'Utility', icon: ClipboardList, text: 'Orders, payments, appointments, quote updates, and account messages.' },
+  { id: 'authentication', label: 'Authentication', icon: Shield, text: 'One-time passwords, login verification, and account security.' },
+]
+
+const templateTypeOptions = [
+  { id: 'default', label: 'Default', text: 'Media, header, body, footer, and buttons.' },
+  { id: 'catalog', label: 'Catalog', text: 'Product catalog-driven commerce messages.' },
+  { id: 'flows', label: 'Flows', text: 'Structured forms for leads, appointments, and surveys.' },
+  { id: 'order_details', label: 'Order Details', text: 'Payment or order-specific customer actions.' },
+  { id: 'calling_permission', label: 'Calling permissions request', text: 'Ask customers if you can call them on WhatsApp.' },
+]
+
+const templateLanguageOptions = [
+  ['en', 'English'],
+  ['en_US', 'English (US)'],
+  ['hi', 'Hindi'],
+  ['es', 'Spanish'],
+  ['pt_BR', 'Portuguese (BR)'],
+]
+
+const templateMediaOptions = [
+  ['NONE', 'None'],
+  ['IMAGE', 'Image'],
+  ['VIDEO', 'Video'],
+  ['GIF', 'GIF'],
+  ['DOCUMENT', 'Document'],
+  ['LOCATION', 'Location'],
+  ['TEXT', 'Text header'],
+]
+
+const templateMediaHeaderFormats = ['IMAGE', 'VIDEO', 'DOCUMENT', 'GIF']
+
+function templateSampleAccept(headerFormat = '') {
+  const format = String(headerFormat || '').toUpperCase()
+  if (format === 'IMAGE') return 'image/jpeg,image/png,image/webp'
+  if (format === 'VIDEO') return 'video/mp4,video/3gpp'
+  if (format === 'GIF') return 'image/gif'
+  if (format === 'DOCUMENT') {
+    return '.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  }
+  return ''
+}
+
+const templateButtonOptions = [
+  ['QUICK_REPLY', 'Custom'],
+  ['URL', 'Visit website'],
+  ['PHONE_NUMBER', 'Call phone number'],
+  ['COPY_CODE', 'Copy offer code'],
+]
+
+function buildTemplateDraftFromForm(form = {}) {
+  const headerFormat = String(form.headerFormat || 'NONE').toUpperCase()
+  const headerSampleHandle = String(form.headerSampleHandle || '').trim()
+  const headerSampleFileName = String(form.headerSampleFileName || '').trim()
+  const variableSamples = Array.isArray(form.variableSamples)
+    ? form.variableSamples.slice(0, 20).map((sample) => String(sample || '').trim().slice(0, 120))
+    : []
+  const components = []
+
+  if (headerFormat === 'TEXT' && String(form.headerText || '').trim()) {
+    components.push({ type: 'HEADER', format: 'TEXT', text: form.headerText })
+  } else if ([...templateMediaHeaderFormats, 'LOCATION'].includes(headerFormat)) {
+    const headerComponent = { type: 'HEADER', format: headerFormat }
+
+    if (templateMediaHeaderFormats.includes(headerFormat) && headerSampleHandle) {
+      headerComponent.example = { header_handle: [headerSampleHandle] }
+    }
+
+    if (templateMediaHeaderFormats.includes(headerFormat) && headerSampleFileName) {
+      headerComponent.sampleFileName = headerSampleFileName
+    }
+
+    components.push(headerComponent)
+  }
+
+  components.push({ type: 'BODY', text: form.body || '' })
+
+  if (String(form.footer || '').trim()) {
+    components.push({ type: 'FOOTER', text: form.footer })
+  }
+
+  const buttons = Array.isArray(form.buttons) ? form.buttons : []
+
+  if (buttons.length) {
+    components.push({
+      type: 'BUTTONS',
+      buttons: buttons.map((button) => ({
+        type: button.type || 'QUICK_REPLY',
+        text: button.text || '',
+        url: button.url || '',
+        phone_number: button.phone_number || '',
+        example: button.example || '',
+      })),
+    })
+  }
+
+  return {
+    id: 'draft-preview',
+    name: form.name || 'sample_template',
+    language: form.language || 'en',
+    category: form.category || 'marketing',
+    body: form.body || '',
+    active: false,
+    meta_status: editingStatusLabel(form),
+    meta_payload: {
+      components,
+      category: form.category || 'marketing',
+      templateType: form.templateType || 'default',
+      variableType: form.variableType || 'number',
+      variableSamples,
+      validityPeriod: {
+        enabled: Boolean(form.validityEnabled),
+        minutes: form.validityMinutes || 10,
+      },
+    },
+  }
+}
+
+function editingStatusLabel(form = {}) {
+  return form.name || form.body ? 'draft' : 'manual'
+}
+
+function templatePolicyIssues(form = {}) {
+  const issues = []
+  const name = String(form.name || '').trim()
+  const body = String(form.body || '').trim()
+  const footer = String(form.footer || '').trim()
+  const headerFormat = String(form.headerFormat || 'NONE').toUpperCase()
+  const variables = extractTemplateVariables(form.headerText, form.body, form.footer)
+
+  if (!name) issues.push('Template name is required.')
+  if (name && !/^[a-z0-9_]{2,512}$/.test(name)) issues.push('Name must use lowercase letters, numbers, and underscores only.')
+  if (!body) issues.push('Body is required.')
+  if (body.length > 1024) issues.push('Body must stay within 1024 characters.')
+  if (footer.length > 60) issues.push('Footer must stay within 60 characters.')
+  if (String(form.headerText || '').length > 60) issues.push('Text header must stay within 60 characters.')
+  if (templateMediaHeaderFormats.includes(headerFormat) && !String(form.headerSampleHandle || '').trim()) {
+    issues.push('Image, video, GIF, and document headers need a Meta uploaded sample media handle.')
+  }
+  if (variables.some((variable, index) => Number(variable) !== index + 1)) {
+    issues.push('Variables must be sequential: {{1}}, {{2}}, {{3}} without gaps.')
+  }
+  if ((form.buttons || []).length > 10) issues.push('Meta allows up to 10 buttons.')
+
+  if (form.category === 'authentication' && /sale|offer|discount|promo|newsletter/i.test(body)) {
+    issues.push('Authentication templates should not contain marketing or promotional content.')
+  }
+
+  if (form.category === 'utility' && /sale|offer|discount|coupon|promo/i.test(body)) {
+    issues.push('Promotional language may cause Meta to classify this as Marketing.')
+  }
+
+  return issues
+}
+
 export function TemplatesPage({
   templates = [],
   templateForm,
   setTemplateForm,
   editingTemplateId,
   onSaveTemplate,
+  onSubmitTemplate,
+  onUploadTemplateSample,
+  templateSampleUploading,
   onEditTemplate,
   onToggleTemplate,
   onCancelTemplateEdit,
@@ -3175,12 +3287,32 @@ export function TemplatesPage({
   templateSyncing,
 }) {
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || templates[0] || null
+  const [templateTab, setTemplateTab] = useState('templates')
+  const [builderStep, setBuilderStep] = useState('setup')
+  const [templateSearch, setTemplateSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [languageFilter, setLanguageFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const normalizedSearch = templateSearch.trim().toLowerCase()
+  const filteredTemplates = templates.filter((template) => {
+    const matchesSearch = !normalizedSearch
+      || String(template.name || '').toLowerCase().includes(normalizedSearch)
+      || String(template.body || '').toLowerCase().includes(normalizedSearch)
+    const matchesCategory = categoryFilter === 'all' || String(template.category || '').toLowerCase() === categoryFilter
+    const matchesLanguage = languageFilter === 'all' || String(template.language || '').toLowerCase() === languageFilter.toLowerCase()
+    const matchesStatus = statusFilter === 'all' || String(template.meta_status || 'manual').toLowerCase() === statusFilter
+
+    return matchesSearch && matchesCategory && matchesLanguage && matchesStatus
+  })
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || filteredTemplates[0] || templates[0] || null
+  const draftPreview = buildTemplateDraftFromForm(templateForm)
+  const previewTemplate = templateTab === 'create' || editingTemplateId ? draftPreview : selectedTemplate
+  const formVariables = extractTemplateVariables(templateForm.headerText, templateForm.body, templateForm.footer)
   const approvedTemplates = templates.filter((template) => String(template.meta_status || '').toLowerCase() === 'approved')
   const sendableTemplates = approvedTemplates.filter((template) => template.active)
   const mediaHeaderTemplates = templates.filter((template) => {
     const header = getMetaComponents(template).header
-    return ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(String(header?.format || '').toUpperCase())
+    return templateMediaHeaderFormats.includes(String(header?.format || '').toUpperCase())
   })
 
   const categoryCount = (category) => templates.filter((template) => (
@@ -3214,206 +3346,473 @@ export function TemplatesPage({
     },
   ]
 
+  const policyIssues = templatePolicyIssues(templateForm)
+
+  function patchTemplateForm(patch) {
+    setTemplateForm({ ...templateForm, ...patch })
+  }
+
+  function addTemplateButton(type = 'QUICK_REPLY') {
+    const nextButtons = [...(templateForm.buttons || [])]
+    if (nextButtons.length >= 10) return
+
+    nextButtons.push({
+      type,
+      text: type === 'URL'
+        ? 'Shop now'
+        : type === 'PHONE_NUMBER'
+          ? 'Call now'
+          : type === 'COPY_CODE'
+            ? 'Copy code'
+            : 'Catalog',
+      url: '',
+      phone_number: '',
+      example: '',
+    })
+
+    patchTemplateForm({ buttons: nextButtons })
+  }
+
+  function updateTemplateButton(index, patch) {
+    const nextButtons = [...(templateForm.buttons || [])]
+    nextButtons[index] = { ...nextButtons[index], ...patch }
+    patchTemplateForm({ buttons: nextButtons })
+  }
+
+  function removeTemplateButton(index) {
+    patchTemplateForm({ buttons: (templateForm.buttons || []).filter((_, itemIndex) => itemIndex !== index) })
+  }
+
+  function updateTemplateVariableSample(variable, value) {
+    const nextSamples = [...(templateForm.variableSamples || [])]
+    nextSamples[Number(variable) - 1] = value
+    patchTemplateForm({ variableSamples: nextSamples })
+  }
+
+  function startCreateTemplate() {
+    onCancelTemplateEdit()
+    setTemplateTab('create')
+    setBuilderStep('setup')
+  }
+
+  function startEditTemplate(template) {
+    onEditTemplate(template)
+    setTemplateTab('create')
+    setBuilderStep('edit')
+  }
+
+  function closeBuilder() {
+    onCancelTemplateEdit()
+    setTemplateTab('templates')
+    setBuilderStep('setup')
+  }
+
   return (
-    <div className="settings-stack templates-page">
-      <section className="settings-card templates-hero-card meta-template-hero">
-        <div className="settings-card-title split">
-          <div>
-            <ClipboardList size={22} />
-            <h3>WhatsApp Template Manager</h3>
-          </div>
-          <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
-            {templateSyncing ? 'Syncing...' : 'Sync from Meta'}
+    <div className="settings-stack templates-page meta-manager-page">
+      <section className="meta-manager-tabs">
+        <button type="button" className={templateTab === 'templates' ? 'active' : ''} onClick={() => setTemplateTab('templates')}>
+          Templates
+        </button>
+        <button type="button" className={templateTab === 'groups' ? 'active' : ''} onClick={() => setTemplateTab('groups')}>
+          Template groups
+        </button>
+      </section>
+
+      {templateTab !== 'create' && (
+        <section className="meta-template-toolbar">
+          <label>
+            <Search size={18} />
+            <input value={templateSearch} onChange={(e) => setTemplateSearch(e.target.value)} placeholder="Search" />
+          </label>
+          <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="all">Category</option>
+            <option value="marketing">Marketing</option>
+            <option value="utility">Utility</option>
+            <option value="authentication">Authentication</option>
+          </select>
+          <select value={languageFilter} onChange={(e) => setLanguageFilter(e.target.value)}>
+            <option value="all">Language</option>
+            {templateLanguageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All statuses</option>
+            <option value="approved">Approved</option>
+            <option value="pending">Pending</option>
+            <option value="rejected">Rejected</option>
+            <option value="paused">Paused</option>
+            <option value="manual">Manual</option>
+          </select>
+          <button type="button" className="meta-create-template-button" onClick={startCreateTemplate}>
+            Create template
           </button>
-        </div>
-        <p className="settings-muted">
-          Manage templates like a WhatsApp Manager workspace. Sync Meta-approved templates, inspect variables,
-          media headers, buttons, and send eligibility before using them in campaigns or expired 24-hour conversations.
-        </p>
-        <div className="meta-template-stats">
-          <span><strong>{templates.length}</strong>Total</span>
-          <span><strong>{approvedTemplates.length}</strong>Approved by Meta</span>
-          <span><strong>{sendableTemplates.length}</strong>Send eligible</span>
-          <span><strong>{mediaHeaderTemplates.length}</strong>Media headers</span>
-        </div>
-      </section>
+        </section>
+      )}
 
-      <section className="template-policy-grid">
-        {templatePolicyCards.map(({ icon: Icon, title, count, text }) => (
-          <article key={title}>
-            <Icon size={20} />
-            <strong>{title}</strong>
-            <b>{count}</b>
-            <span>{text}</span>
-          </article>
-        ))}
-      </section>
+      {templateTab === 'groups' && (
+        <section className="template-policy-grid">
+          {templatePolicyCards.map(({ icon: Icon, title, count, text }) => (
+            <article key={title}>
+              <Icon size={20} />
+              <strong>{title}</strong>
+              <b>{count}</b>
+              <span>{text}</span>
+            </article>
+          ))}
+        </section>
+      )}
 
-      <section className="meta-template-workbench">
-        <div className="meta-template-list">
-          <div className="meta-list-head">
+      {templateTab === 'templates' && (
+        <section className="settings-card meta-template-table-card">
+          <div className="settings-card-title split">
             <div>
-              <strong>Templates</strong>
-              <span>Only active approved records are available for sending.</span>
+              <ClipboardList size={22} />
+              <h3>Templates</h3>
             </div>
             <button type="button" onClick={onSyncTemplates} disabled={templateSyncing}>
-              <RefreshCw size={15} /> Sync
+              {templateSyncing ? 'Syncing...' : 'Sync from Meta'}
             </button>
           </div>
 
-          {!templates.length && (
-            <EmptyState title="No templates" text="Sync approved Meta templates or create a local draft mapping." />
+          <div className="meta-template-stats">
+            <span><strong>{templates.length}</strong>Total</span>
+            <span><strong>{approvedTemplates.length}</strong>Approved by Meta</span>
+            <span><strong>{sendableTemplates.length}</strong>Send eligible</span>
+            <span><strong>{mediaHeaderTemplates.length}</strong>Media headers</span>
+          </div>
+
+          {!filteredTemplates.length && (
+            <EmptyState title="No templates found" text="Create a draft or sync approved templates from Meta." />
           )}
 
-          {templates.map((template) => {
-            const status = String(template.meta_status || 'manual').toLowerCase()
-            const components = getMetaComponents(template)
-            const variables = extractTemplateVariables(componentText(components.header), componentText(components.body, template.body), componentText(components.footer))
-            const isSelected = selectedTemplate?.id === template.id
-            const isSendable = template.active && status === 'approved'
+          {!!filteredTemplates.length && (
+            <>
+              <div className="meta-template-table">
+                <div className="meta-template-table-head">
+                  <span></span>
+                  <span>Template name</span>
+                  <span>Category</span>
+                  <span>Language</span>
+                  <span>Status</span>
+                  <span>Messages delivered</span>
+                  <span>Read rate</span>
+                  <span>Top block rate</span>
+                  <span>Last edited</span>
+                  <span>Actions</span>
+                </div>
 
-            return (
-              <button
-                className={`meta-template-card ${isSelected ? 'active' : ''}`}
-                type="button"
-                key={template.id}
-                onClick={() => setSelectedTemplateId(template.id)}
-              >
-                <span className={`template-card-icon ${isSendable ? 'ok' : templateStatusTone(status)}`}>
-                  <MessageCircle size={18} />
-                </span>
-                <span>
-                  <strong>{template.name}</strong>
-                  <small>{template.language || 'en'} | {template.category || 'utility'} | {variables.length} variable(s)</small>
-                </span>
-                <i className={`meta-status-pill ${templateStatusTone(status)}`}>{status}</i>
+                {filteredTemplates.map((template) => {
+                  const status = String(template.meta_status || 'manual').toLowerCase()
+                  const components = getMetaComponents(template)
+                  const body = componentText(components.body, template.body)
+                  const isSelected = selectedTemplate?.id === template.id
+
+                  return (
+                    <button
+                      type="button"
+                      className={`meta-template-row ${isSelected ? 'active' : ''}`}
+                      key={template.id}
+                      onClick={() => setSelectedTemplateId(template.id)}
+                    >
+                      <span className="meta-row-checkbox"></span>
+                      <span>
+                        <strong>{template.name}</strong>
+                        <small>{body.slice(0, 52) || 'No body preview'}</small>
+                      </span>
+                      <span>{template.category || '-'}</span>
+                      <span>{template.language || 'en'}</span>
+                      <i className={`meta-status-pill ${templateStatusTone(status)}`}>{status}</i>
+                      <span>0</span>
+                      <span>0</span>
+                      <span>--</span>
+                      <span>{template.last_synced_at || template.created_at ? new Date(template.last_synced_at || template.created_at).toLocaleDateString() : '-'}</span>
+                      <span className="meta-row-actions">
+                        <b onClick={(event) => { event.stopPropagation(); startEditTemplate(template) }}>Edit</b>
+                        <b onClick={(event) => { event.stopPropagation(); onToggleTemplate(template) }}>
+                          {template.active ? 'Pause' : 'Activate'}
+                        </b>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="settings-muted">{filteredTemplates.length} message templates shown. Sendable templates: {sendableTemplates.length}</p>
+            </>
+          )}
+        </section>
+      )}
+
+      {templateTab === 'create' && (
+        <section className="meta-template-builder-shell">
+          <div className="meta-builder-main">
+            <div className="meta-builder-steps">
+              <button type="button" className={builderStep === 'setup' ? 'active' : 'done'} onClick={() => setBuilderStep('setup')}>
+                <CheckCircle2 size={16} /> Set up template
               </button>
-            )
-          })}
-        </div>
-
-        <MetaTemplatePreview template={selectedTemplate} />
-      </section>
-
-      <section className="settings-card meta-template-create-card">
-        <div className="settings-card-title split">
-          <div>
-            <MessageCircle size={22} />
-            <h3>{editingTemplateId ? 'Edit Local Template Record' : 'Create Local Template Record'}</h3>
-          </div>
-          <span className="connection-pill warn">Meta approval still required</span>
-        </div>
-        <p className="settings-muted">
-          Use this to map or draft a template locally. In production, the backend still sends only active templates synced as approved from Meta.
-        </p>
-
-        <form className="custom-form template-form-grid" onSubmit={onSaveTemplate}>
-          <label>
-            Template Name
-            <input
-              placeholder="quotation_followup"
-              value={templateForm.name}
-              onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
-            />
-          </label>
-
-          <label>
-            Language
-            <input
-              placeholder="en_US"
-              value={templateForm.language}
-              onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })}
-            />
-          </label>
-
-          <label className="template-body-field">
-            Body
-            <textarea
-              placeholder="Hello {{1}}, your quotation {{2}} is ready. Reply YES to confirm."
-              value={templateForm.body}
-              onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
-            />
-            <small>{extractTemplateVariables(templateForm.body).length} variable(s) detected. Use Meta format like {`{{1}}`}.</small>
-          </label>
-
-          <label className="settings-switch-row">
-            <SwitchControl
-              checked={Boolean(templateForm.active)}
-              onChange={(checked) => setTemplateForm({ ...templateForm, active: checked })}
-            />
-            Active
-          </label>
-
-          <div className="user-form-actions">
-            <button className="user-action-primary" type="submit">
-              {editingTemplateId ? 'Update Template' : 'Save Template'}
-            </button>
-            {editingTemplateId && (
-              <button className="user-action-neutral" type="button" onClick={onCancelTemplateEdit}>
-                Cancel
+              <button type="button" className={builderStep === 'edit' ? 'active' : ''} onClick={() => setBuilderStep('edit')}>
+                <Pencil size={16} /> Edit template
               </button>
-            )}
-          </div>
-        </form>
-      </section>
-
-      <section className="settings-card">
-        <div className="settings-card-title split">
-          <div>
-            <ClipboardList size={22} />
-            <h3>Template Compliance Table</h3>
-          </div>
-          <span className="connection-pill ok">{sendableTemplates.length} sendable</span>
-        </div>
-
-        {!templates.length && (
-          <EmptyState title="No templates" text="Add or sync approved Meta templates for expired 24-hour conversations." />
-        )}
-
-        {!!templates.length && (
-          <div className="user-table template-list-table">
-            <div className="user-table-head template-table-head">
-              <span>Name</span>
-              <span>Language</span>
-              <span>Meta Status</span>
-              <span>Category</span>
-              <span>Active</span>
-              <span>Body</span>
-              <span>Actions</span>
+              <button type="button" className={builderStep === 'review' ? 'active' : ''} onClick={() => setBuilderStep('review')}>
+                <Info size={16} /> Submit for review
+              </button>
             </div>
 
-            {templates.map((template) => (
-              <div className="user-row" key={template.id}>
-                <div className="user-name-cell">
-                  <strong>{template.name}</strong>
-                  <small>ID: {String(template.id).slice(0, 8)}</small>
-                </div>
-                <span>{template.language}</span>
-                <i className={`meta-status-pill ${templateStatusTone(template.meta_status || 'manual')}`}>
-                  {template.meta_status || 'manual'}
-                </i>
-                <span>{template.category || '-'}</span>
-                <i className={template.active ? 'status-active' : 'status-inactive'}>
-                  {template.active ? 'Active' : 'Inactive'}
-                </i>
-                <span>{template.body}</span>
-                <div className="user-actions">
-                  <button className="user-action-edit" type="button" onClick={() => onEditTemplate(template)}>
-                    Edit
-                  </button>
-                  <button
-                    className={template.active ? 'user-action-pause' : 'user-action-enable'}
-                    type="button"
-                    onClick={() => onToggleTemplate(template)}
-                  >
-                    {template.active ? 'Deactivate' : 'Activate'}
-                  </button>
-                </div>
-              </div>
-            ))}
+            <form className="meta-builder-form" onSubmit={onSaveTemplate}>
+              {builderStep === 'setup' && (
+                <section className="settings-card">
+                  <h3>Set up your template</h3>
+                  <p className="settings-muted">Choose the category that best describes the message. Meta may reclassify templates during review.</p>
+
+                  <div className="meta-category-tabs">
+                    {templateCategoryOptions.map(({ id, label, icon: Icon }) => (
+                      <button type="button" className={templateForm.category === id ? 'active' : ''} key={id} onClick={() => patchTemplateForm({ category: id })}>
+                        <Icon size={16} /> {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="meta-template-type-list">
+                    {templateTypeOptions.map((item) => (
+                      <button type="button" className={templateForm.templateType === item.id ? 'active' : ''} key={item.id} onClick={() => patchTemplateForm({ templateType: item.id })}>
+                        <span></span>
+                        <div>
+                          <strong>{item.label}</strong>
+                          <small>{item.text}</small>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {builderStep === 'edit' && (
+                <>
+                  <section className="settings-card meta-builder-identity">
+                    <div>
+                      <strong>{templateForm.name || 'sample_template'} - {templateForm.language || 'English'}</strong>
+                      <small>{templateForm.category || 'Marketing'} - {templateForm.templateType || 'Default'}</small>
+                    </div>
+                  </section>
+
+                  <section className="settings-card meta-builder-fields">
+                    <h3>Template name and language</h3>
+                    <div className="template-form-grid">
+                      <label>
+                        Name your template
+                        <input
+                          maxLength={512}
+                          value={templateForm.name}
+                          onChange={(e) => patchTemplateForm({ name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })}
+                          placeholder="sample_template"
+                        />
+                        <small>{String(templateForm.name || '').length}/512</small>
+                      </label>
+                      <label>
+                        Select language
+                        <select value={templateForm.language} onChange={(e) => patchTemplateForm({ language: e.target.value })}>
+                          {templateLanguageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="settings-card meta-builder-fields">
+                    <h3>Content</h3>
+                    <p className="settings-muted">Add a header, body and footer. Cloud API hosted by Meta will review variables and content.</p>
+
+                    <label>
+                      Type of variable
+                      <select value={templateForm.variableType} onChange={(e) => patchTemplateForm({ variableType: e.target.value })}>
+                        <option value="number">Number</option>
+                        <option value="name">Name</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Media sample
+                      <select
+                        value={templateForm.headerFormat || 'NONE'}
+                        onChange={(e) => patchTemplateForm({
+                          headerFormat: e.target.value,
+                          headerSampleHandle: '',
+                          headerSampleFileName: '',
+                        })}
+                      >
+                        {templateMediaOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+
+                    {templateForm.headerFormat === 'TEXT' && (
+                      <label>
+                        Header
+                        <input maxLength={60} value={templateForm.headerText || ''} onChange={(e) => patchTemplateForm({ headerText: e.target.value })} placeholder="Add a short line of text" />
+                        <small>{String(templateForm.headerText || '').length}/60</small>
+                      </label>
+                    )}
+
+                    {templateMediaHeaderFormats.includes(String(templateForm.headerFormat || '').toUpperCase()) && (
+                      <div className="template-sample-grid">
+                        <div className="template-upload-card">
+                          <strong>Upload sample to Meta</strong>
+                          <span>The backend uploads this file to Meta and fills the handle automatically.</span>
+                          <label className="template-upload-button">
+                            <Upload size={16} />
+                            {templateSampleUploading ? 'Uploading...' : 'Choose file'}
+                            <input
+                              type="file"
+                              accept={templateSampleAccept(templateForm.headerFormat)}
+                              disabled={templateSampleUploading}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0]
+                                if (file && onUploadTemplateSample) {
+                                  onUploadTemplateSample({ file, headerFormat: templateForm.headerFormat })
+                                }
+                                event.target.value = ''
+                              }}
+                            />
+                          </label>
+                          {templateForm.headerSampleFileName && <small>Selected: {templateForm.headerSampleFileName}</small>}
+                        </div>
+                        <label>
+                          Meta sample media handle
+                          <input
+                            value={templateForm.headerSampleHandle || ''}
+                            onChange={(e) => patchTemplateForm({ headerSampleHandle: e.target.value })}
+                            placeholder="Paste Meta upload handle"
+                          />
+                          <small>Required for Meta review of image, video, GIF, and document header templates.</small>
+                        </label>
+                        <label>
+                          Sample file name
+                          <input
+                            maxLength={140}
+                            value={templateForm.headerSampleFileName || ''}
+                            onChange={(e) => patchTemplateForm({ headerSampleFileName: e.target.value })}
+                            placeholder={templateForm.headerFormat === 'DOCUMENT' ? 'invoice-sample.pdf' : 'sample-media'}
+                          />
+                          <small>For document templates, use a realistic invoice PDF sample name.</small>
+                        </label>
+                      </div>
+                    )}
+
+                    <label>
+                      Body
+                      <textarea maxLength={1024} value={templateForm.body} onChange={(e) => patchTemplateForm({ body: e.target.value })} placeholder="Hello {{1}}, your update is ready." />
+                      <small>{String(templateForm.body || '').length}/1024. Variables detected: {formVariables.length}</small>
+                    </label>
+
+                    {formVariables.length > 0 && (
+                      <div className="template-variable-samples">
+                        <strong>Sample values for Meta review</strong>
+                        <span>Use invoice-style examples so Meta understands each variable.</span>
+                        {formVariables.map((variable) => (
+                          <label className="template-sample-row" key={variable}>
+                            <b>{`{{${variable}}}`}</b>
+                            <input
+                              value={(templateForm.variableSamples || [])[Number(variable) - 1] || ''}
+                              onChange={(e) => updateTemplateVariableSample(variable, e.target.value)}
+                              placeholder={sampleVariableValue(variable)}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    <label>
+                      Footer
+                      <input maxLength={60} value={templateForm.footer || ''} onChange={(e) => patchTemplateForm({ footer: e.target.value })} placeholder="STOP for unsubscribe" />
+                      <small>{String(templateForm.footer || '').length}/60</small>
+                    </label>
+
+                    <div className="meta-button-builder">
+                      <div className="settings-card-title split">
+                        <div>
+                          <Plus size={18} />
+                          <h3>Buttons</h3>
+                        </div>
+                        <select onChange={(e) => { if (e.target.value) addTemplateButton(e.target.value); e.target.value = '' }} defaultValue="">
+                          <option value="">Add button</option>
+                          {templateButtonOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </div>
+
+                      {(templateForm.buttons || []).map((button, index) => (
+                        <div className="meta-button-row" key={`${button.type}-${index}`}>
+                          <select value={button.type || 'QUICK_REPLY'} onChange={(e) => updateTemplateButton(index, { type: e.target.value })}>
+                            {templateButtonOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                          </select>
+                          <input value={button.text || ''} onChange={(e) => updateTemplateButton(index, { text: e.target.value })} placeholder="Button text" maxLength={40} />
+                          {button.type === 'URL' && <input value={button.url || ''} onChange={(e) => updateTemplateButton(index, { url: e.target.value })} placeholder="https://example.com" />}
+                          {button.type === 'PHONE_NUMBER' && <input value={button.phone_number || ''} onChange={(e) => updateTemplateButton(index, { phone_number: e.target.value })} placeholder="+919876543210" />}
+                          {button.type === 'COPY_CODE' && <input value={button.example || ''} onChange={(e) => updateTemplateButton(index, { example: e.target.value })} placeholder="HEALTH10" maxLength={20} />}
+                          <button type="button" onClick={() => removeTemplateButton(index)}><X size={16} /></button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="meta-validity-row">
+                      <label className="settings-switch-row">
+                        <SwitchControl checked={Boolean(templateForm.validityEnabled)} onChange={(checked) => patchTemplateForm({ validityEnabled: checked })} />
+                        Set custom validity period for your message
+                      </label>
+                      {templateForm.validityEnabled && (
+                        <input type="number" min="1" max="43200" value={templateForm.validityMinutes || 10} onChange={(e) => patchTemplateForm({ validityMinutes: e.target.value })} />
+                      )}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {builderStep === 'review' && (
+                <section className="settings-card meta-review-card">
+                  <h3>Review before Meta submission</h3>
+                  <p className="settings-muted">This platform stores drafts locally. Submit for review sends the component payload to Meta from the backend using the connected WABA token.</p>
+                  {policyIssues.length ? (
+                    <div className="meta-policy-warning">
+                      {policyIssues.map((issue) => <p key={issue}>{issue}</p>)}
+                    </div>
+                  ) : (
+                    <div className="settings-safe-note">No local policy blockers detected. Meta can still approve, reject, pause, or reclassify the template.</div>
+                  )}
+                  <div className="template-component-list">
+                    <strong>Review summary</strong>
+                    <span>Category: {templateForm.category}</span>
+                    <span>Language: {templateForm.language}</span>
+                    <span>Header: {templateForm.headerFormat || 'NONE'}</span>
+                    {templateMediaHeaderFormats.includes(String(templateForm.headerFormat || '').toUpperCase()) && (
+                      <span>Sample media: {String(templateForm.headerSampleHandle || '').trim() ? 'Attached' : 'Missing'}</span>
+                    )}
+                    <span>Variables: {formVariables.length}</span>
+                    <span>Body length: {String(templateForm.body || '').length}/1024</span>
+                    <span>Buttons: {(templateForm.buttons || []).length}</span>
+                  </div>
+                </section>
+              )}
+            </form>
           </div>
-        )}
-      </section>
+
+          <aside className="meta-builder-preview">
+            <MetaTemplatePreview template={previewTemplate} />
+          </aside>
+        </section>
+      )}
+
+      {templateTab === 'create' && (
+        <section className="meta-builder-footer">
+          <button type="button" onClick={closeBuilder}>Discard</button>
+          <div>
+            {builderStep !== 'setup' && <button type="button" onClick={() => setBuilderStep(builderStep === 'review' ? 'edit' : 'setup')}>Previous</button>}
+            {builderStep !== 'review' && <button type="button" className="meta-create-template-button" onClick={() => setBuilderStep(builderStep === 'setup' ? 'edit' : 'review')}>Next</button>}
+            {builderStep === 'review' && (
+              <>
+                <button type="button" onClick={onSaveTemplate}>Save draft</button>
+                <button type="button" className="meta-create-template-button" onClick={onSubmitTemplate} disabled={policyIssues.length > 0}>
+                  Submit for review
+                </button>
+              </>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
