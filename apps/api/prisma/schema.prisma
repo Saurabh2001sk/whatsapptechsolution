@@ -1,0 +1,524 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  contacts          Contact[]
+  contactTypes      ContactType[]
+  metaAccounts      TenantMetaAccount[]
+  templates         WhatsappTemplate[]
+  mediaFiles        MediaFile[]
+  campaigns         Campaign[]
+  campaignAuditLogs CampaignAuditLog[]
+  webhookEvents     WebhookEvent[]
+  subscriptions     TenantSubscription[]
+  usageRecords      TenantUsage[]
+
+  @@map("tenants")
+}
+
+model User {
+  id                       String    @id @default(uuid())
+  tenantId                 String
+  email                    String    @unique
+  passwordHash             String
+  name                     String
+  role                     String    @default("admin")
+  isActive                 Boolean   @default(true)
+  emailVerifiedAt          DateTime?
+  twoFactorEnabled         Boolean   @default(false)
+  twoFactorSecretEncrypted String?
+  twoFactorConfirmedAt     DateTime?
+  twoFactorLastUsedAt      DateTime?
+  sessionVersion           Int       @default(0)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  trustedDevices           TrustedDevice[]
+
+  tenant                   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignAuditLogs        CampaignAuditLog[]
+  passwordResetTokens      PasswordResetToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  twoFactorLoginChallenges TwoFactorLoginChallenge[]
+  twoFactorBackupCodes     TwoFactorBackupCode[]
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model TwoFactorLoginChallenge {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  failedAttempts Int       @default(0)
+  lockedAt       DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("two_factor_login_challenges")
+}
+
+model TwoFactorBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([usedAt])
+  @@map("two_factor_backup_codes")
+}
+
+model TrustedDevice {
+  id          String    @id @default(cuid())
+  userId      String
+  tokenHash   String    @unique
+  userAgent   String?
+  ipAddress   String?
+  lastUsedAt  DateTime?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@map("trusted_devices")
+}
+
+model ContactType {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  color     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts  Contact[]
+  campaigns Campaign[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("contact_types")
+}
+
+model Contact {
+  id            String    @id @default(uuid())
+  tenantId      String
+  contactTypeId String?
+  name          String
+  phone         String
+  email         String?
+  tags          String[]  @default([])
+  optedIn       Boolean   @default(false)
+  optInSource   String?
+  optInAt       DateTime?
+  optOutAt      DateTime?
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactType        ContactType?        @relation(fields: [contactTypeId], references: [id], onDelete: SetNull)
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@index([contactTypeId])
+  @@map("contacts")
+}
+
+model TenantMetaAccount {
+  id                   String    @id @default(uuid())
+  tenantId             String
+  metaAppId            String?
+  wabaId               String
+  phoneNumberId        String
+  businessName         String?
+  encryptedAccessToken String
+  tokenLastUpdatedAt   DateTime  @default(now())
+  qualityRating        String?
+  messagingLimitTier   String?
+  qualitySyncedAt      DateTime?
+  isActive             Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, wabaId])
+  @@unique([tenantId, phoneNumberId])
+  @@index([tenantId])
+  @@map("tenant_meta_accounts")
+}
+
+model WhatsappTemplate {
+  id                String    @id @default(uuid())
+  tenantId          String
+  metaTemplateId    String?
+  name              String
+  language          String
+  category          String
+  status            String    @default("DRAFT")
+  headerType        String?
+  headerText        String?
+  headerMediaFileId String?
+  metaHeaderHandle  String?
+  bodyText          String
+  footerText        String?
+  buttons           Json?
+  components        Json
+  variableCount     Int       @default(0)
+  qualityScore      String?
+  rejectedReason    String?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  headerMediaFile MediaFile? @relation(fields: [headerMediaFileId], references: [id], onDelete: SetNull)
+  campaigns       Campaign[]
+
+  @@unique([tenantId, name, language])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+  @@index([headerMediaFileId])
+  @@map("whatsapp_templates")
+}
+
+model Campaign {
+  id              String    @id @default(uuid())
+  tenantId        String
+  templateId      String
+  contactTypeId   String?
+  name            String
+  audienceType    String
+  status          String    @default("DRAFT")
+  variableValues  Json?
+  totalRecipients Int       @default(0)
+  sentCount       Int       @default(0)
+  failedCount     Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  startedAt       DateTime?
+  completedAt     DateTime?
+  scheduledAt     DateTime?
+  canceledAt      DateTime?
+  lastError       String?
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template    WhatsappTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  contactType ContactType?        @relation(fields: [contactTypeId], references: [id], onDelete: SetNull)
+  recipients  CampaignRecipient[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, status, scheduledAt])
+  @@index([templateId])
+  @@index([contactTypeId])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id              String    @id @default(uuid())
+  tenantId        String
+  campaignId      String
+  contactId       String
+  phone           String
+  status          String    @default("PENDING")
+  metaMessageId   String?
+  errorMessage    String?
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  failedAt        DateTime?
+  statusWebhookAt DateTime?
+  retryCount      Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Restrict)
+
+  @@unique([campaignId, contactId])
+  @@index([tenantId])
+  @@index([campaignId])
+  @@index([contactId])
+  @@index([tenantId, status])
+  @@index([metaMessageId])
+  @@map("campaign_recipients")
+}
+
+model CampaignAuditLog {
+  id          String   @id @default(uuid())
+  tenantId    String
+  campaignId  String?
+  actorUserId String?
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorUser User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, campaignId])
+  @@index([tenantId, action])
+  @@index([actorUserId])
+  @@map("campaign_audit_logs")
+}
+
+model WebhookEvent {
+id             String    @id @default(cuid())
+tenantId       String?
+source         String    @default("META")
+status         String    @default("RECEIVED")
+metaObject     String?
+phoneNumberId  String?
+payload        Json
+processedCount Int       @default(0)
+syncedCount    Int       @default(0)
+ignoredCount   Int       @default(0)
+replayCount    Int       @default(0)
+lastError      String?
+lastReplayedAt DateTime?
+createdAt      DateTime  @default(now())
+updatedAt      DateTime  @updatedAt
+
+tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+@@index([tenantId])
+@@index([tenantId, status])
+@@index([phoneNumberId])
+@@index([createdAt])
+@@map("webhook_events")
+}
+
+enum BillingResponsibility {
+  CUSTOMER_META_BILLING
+  PLATFORM_INVOICE
+}
+
+enum PaymentProofStatus {
+  NOT_REQUIRED
+  PENDING_PROOF
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PENDING_APPROVAL
+}
+
+model Plan {
+  id                            String   @id @default(uuid())
+  code                          String   @unique
+  name                          String
+  description                   String?
+  priceMonthlyPaise             Int      @default(0)
+  currency                      String   @default("INR")
+  monthlyCampaignRecipientLimit Int
+  monthlyCampaignLimit          Int
+  maxContacts                   Int
+  maxTeamUsers                  Int
+  maxAutomationRules            Int      @default(0)
+  mediaStorageMb                Int      @default(500)
+  supportLevel                  String   @default("standard")
+  isActive                      Boolean  @default(true)
+  requiresApproval              Boolean  @default(false)
+  sortOrder                     Int      @default(0)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  subscriptions TenantSubscription[]
+
+  @@index([isActive])
+  @@index([sortOrder])
+  @@map("plans")
+}
+
+model TenantSubscription {
+  id                      String                @id @default(uuid())
+  tenantId                String
+  planId                  String
+  status                  SubscriptionStatus    @default(TRIAL)
+  billingResponsibility   BillingResponsibility @default(CUSTOMER_META_BILLING)
+  currentPeriodStart      DateTime
+  currentPeriodEnd        DateTime
+  trialEndsAt             DateTime?
+  canceledAt              DateTime?
+  paymentProofStatus      PaymentProofStatus    @default(NOT_REQUIRED)
+  paymentReference        String?
+  paymentPayerName        String?
+  paymentAmountPaise      Int?
+  paymentProofNote        String?
+  paymentSubmittedAt      DateTime?
+  paymentVerifiedAt       DateTime?
+  paymentRejectedAt       DateTime?
+  paymentAdminNote        String?
+  paymentVerifiedByUserId String?
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([planId])
+  @@index([status])
+  @@index([paymentProofStatus])
+  @@index([currentPeriodStart, currentPeriodEnd])
+  @@map("tenant_subscriptions")
+}
+
+model TenantUsage {
+  id                        String   @id @default(uuid())
+  tenantId                  String
+  periodStart               DateTime
+  periodEnd                 DateTime
+  campaignsCreated          Int      @default(0)
+  campaignRecipientsPlanned Int      @default(0)
+  campaignRecipientsSent    Int      @default(0)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, periodStart, periodEnd])
+  @@index([tenantId])
+  @@index([periodStart, periodEnd])
+  @@map("tenant_usage")
+}
+
+model MediaFile {
+  id           String   @id @default(uuid())
+  tenantId     String
+  originalName String
+  storedName   String
+  mimeType     String
+  sizeBytes    Int
+  mediaType    String
+  storageKey   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  templateHeaderSamples WhatsappTemplate[]
+
+  @@index([tenantId])
+  @@index([tenantId, mediaType])
+  @@map("media_files")
+}
+
+model NotificationLog {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  event          String
+  channel        String   @default("email")
+  recipientEmail String
+  subject        String
+  status         String
+  error          String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([event])
+  @@index([status])
+  @@index([createdAt])
+  @@map("notification_logs")
+}
+
+model BillingAuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

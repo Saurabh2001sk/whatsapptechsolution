@@ -1,0 +1,14 @@
+{
+  "name": "whatsapp-saas-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Official Meta WhatsApp Cloud API SaaS platform",
+"scripts": {
+  "dev:api": "npm run start:dev --prefix apps/api",
+  "dev:web": "npm run dev --prefix apps/web",
+  "build:api": "npm run build --prefix apps/api",
+  "build:web": "npm run build --prefix apps/web",
+  "duplicate:sync": "node scripts/sync-duplicate.mjs",
+  "duplicate:watch": "node scripts/sync-duplicate.mjs --watch"
+}
+}

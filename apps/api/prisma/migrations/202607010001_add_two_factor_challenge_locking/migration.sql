@@ -1,0 +1,3 @@
+ALTER TABLE "two_factor_login_challenges"
+ADD COLUMN IF NOT EXISTS "failedAttempts" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS "lockedAt" TIMESTAMP(3);

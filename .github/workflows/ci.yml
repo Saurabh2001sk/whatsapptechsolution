@@ -1,0 +1,100 @@
+name: CI Security Checks
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  api-checks:
+    name: API checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Generate Prisma client
+        working-directory: apps/api
+        run: npm run db:generate
+        env:
+          DATABASE_URL: postgresql://ci_user:ci_password@localhost:5432/ci_db
+          JWT_SECRET: ci_jwt_secret_minimum_32_characters
+          TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+      - name: Build API
+        working-directory: apps/api
+        run: npm run build
+        env:
+          NODE_ENV: test
+          API_PORT: 3000
+          WEB_ORIGIN: http://localhost:5173
+          DATABASE_URL: postgresql://ci_user:ci_password@localhost:5432/ci_db
+          JWT_SECRET: ci_jwt_secret_minimum_32_characters
+          TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          REDIS_URL: ""
+
+      - name: Test API
+        working-directory: apps/api
+        run: npm run test
+        env:
+          NODE_ENV: test
+          API_PORT: 3000
+          WEB_ORIGIN: http://localhost:5173
+          DATABASE_URL: postgresql://ci_user:ci_password@localhost:5432/ci_db
+          JWT_SECRET: ci_jwt_secret_minimum_32_characters
+          TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          REDIS_URL: ""
+
+      - name: API npm audit
+        working-directory: apps/api
+        run: npm audit --audit-level=high
+
+  web-checks:
+    name: Web checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Lint Web
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Build Web
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Web npm audit
+        working-directory: apps/web
+        run: npm audit --audit-level=high

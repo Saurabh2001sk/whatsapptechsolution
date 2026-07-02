@@ -1,0 +1,33 @@
+# dependencies
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+
+# builds
+dist
+build
+apps/*/dist
+apps/*/build
+
+# env files
+.env
+.env.*
+!.env.example
+apps/*/.env
+apps/*/.env.*
+!apps/*/.env.example
+
+# logs/cache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.cache
+coverage
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+apps/api/private/
+apps/api/private/backups/
+*.dump
