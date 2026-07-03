@@ -130,11 +130,19 @@ getEmbeddedSignupStartUrl(user: AuthenticatedUser) {
     `https://www.facebook.com/${config.apiVersion}/dialog/oauth`,
   );
 
-  signupUrl.searchParams.set('client_id', config.appId);
-  signupUrl.searchParams.set('redirect_uri', config.redirectUri);
-  signupUrl.searchParams.set('response_type', 'code');
-  signupUrl.searchParams.set('config_id', config.configId);
-  signupUrl.searchParams.set('state', state);
+signupUrl.searchParams.set('client_id', config.appId);
+signupUrl.searchParams.set('redirect_uri', config.redirectUri);
+signupUrl.searchParams.set('response_type', 'code');
+signupUrl.searchParams.set('config_id', config.configId);
+signupUrl.searchParams.set(
+ 'scope',
+ [
+   'business_management',
+   'whatsapp_business_management',
+   'whatsapp_business_messaging',
+ ].join(','),
+);
+signupUrl.searchParams.set('state', state);
 
   return {
     url: signupUrl.toString(),
@@ -323,7 +331,13 @@ await this.billingService.assertSubscriptionCanUseWorkspace(
 );
 }
 
-private async findConnectedWhatsAppAccount(accessToken: string) {
+private async findConnectedWhatsAppAccount(accessToken: string): Promise<{
+businessName: string | null;
+wabaId: string;
+phoneNumberId: string;
+qualityRating: string | null;
+messagingLimitTier: string | null;
+}> {
   const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
 
   const businessesResponse = await fetch(
@@ -355,54 +369,61 @@ private async findConnectedWhatsAppAccount(accessToken: string) {
       continue;
     }
 
-    const wabaResponse = await fetch(
-      `https://graph.facebook.com/${apiVersion}/${businessId}/client_whatsapp_business_accounts?fields=id,name,phone_numbers{id,display_phone_number,verified_name,quality_rating,messaging_limit_tier}&limit=25`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
-    );
+ const wabaEdges = [
+   'client_whatsapp_business_accounts',
+   'owned_whatsapp_business_accounts',
+ ];
 
-    const wabaData = await wabaResponse.json();
+ for (const edge of wabaEdges) {
+   const wabaResponse = await fetch(
+     `https://graph.facebook.com/${apiVersion}/${businessId}/${edge}?fields=id,name,phone_numbers{id,display_phone_number,verified_name,quality_rating,messaging_limit_tier}&limit=25`,
+     {
+       headers: {
+         Authorization: `Bearer ${accessToken}`,
+       },
+     },
+   );
 
-    if (!wabaResponse.ok) {
-      continue;
-    }
+   const wabaData = await wabaResponse.json();
 
-    const wabas = Array.isArray(wabaData.data)
-      ? (wabaData.data as EmbeddedSignupWaba[])
-      : [];
+   if (!wabaResponse.ok) {
+     continue;
+   }
 
-    for (const waba of wabas) {
-      const wabaId = String(waba.id || '').trim();
-      const phones = Array.isArray(waba.phone_numbers?.data)
-        ? waba.phone_numbers.data
-        : [];
-      const phone = phones.find((item) => String(item.id || '').trim());
+   const wabas = Array.isArray(wabaData.data)
+     ? (wabaData.data as EmbeddedSignupWaba[])
+     : [];
 
-      if (!wabaId || !phone?.id) {
-        continue;
-      }
+   for (const waba of wabas) {
+     const wabaId = String(waba.id || '').trim();
+     const phones = Array.isArray(waba.phone_numbers?.data)
+       ? waba.phone_numbers.data
+       : [];
+     const phone = phones.find((item) => String(item.id || '').trim());
 
-      return {
-        businessName:
-          String(phone.verified_name || '').trim() ||
-          String(waba.name || '').trim() ||
-          String(business.name || '').trim() ||
-          null,
-        wabaId,
-        phoneNumberId: String(phone.id).trim(),
-        qualityRating: String(phone.quality_rating || '').trim() || null,
-        messagingLimitTier:
-          String(phone.messaging_limit_tier || '').trim() || null,
-      };
-    }
-  }
+     if (!wabaId || !phone?.id) {
+       continue;
+     }
 
-  throw new BadRequestException(
-    'No connected WhatsApp Business phone number was found',
-  );
+     return {
+       businessName:
+         String(phone.verified_name || '').trim() ||
+         String(waba.name || '').trim() ||
+         String(business.name || '').trim() ||
+         null,
+       wabaId,
+       phoneNumberId: String(phone.id).trim(),
+       qualityRating: String(phone.quality_rating || '').trim() || null,
+       messagingLimitTier:
+         String(phone.messaging_limit_tier || '').trim() || null,
+     };
+   }
+ }
+}
+
+throw new BadRequestException(
+ 'No connected WhatsApp Business phone number was found',
+);
 }
 
 async syncActivePhoneQuality(tenantId: string) {

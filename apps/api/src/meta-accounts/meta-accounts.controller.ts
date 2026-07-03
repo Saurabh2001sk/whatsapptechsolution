@@ -67,13 +67,25 @@ export class MetaAccountsController {
    String(state || '').trim(),
  );
 
- await this.metaAccountsService.connectFromEmbeddedSignup(
-   user.tenantId,
-   String(code || '').trim(),
- );
+ try {
+   await this.metaAccountsService.connectFromEmbeddedSignup(
+     user.tenantId,
+     String(code || '').trim(),
+   );
 
-    return response.redirect(`${frontendUrl}?whatsappConnected=1`);
-  }
+   return response.redirect(`${frontendUrl}?whatsappConnected=1`);
+ } catch (connectError) {
+   const reason =
+     connectError instanceof Error
+       ? connectError.message
+       : 'Failed to connect WhatsApp account';
+
+   return response.redirect(
+     `${frontendUrl}?whatsappConnected=0&reason=${encodeURIComponent(
+       reason,
+     )}`,
+   );
+ }  }
 
   @Get('active')
   async getActive(@Req() request: Request) {
