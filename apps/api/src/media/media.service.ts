@@ -27,9 +27,7 @@ import { PrismaService } from '../database/prisma.service';
 const MEDIA_ROOT = resolve(process.cwd(), 'private', 'media');
 const MEDIA_STORAGE_DRIVER = env.mediaStorageDriver;
 
-const MAX_MEDIA_FILE_SIZE_BYTES =
-Number.parseInt(process.env.MEDIA_MAX_FILE_SIZE_BYTES || '', 10) ||
-20 * 1024 * 1024;
+const MAX_MEDIA_FILE_SIZE_BYTES = env.mediaMaxFileSizeBytes;
 
 const ALLOWED_MIME_TYPES = new Map<string, string>([
 ['image/jpeg', 'IMAGE'],

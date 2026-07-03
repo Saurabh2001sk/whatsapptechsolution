@@ -20,25 +20,66 @@ const sensitiveKeys = [
 
 @Injectable()
 export class RedactingLogger extends ConsoleLogger {
-  log(message: unknown, context?: string) {
-    super.log(this.redact(message), context);
-  }
+log(message: unknown, context?: string) {
+ const cleanMessage = this.redact(message);
 
-  error(message: unknown, stack?: string, context?: string) {
-    super.error(this.redact(message), this.redact(stack), context);
-  }
+ if (context) {
+   super.log(cleanMessage, context);
+   return;
+ }
 
-  warn(message: unknown, context?: string) {
-    super.warn(this.redact(message), context);
-  }
+ super.log(cleanMessage);
+}
 
-  debug(message: unknown, context?: string) {
-    super.debug(this.redact(message), context);
-  }
+error(message: unknown, stack?: string, context?: string) {
+ const cleanMessage = this.redact(message);
+ const cleanStack = stack ? this.redact(stack) : undefined;
 
-  verbose(message: unknown, context?: string) {
-    super.verbose(this.redact(message), context);
-  }
+ if (context) {
+   super.error(cleanMessage, cleanStack, context);
+   return;
+ }
+
+ if (cleanStack) {
+   super.error(cleanMessage, cleanStack);
+   return;
+ }
+
+ super.error(cleanMessage);
+}
+
+warn(message: unknown, context?: string) {
+ const cleanMessage = this.redact(message);
+
+ if (context) {
+   super.warn(cleanMessage, context);
+   return;
+ }
+
+ super.warn(cleanMessage);
+}
+
+debug(message: unknown, context?: string) {
+ const cleanMessage = this.redact(message);
+
+ if (context) {
+   super.debug(cleanMessage, context);
+   return;
+ }
+
+ super.debug(cleanMessage);
+}
+
+verbose(message: unknown, context?: string) {
+ const cleanMessage = this.redact(message);
+
+ if (context) {
+   super.verbose(cleanMessage, context);
+   return;
+ }
+
+ super.verbose(cleanMessage);
+}
 
   private redact(value: unknown): string {
     if (value === undefined || value === null) {

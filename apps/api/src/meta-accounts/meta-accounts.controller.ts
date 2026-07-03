@@ -63,19 +63,14 @@ export class MetaAccountsController {
       );
     }
 
-    const user = await this.authService.requireUserFromRequest(request);
+ const user = await this.metaAccountsService.verifyEmbeddedSignupState(
+   String(state || '').trim(),
+ );
 
-    this.blockImpersonationWrites(user, 'connect WhatsApp account');
-
-    this.metaAccountsService.verifyEmbeddedSignupState(
-      String(state || '').trim(),
-      user,
-    );
-
-    await this.metaAccountsService.connectFromEmbeddedSignup(
-      user.tenantId,
-      String(code || '').trim(),
-    );
+ await this.metaAccountsService.connectFromEmbeddedSignup(
+   user.tenantId,
+   String(code || '').trim(),
+ );
 
     return response.redirect(`${frontendUrl}?whatsappConnected=1`);
   }

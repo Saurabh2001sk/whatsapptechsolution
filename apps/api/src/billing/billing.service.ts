@@ -557,22 +557,23 @@ return {
 
   private async ensureDefaultPlans() {
     const defaultPlans = [
-      {
-        code: 'trial',
-        name: 'Trial',
-        description: 'Test the platform with your own Meta WhatsApp connection.',
-        priceMonthlyPaise: 0,
-        currency: 'INR',
-        monthlyCampaignRecipientLimit: 500,
-        monthlyCampaignLimit: 5,
-        maxContacts: 1000,
-        maxTeamUsers: 1,
-        maxAutomationRules: 2,
-        mediaStorageMb: 250,
-        supportLevel: 'basic',
-        requiresApproval: false,
-        sortOrder: 1,
-      },
+{
+  code: 'trial',
+  name: 'Trial',
+  description:
+    'Test the platform with your own Meta WhatsApp connection and small team.',
+  priceMonthlyPaise: 0,
+  currency: 'INR',
+  monthlyCampaignRecipientLimit: 500,
+  monthlyCampaignLimit: 5,
+  maxContacts: 1000,
+  maxTeamUsers: 3,
+  maxAutomationRules: 2,
+  mediaStorageMb: 250,
+  supportLevel: 'basic',
+  requiresApproval: false,
+  sortOrder: 1,
+},
       {
         code: 'starter',
         name: 'Starter',
@@ -1723,17 +1724,27 @@ isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
   }
 
-  async listBillingAuditLogs() {
-  return this.prisma.billingAuditLog.findMany({
-    orderBy: {
-      createdAt: 'desc',
-    },
-    take: 100,
-  });
+async listBillingAuditLogs(tenantId?: string) {
+return this.prisma.billingAuditLog.findMany({
+ where: tenantId
+   ? {
+       tenantId,
+     }
+   : undefined,
+ orderBy: {
+   createdAt: 'desc',
+ },
+ take: 100,
+});
 }
 
-async listNotificationLogs() {
+async listNotificationLogs(tenantId?: string) {
 return this.prisma.notificationLog.findMany({
+ where: tenantId
+   ? {
+       tenantId,
+     }
+   : undefined,
  orderBy: {
    createdAt: 'desc',
  },

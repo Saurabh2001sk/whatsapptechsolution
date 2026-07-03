@@ -142,26 +142,49 @@ getEmbeddedSignupStartUrl(user: AuthenticatedUser) {
   };
 }
 
-verifyEmbeddedSignupState(state: string, user: AuthenticatedUser) {
-  if (!state) {
-    throw new UnauthorizedException('Missing Embedded Signup state');
-  }
+async verifyEmbeddedSignupState(state: string): Promise<AuthenticatedUser> {
+if (!state) {
+ throw new UnauthorizedException('Missing Embedded Signup state');
+}
 
-  try {
-    const payload = jwt.verify(state, env.jwtSecret) as EmbeddedSignupStatePayload;
+try {
+ const payload = jwt.verify(state, env.jwtSecret) as EmbeddedSignupStatePayload;
 
-    if (
-      payload.purpose !== 'embedded_signup' ||
-      payload.sub !== user.userId ||
-      payload.tenantId !== user.tenantId
-    ) {
-      throw new UnauthorizedException('Invalid Embedded Signup state');
-    }
+ if (
+   payload.purpose !== 'embedded_signup' ||
+   !payload.sub ||
+   !payload.tenantId
+ ) {
+   throw new UnauthorizedException('Invalid Embedded Signup state');
+ }
 
-    return true;
-  } catch {
-    throw new UnauthorizedException('Invalid or expired Embedded Signup state');
-  }
+ const user = await this.prisma.user.findFirst({
+   where: {
+     id: payload.sub,
+     tenantId: payload.tenantId,
+     isActive: true,
+   },
+   include: {
+     tenant: true,
+   },
+ });
+
+ if (
+   !user ||
+   user.tenant.status !== 'active' ||
+   !user.emailVerifiedAt
+ ) {
+   throw new UnauthorizedException('Invalid Embedded Signup session');
+ }
+
+ return {
+   userId: user.id,
+   tenantId: user.tenantId,
+   role: user.role,
+ };
+} catch {
+ throw new UnauthorizedException('Invalid or expired Embedded Signup state');
+}
 }
 
 async connectFromEmbeddedSignup(tenantId: string, code: string) {

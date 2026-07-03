@@ -1007,9 +1007,33 @@ async function deleteContactType(contactTypeId: string) {
     window.URL.revokeObjectURL(url)
   }
 
-  async function exportContactsCsv() {
-    window.location.href = `${API_URL}/contacts/export.csv`
-  }
+async function exportContactsCsv() {
+ try {
+   const response = await fetch(`${API_URL}/contacts/export.csv`, {
+     credentials: 'include',
+   })
+
+   if (!response.ok) {
+     throw new Error(await readApiError(response, 'Failed to export contacts'))
+   }
+
+   const blob = await response.blob()
+   const url = window.URL.createObjectURL(blob)
+   const link = document.createElement('a')
+
+   link.href = url
+   link.download = 'contacts-export.csv'
+   link.click()
+
+   window.URL.revokeObjectURL(url)
+   showToast('Contacts exported successfully', 'success')
+ } catch (error) {
+   showToast(
+     error instanceof Error ? error.message : 'Failed to export contacts',
+     'error',
+   )
+ }
+}
 
   function parseCsvLine(line: string) {
     const values: string[] = []

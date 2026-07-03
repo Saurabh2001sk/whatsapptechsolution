@@ -6,7 +6,7 @@ import { CampaignQueue } from './campaigns.queue';
 import { CampaignsService } from './campaigns.service';
 
 @Module({
-  imports: [MetaAccountsModule, BillingModule],
-  providers: [CampaignQueue, CampaignsService, CampaignsProcessor],
+imports: [MetaAccountsModule, BillingModule],
+providers: [CampaignQueue, CampaignsService, CampaignsProcessor],
 })
 export class CampaignsWorkerModule {}

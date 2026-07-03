@@ -16,6 +16,7 @@ import { memoryStorage } from 'multer';
 import { AuthService } from '../auth/auth.service';
 import type { CurrentUser } from '../auth/current-user';
 import { MediaService } from './media.service';
+import { env } from '../config/env';
 
 @Controller('media')
 export class MediaController {
@@ -35,9 +36,9 @@ export class MediaController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: {
-        fileSize: 20 * 1024 * 1024,
-      },
+   limits: {
+     fileSize: env.mediaMaxFileSizeBytes,
+   },
     }),
   )
   async uploadMedia(
