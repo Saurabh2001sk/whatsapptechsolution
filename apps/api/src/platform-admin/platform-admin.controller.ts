@@ -12,12 +12,23 @@ import { requireRole } from '../auth/require-role';
 import { env } from '../config/env';
 import { PlatformAdminService } from './platform-admin.service';
 
-const accessTokenCookieOptions: CookieOptions = {
+type RenderCookieOptions = CookieOptions & {
+  partitioned?: boolean;
+  priority?: 'low' | 'medium' | 'high';
+};
+
+const accessTokenCookieOptions: RenderCookieOptions = {
   httpOnly: true,
   secure: env.isProduction,
   sameSite: env.isProduction ? 'none' : 'lax',
   maxAge: 12 * 60 * 60 * 1000,
   path: '/',
+  ...(env.isProduction
+    ? {
+        partitioned: true,
+        priority: 'high',
+      }
+    : {}),
 };
 
 @Controller('platform-admin')

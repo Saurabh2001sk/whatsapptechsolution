@@ -12,37 +12,38 @@ import { env } from '../config/env';
 import { SecurityRateLimitService } from '../security/security-rate-limit.service';
 import { AuthService } from './auth.service';
 
-const accessTokenCookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: env.isProduction,
-  sameSite: env.isProduction ? 'none' : 'lax',
-  maxAge: 12 * 60 * 60 * 1000,
-  path: '/',
+type RenderCookieOptions = CookieOptions & {
+  partitioned?: boolean;
+  priority?: 'low' | 'medium' | 'high';
 };
 
-const clearAccessTokenCookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: env.isProduction,
-  sameSite: env.isProduction ? 'none' : 'lax',
-  path: '/',
-};
+function createCookieOptions(maxAge?: number): RenderCookieOptions {
+  return {
+    httpOnly: true,
+    secure: env.isProduction,
+    sameSite: env.isProduction ? 'none' : 'lax',
+    ...(maxAge ? { maxAge } : {}),
+    path: '/',
+    ...(env.isProduction
+      ? {
+          partitioned: true,
+          priority: 'high',
+        }
+      : {}),
+  };
+}
+
+const accessTokenCookieOptions = createCookieOptions(12 * 60 * 60 * 1000);
+
+const clearAccessTokenCookieOptions = createCookieOptions();
 
 const trustedDeviceCookieName = 'trusted_device';
 
-const trustedDeviceCookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: env.isProduction,
-  sameSite: env.isProduction ? 'none' : 'lax',
-  maxAge: 30 * 24 * 60 * 60 * 1000,
-  path: '/',
-};
+const trustedDeviceCookieOptions = createCookieOptions(
+  30 * 24 * 60 * 60 * 1000,
+);
 
-const clearTrustedDeviceCookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: env.isProduction,
-  sameSite: env.isProduction ? 'none' : 'lax',
-  path: '/',
-};
+const clearTrustedDeviceCookieOptions = createCookieOptions();
 
 @Controller('auth')
 export class AuthController {
