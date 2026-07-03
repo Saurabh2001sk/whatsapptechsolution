@@ -33,10 +33,24 @@ export class SecurityRateLimitService implements OnModuleDestroy {
 
     this.redis = redisUrl
       ? new Redis(redisUrl, {
-          maxRetriesPerRequest: 2,
+          maxRetriesPerRequest: null,
           enableReadyCheck: false,
+          lazyConnect: true,
+          retryStrategy(times) {
+            if (!env.isProduction && times > 2) {
+              return null;
+            }
+
+            return Math.min(times * 100, 2000);
+          },
         })
       : null;
+
+    this.redis?.on('error', (error) => {
+      if (env.isProduction) {
+        console.error('[redis] Rate limiter Redis error:', error.message);
+      }
+    });
   }
 
   async onModuleDestroy() {
@@ -50,7 +64,7 @@ export class SecurityRateLimitService implements OnModuleDestroy {
     const key = `security-rate:${scope}:${cleanIdentifier}`;
 
     const count = this.redis
-      ? await this.consumeRedis(key, options.windowMs)
+      ? await this.consumeRedisSafe(key, options.windowMs)
       : this.consumeMemory(key, options.windowMs);
 
     if (count > options.limit) {
@@ -71,6 +85,19 @@ export class SecurityRateLimitService implements OnModuleDestroy {
   fingerprint(value: string) {
     return createHash('sha256').update(String(value)).digest('hex');
   }
+
+    private async consumeRedisSafe(key: string, windowMs: number) {
+    try {
+      return await this.consumeRedis(key, windowMs);
+    } catch (error) {
+      if (env.isProduction) {
+        throw error;
+      }
+
+      return this.consumeMemory(key, windowMs);
+    }
+  }
+
 
   private async consumeRedis(key: string, windowMs: number) {
     if (!this.redis) {

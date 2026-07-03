@@ -8,6 +8,24 @@ import { AuditLogsPage } from './modules/audit-logs/AuditLogsPage'
 import { TeamUsersPage } from './modules/team-users/TeamUsersPage'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 8000,
+) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
 const CONTACT_IMPORT_LIMIT = 1000
 const CONTACT_IMPORT_MAX_FILE_SIZE_BYTES = 1024 * 1024
 
@@ -416,9 +434,9 @@ async function readApiError(response: Response, fallback: string) {
 
   async function loadMe() {
     try {
-      const response = await fetch(`${API_URL}/auth/me`, {
-        credentials: 'include',
-      })
+const response = await fetchWithTimeout(`${API_URL}/auth/me`, {
+  credentials: 'include',
+})
 
       if (!response.ok) {
         setAuth(null)
@@ -614,7 +632,7 @@ showToast('Account created. Please verify your email before login.')
     const form = new FormData(event.currentTarget)
 
     try {
-      const response = await fetch(`${API_URL}/auth/login`, {
+    const response = await fetchWithTimeout(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -645,7 +663,14 @@ if (data.requiresTwoFactor) {
       showToast('Logged in successfully')
     } catch (error) {
       setAuth(null)
-      showToast(error instanceof Error ? error.message : 'Login failed', 'error')
+      showToast(
+  error instanceof Error && error.name === 'AbortError'
+    ? 'API is not responding. Please make sure backend is running on port 3000.'
+    : error instanceof Error
+      ? error.message
+      : 'Login failed',
+  'error',
+)
     } finally {
       setLoading(false)
     }

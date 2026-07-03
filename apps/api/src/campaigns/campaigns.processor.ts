@@ -21,6 +21,8 @@ function getRedisConnectionOptions() {
   return {
     url: redisUrl || 'redis://localhost:6379',
     maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+    tls: redisUrl?.startsWith('rediss://') ? {} : undefined,
   };
 }
 
