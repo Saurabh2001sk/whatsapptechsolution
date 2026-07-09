@@ -205,10 +205,22 @@ return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
    window.removeEventListener('message', handleMessage)
    reject(
      new Error(
-       'Embedded Signup finished but WhatsApp account details were not returned',
+       'Embedded Signup did not return WhatsApp account details. Please try again and complete the final Finish step.',
      ),
    )
- }, 10 * 60 * 1000)
+ }, 2 * 60 * 1000)
+
+ function finishWithError(message: string) {
+   window.clearTimeout(timeout)
+   window.removeEventListener('message', handleMessage)
+   reject(new Error(message))
+ }
+
+ function finishWithSuccess(selection: EmbeddedSignupSelection) {
+   window.clearTimeout(timeout)
+   window.removeEventListener('message', handleMessage)
+   resolve(selection)
+ }
 
  function handleMessage(event: MessageEvent) {
    if (
@@ -226,8 +238,12 @@ return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
      data?: {
        waba_id?: string
        wabaId?: string
+       whatsapp_business_account_id?: string
+       whatsappBusinessAccountId?: string
        phone_number_id?: string
        phoneNumberId?: string
+       phone_number_ids?: string[]
+       phoneNumberIds?: string[]
      }
    }
 
@@ -242,32 +258,43 @@ return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
      return
    }
 
-   if (payload.event === 'CANCEL') {
-     window.clearTimeout(timeout)
-     window.removeEventListener('message', handleMessage)
-     reject(new Error('Embedded Signup was cancelled before completion'))
+   const eventName = String(payload.event || '').toUpperCase()
+
+   if (eventName === 'CANCEL') {
+     finishWithError('Embedded Signup was cancelled before completion')
      return
    }
 
-   if (payload.event !== 'FINISH') {
+   if (eventName !== 'FINISH') {
      return
    }
+
+   const data = payload.data || {}
 
    const wabaId = String(
-     payload.data?.waba_id || payload.data?.wabaId || '',
+     data.waba_id ||
+       data.wabaId ||
+       data.whatsapp_business_account_id ||
+       data.whatsappBusinessAccountId ||
+       '',
    ).trim()
+
    const phoneNumberId = String(
-     payload.data?.phone_number_id || payload.data?.phoneNumberId || '',
+     data.phone_number_id ||
+       data.phoneNumberId ||
+       data.phone_number_ids?.[0] ||
+       data.phoneNumberIds?.[0] ||
+       '',
    ).trim()
 
    if (!wabaId || !phoneNumberId) {
+     finishWithError(
+       'Meta finished signup but did not return WABA ID or Phone Number ID. Please check the Meta Login Configuration uses WhatsApp Business App Onboarding and Session Info Version 3.',
+     )
      return
    }
 
-   window.clearTimeout(timeout)
-   window.removeEventListener('message', handleMessage)
-
-   resolve({
+   finishWithSuccess({
      wabaId,
      phoneNumberId,
    })
@@ -362,6 +389,7 @@ const [embeddedSignupConfig, setEmbeddedSignupConfig] =
   useState<EmbeddedSignupConfig>(null)
 const [metaConnection, setMetaConnection] = useState<MetaConnection>(null)
 const [syncingPhoneQuality, setSyncingPhoneQuality] = useState(false)
+const [connectingWhatsApp, setConnectingWhatsApp] = useState(false)
 
   const currentPlanId = subscription?.planId || ''
 
@@ -742,6 +770,8 @@ if (!embeddedSignupConfig.appId || !embeddedSignupConfig.configId) {
  return
 }
 
+setConnectingWhatsApp(true)
+
 try {
  await loadFacebookSdk(
    embeddedSignupConfig.appId,
@@ -749,8 +779,13 @@ try {
  )
 
  const selectionPromise = waitForEmbeddedSignupSelection()
- const code = await loginWithFacebook(embeddedSignupConfig)
- const selection = await selectionPromise
+
+ const [code, selection] = await Promise.all([
+   loginWithFacebook(embeddedSignupConfig),
+   selectionPromise,
+ ])
+
+ showToast('WhatsApp account selected. Saving connection...')
 
  const response = await fetch(
    `${apiUrl}/meta-accounts/embedded-signup/complete`,
@@ -780,9 +815,11 @@ try {
  showToast(
    error instanceof Error
      ? error.message
-     : 'Failed to start Facebook Embedded Signup',
+     : 'Failed to connect WhatsApp account',
    'error',
  )
+} finally {
+ setConnectingWhatsApp(false)
 }
 }
 
@@ -1296,13 +1333,21 @@ const isPendingRequested = myPendingSubscriptions.some(
       </button>
     ) : null}
 
-    <button
-      type="button"
-      disabled={!embeddedSignupConfig?.isConfigured || !canConnectWhatsApp}
-      onClick={startEmbeddedSignup}
-    >
-      {isWhatsAppConnected ? 'Reconnect WhatsApp' : 'Connect WhatsApp'}
-    </button>
+ <button
+   type="button"
+   disabled={
+     connectingWhatsApp ||
+     !embeddedSignupConfig?.isConfigured ||
+     !canConnectWhatsApp
+   }
+   onClick={startEmbeddedSignup}
+ >
+   {connectingWhatsApp
+     ? 'Connecting...'
+     : isWhatsAppConnected
+       ? 'Reconnect WhatsApp'
+       : 'Connect WhatsApp'}
+ </button>
   </div>
 </section>
 

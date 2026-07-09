@@ -155,22 +155,6 @@ signupUrl.searchParams.set(
    'whatsapp_business_messaging',
  ].join(','),
 );
-const featureType = String(
-process.env.META_EMBEDDED_SIGNUP_FEATURE_TYPE ||
- 'whatsapp_business_app_onboarding',
-)
-.trim()
-.toLowerCase();
-
-if (featureType) {
-signupUrl.searchParams.set(
- 'extras',
- JSON.stringify({
-   featureType,
- }),
-);
-}
-
 signupUrl.searchParams.set(
 'extras',
 JSON.stringify({
@@ -179,7 +163,6 @@ JSON.stringify({
 );
 
 signupUrl.searchParams.set('state', state);
-
 return {
  url: signupUrl.toString(),
  expiresInSeconds: 600,
@@ -366,10 +349,28 @@ const accessToken = await this.exchangeEmbeddedSignupCode({
  code,
 });
 
-const selectedPhone = await this.getSelectedPhoneDetails(
+let selectedPhone: {
+businessName: string | null;
+qualityRating: string | null;
+messagingLimitTier: string | null;
+} = {
+businessName: null,
+qualityRating: null,
+messagingLimitTier: null,
+};
+
+try {
+selectedPhone = await this.getSelectedPhoneDetails(
  phoneNumberId,
  accessToken,
 );
+} catch {
+selectedPhone = {
+ businessName: String(input.businessName || '').trim() || null,
+ qualityRating: String(input.qualityRating || '').trim() || null,
+ messagingLimitTier: String(input.messagingLimitTier || '').trim() || null,
+};
+}
 
 const encryptedAccessToken = this.cryptoService.encrypt(accessToken);
 
