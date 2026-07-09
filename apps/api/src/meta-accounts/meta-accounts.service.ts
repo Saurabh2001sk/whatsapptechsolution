@@ -142,12 +142,28 @@ signupUrl.searchParams.set(
    'whatsapp_business_messaging',
  ].join(','),
 );
+const featureType = String(
+process.env.META_EMBEDDED_SIGNUP_FEATURE_TYPE ||
+ 'whatsapp_business_app_onboarding',
+)
+.trim()
+.toLowerCase();
+
+if (featureType) {
+signupUrl.searchParams.set(
+ 'extras',
+ JSON.stringify({
+   featureType,
+ }),
+);
+}
+
 signupUrl.searchParams.set('state', state);
 
-  return {
-    url: signupUrl.toString(),
-    expiresInSeconds: 600,
-  };
+return {
+ url: signupUrl.toString(),
+ expiresInSeconds: 600,
+};
 }
 
 async verifyEmbeddedSignupState(state: string): Promise<AuthenticatedUser> {
