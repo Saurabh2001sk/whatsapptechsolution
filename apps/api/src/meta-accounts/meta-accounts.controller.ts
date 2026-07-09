@@ -44,28 +44,39 @@ export class MetaAccountsController {
   }
 
   @Post('embedded-signup/complete')
-@HttpCode(200)
-async completeEmbeddedSignup(
- @Req() request: Request,
- @Body()
- body: {
-   code?: string;
-   wabaId?: string;
-   phoneNumberId?: string;
-   businessName?: string;
-   qualityRating?: string;
-   messagingLimitTier?: string;
- },
-) {
- const user = await this.authService.requireUserFromRequest(request);
+  @HttpCode(200)
+  async completeEmbeddedSignup(
+    @Req() request: Request,
+    @Body()
+    body: {
+      code?: string;
+      wabaId?: string;
+      phoneNumberId?: string;
+      businessName?: string;
+      qualityRating?: string;
+      messagingLimitTier?: string;
+    },
+  ) {
+    const user = await this.authService.requireUserFromRequest(request);
 
- this.blockImpersonationWrites(user, 'connect WhatsApp account');
+    this.blockImpersonationWrites(user, 'connect WhatsApp account');
 
- return this.metaAccountsService.connectFromEmbeddedSignupSelection(
-   user.tenantId,
-   body,
- );
-}
+    try {
+      return await this.metaAccountsService.connectFromEmbeddedSignupSelection(
+        user.tenantId,
+        body,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to complete Embedded Signup';
+
+      console.error('[meta-accounts] Embedded Signup complete failed:', message);
+
+      throw error;
+    }
+  }
 
   @Get('embedded-signup/callback')
   async handleEmbeddedSignupCallback(
