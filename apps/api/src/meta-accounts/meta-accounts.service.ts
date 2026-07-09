@@ -332,21 +332,17 @@ await this.assertTenantCanConnectWhatsApp(tenantId);
 
 const appId = String(process.env.META_APP_ID || '').trim();
 const appSecret = String(process.env.META_APP_SECRET || '').trim();
-const redirectUri = String(
- process.env.META_EMBEDDED_SIGNUP_REDIRECT_URI || '',
-).trim();
 
-if (!appId || !appSecret || !redirectUri) {
- throw new BadRequestException(
-   'Meta Embedded Signup backend configuration is incomplete',
- );
+if (!appId || !appSecret) {
+  throw new BadRequestException(
+    'Meta Embedded Signup backend configuration is incomplete',
+  );
 }
 
 const accessToken = await this.exchangeEmbeddedSignupCode({
- appId,
- appSecret,
- redirectUri,
- code,
+  appId,
+  appSecret,
+  code,
 });
 
 let selectedPhone: {
@@ -447,10 +443,10 @@ return {
 }
 
 private async exchangeEmbeddedSignupCode(input: {
-  appId: string;
-  appSecret: string;
-  redirectUri: string;
-  code: string;
+appId: string;
+appSecret: string;
+redirectUri?: string;
+code: string;
 }) {
   const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
   const url = new URL(
@@ -459,18 +455,30 @@ private async exchangeEmbeddedSignupCode(input: {
 
   url.searchParams.set('client_id', input.appId);
   url.searchParams.set('client_secret', input.appSecret);
-  url.searchParams.set('redirect_uri', input.redirectUri);
+  if (input.redirectUri) {
+ url.searchParams.set('redirect_uri', input.redirectUri);
+}
   url.searchParams.set('code', input.code);
 
   const response = await fetch(url.toString());
   const data = await response.json();
 
-  if (!response.ok) {
-    throw new BadRequestException({
-      message: 'Failed to exchange Facebook authorization code',
-      metaError: data,
-    });
-  }
+if (!response.ok) {
+ const metaError = data?.error as
+   | {
+       message?: string;
+       type?: string;
+       code?: number;
+       error_subcode?: number;
+       fbtrace_id?: string;
+     }
+   | undefined;
+
+ throw new BadRequestException(
+   metaError?.message ||
+     'Failed to exchange Facebook authorization code',
+ );
+}
 
   const accessToken = String(data.access_token || '').trim();
 
