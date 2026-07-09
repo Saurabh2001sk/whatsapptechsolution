@@ -199,7 +199,7 @@ return new Promise<void>((resolve, reject) => {
 })
 }
 
-function waitForEmbeddedSignupSelection() {
+function waitForEmbeddedSignupSelection(onDebug: (message: string) => void) {
 return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
  const timeout = window.setTimeout(() => {
    window.removeEventListener('message', handleMessage)
@@ -254,11 +254,12 @@ return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
      return
    }
 
-   if (payload?.type !== 'WA_EMBEDDED_SIGNUP') {
-     return
-   }
+if (payload?.type !== 'WA_EMBEDDED_SIGNUP') {
+  return
+}
 
-   const eventName = String(payload.event || '').toUpperCase()
+const eventName = String(payload.event || '').toUpperCase()
+onDebug(`Meta event received: ${eventName}`)
 
    if (eventName === 'CANCEL') {
      finishWithError('Embedded Signup was cancelled before completion')
@@ -287,17 +288,19 @@ return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
        '',
    ).trim()
 
-   if (!wabaId || !phoneNumberId) {
-     finishWithError(
-       'Meta finished signup but did not return WABA ID or Phone Number ID. Please check the Meta Login Configuration uses WhatsApp Business App Onboarding and Session Info Version 3.',
-     )
-     return
-   }
+if (!wabaId || !phoneNumberId) {
+  finishWithError(
+    'Meta finished signup but did not return WABA ID or Phone Number ID. Please check the Meta Login Configuration uses WhatsApp Business App Onboarding and Session Info Version 3.',
+  )
+  return
+}
 
-   finishWithSuccess({
-     wabaId,
-     phoneNumberId,
-   })
+onDebug('Meta returned WABA ID and Phone Number ID.')
+
+finishWithSuccess({
+  wabaId,
+  phoneNumberId,
+})
  }
 
  window.addEventListener('message', handleMessage)
@@ -390,6 +393,7 @@ const [embeddedSignupConfig, setEmbeddedSignupConfig] =
 const [metaConnection, setMetaConnection] = useState<MetaConnection>(null)
 const [syncingPhoneQuality, setSyncingPhoneQuality] = useState(false)
 const [connectingWhatsApp, setConnectingWhatsApp] = useState(false)
+const [connectionDebugMessage, setConnectionDebugMessage] = useState('')
 
   const currentPlanId = subscription?.planId || ''
 
@@ -758,68 +762,76 @@ async function syncPhoneQuality() {
 
 async function startEmbeddedSignup() {
 if (!embeddedSignupConfig?.isConfigured) {
- showToast(
-   'Facebook Embedded Signup is not configured yet. Please ask platform admin to configure Meta App ID, Config ID, and Redirect URI.',
-   'error',
- )
- return
+showToast(
+'Facebook Embedded Signup is not configured yet. Please ask platform admin to configure Meta App ID, Config ID, and Redirect URI.',
+'error',
+)
+return
 }
 
 if (!embeddedSignupConfig.appId || !embeddedSignupConfig.configId) {
- showToast('Meta App ID or Config ID is missing', 'error')
- return
+showToast('Meta App ID or Config ID is missing', 'error')
+return
 }
 
 setConnectingWhatsApp(true)
+setConnectionDebugMessage('Opening Facebook Embedded Signup...')
 
 try {
- await loadFacebookSdk(
-   embeddedSignupConfig.appId,
-   embeddedSignupConfig.apiVersion,
- )
+await loadFacebookSdk(
+embeddedSignupConfig.appId,
+embeddedSignupConfig.apiVersion,
+)
 
- const selectionPromise = waitForEmbeddedSignupSelection()
+setConnectionDebugMessage('Waiting for Meta account selection...')
 
- const [code, selection] = await Promise.all([
-   loginWithFacebook(embeddedSignupConfig),
-   selectionPromise,
- ])
+const selectionPromise = waitForEmbeddedSignupSelection(
+setConnectionDebugMessage,
+)
 
- showToast('WhatsApp account selected. Saving connection...')
+const [code, selection] = await Promise.all([
+loginWithFacebook(embeddedSignupConfig),
+selectionPromise,
+])
 
- const response = await fetch(
-   `${apiUrl}/meta-accounts/embedded-signup/complete`,
-   {
-     method: 'POST',
-     headers: {
-       'Content-Type': 'application/json',
-     },
-     credentials: 'include',
-     body: JSON.stringify({
-       code,
-       wabaId: selection.wabaId,
-       phoneNumberId: selection.phoneNumberId,
-     }),
-   },
- )
+setConnectionDebugMessage('Meta account selected. Saving connection...')
+showToast('WhatsApp account selected. Saving connection...')
 
- if (!response.ok) {
-   throw new Error(
-     await readApiError(response, 'Failed to connect WhatsApp account'),
-   )
- }
+const response = await fetch(
+`${apiUrl}/meta-accounts/embedded-signup/complete`,
+{
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  credentials: 'include',
+  body: JSON.stringify({
+    code,
+    wabaId: selection.wabaId,
+    phoneNumberId: selection.phoneNumberId,
+  }),
+},
+)
 
- await loadBilling()
- showToast('WhatsApp connected successfully')
+if (!response.ok) {
+throw new Error(
+  await readApiError(response, 'Failed to connect WhatsApp account'),
+)
+}
+
+await loadBilling()
+setConnectionDebugMessage('WhatsApp connected and saved.')
+showToast('WhatsApp connected successfully')
 } catch (error) {
- showToast(
-   error instanceof Error
-     ? error.message
-     : 'Failed to connect WhatsApp account',
-   'error',
- )
+const message =
+error instanceof Error
+  ? error.message
+  : 'Failed to connect WhatsApp account'
+
+setConnectionDebugMessage(message)
+showToast(message, 'error')
 } finally {
- setConnectingWhatsApp(false)
+setConnectingWhatsApp(false)
 }
 }
 
@@ -1333,22 +1345,29 @@ const isPendingRequested = myPendingSubscriptions.some(
       </button>
     ) : null}
 
- <button
-   type="button"
-   disabled={
-     connectingWhatsApp ||
-     !embeddedSignupConfig?.isConfigured ||
-     !canConnectWhatsApp
-   }
-   onClick={startEmbeddedSignup}
- >
-   {connectingWhatsApp
-     ? 'Connecting...'
-     : isWhatsAppConnected
-       ? 'Reconnect WhatsApp'
-       : 'Connect WhatsApp'}
- </button>
-  </div>
+<button
+type="button"
+disabled={
+  connectingWhatsApp ||
+  !embeddedSignupConfig?.isConfigured ||
+  !canConnectWhatsApp
+}
+onClick={startEmbeddedSignup}
+>
+{connectingWhatsApp
+  ? 'Connecting...'
+  : isWhatsAppConnected
+    ? 'Reconnect WhatsApp'
+    : 'Connect WhatsApp'}
+</button>
+
+ {connectionDebugMessage ? (
+   <div className="billing-connect-warning">
+     <strong>Connection status</strong>
+     <span>{connectionDebugMessage}</span>
+   </div>
+ ) : null}
+</div>
 </section>
 
       {activePlan ? (
