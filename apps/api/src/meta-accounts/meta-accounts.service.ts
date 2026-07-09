@@ -73,6 +73,15 @@ type EmbeddedSignupStatePayload = {
   purpose: 'embedded_signup';
 };
 
+type EmbeddedSignupSelectionInput = {
+code?: string;
+wabaId?: string;
+phoneNumberId?: string;
+businessName?: string;
+qualityRating?: string;
+messagingLimitTier?: string;
+};
+
 @Injectable()
 export class MetaAccountsService {
 constructor(
@@ -88,7 +97,10 @@ getEmbeddedSignupConfig() {
     process.env.META_EMBEDDED_SIGNUP_REDIRECT_URI || '',
   ).trim();
   const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
-
+const featureType = String(
+ process.env.META_EMBEDDED_SIGNUP_FEATURE_TYPE ||
+   'whatsapp_business_app_onboarding',
+).trim();
   const isConfigured = Boolean(appId && configId && redirectUri);
 
   return {
@@ -97,6 +109,7 @@ getEmbeddedSignupConfig() {
     configId: isConfigured ? configId : null,
     redirectUri: isConfigured ? redirectUri : null,
     apiVersion,
+    featureType,
     missing: {
       appId: !appId,
       configId: !configId,
@@ -157,6 +170,13 @@ signupUrl.searchParams.set(
  }),
 );
 }
+
+signupUrl.searchParams.set(
+'extras',
+JSON.stringify({
+ featureType: config.featureType,
+}),
+);
 
 signupUrl.searchParams.set('state', state);
 
@@ -305,6 +325,126 @@ async connectFromEmbeddedSignup(tenantId: string, code: string) {
   };
 }
 
+async connectFromEmbeddedSignupSelection(
+tenantId: string,
+input: EmbeddedSignupSelectionInput,
+) {
+const code = String(input.code || '').trim();
+const wabaId = String(input.wabaId || '').trim();
+const phoneNumberId = String(input.phoneNumberId || '').trim();
+
+if (!code) {
+ throw new BadRequestException('Facebook authorization code is required');
+}
+
+if (!wabaId) {
+ throw new BadRequestException('WhatsApp Business Account ID is required');
+}
+
+if (!phoneNumberId) {
+ throw new BadRequestException('WhatsApp phone number ID is required');
+}
+
+await this.assertTenantCanConnectWhatsApp(tenantId);
+
+const appId = String(process.env.META_APP_ID || '').trim();
+const appSecret = String(process.env.META_APP_SECRET || '').trim();
+const redirectUri = String(
+ process.env.META_EMBEDDED_SIGNUP_REDIRECT_URI || '',
+).trim();
+
+if (!appId || !appSecret || !redirectUri) {
+ throw new BadRequestException(
+   'Meta Embedded Signup backend configuration is incomplete',
+ );
+}
+
+const accessToken = await this.exchangeEmbeddedSignupCode({
+ appId,
+ appSecret,
+ redirectUri,
+ code,
+});
+
+const selectedPhone = await this.getSelectedPhoneDetails(
+ phoneNumberId,
+ accessToken,
+);
+
+const encryptedAccessToken = this.cryptoService.encrypt(accessToken);
+
+await this.prisma.tenantMetaAccount.updateMany({
+ where: {
+   tenantId,
+   isActive: true,
+ },
+ data: {
+   isActive: false,
+ },
+});
+
+const account = await this.prisma.tenantMetaAccount.upsert({
+ where: {
+   tenantId_wabaId: {
+     tenantId,
+     wabaId,
+   },
+ },
+ update: {
+   metaAppId: appId,
+   phoneNumberId,
+   businessName:
+     String(input.businessName || '').trim() ||
+     selectedPhone.businessName ||
+     null,
+   encryptedAccessToken,
+   tokenLastUpdatedAt: new Date(),
+   qualityRating:
+     String(input.qualityRating || '').trim() ||
+     selectedPhone.qualityRating,
+   messagingLimitTier:
+     String(input.messagingLimitTier || '').trim() ||
+     selectedPhone.messagingLimitTier,
+   qualitySyncedAt: new Date(),
+   isActive: true,
+ },
+ create: {
+   tenantId,
+   metaAppId: appId,
+   wabaId,
+   phoneNumberId,
+   businessName:
+     String(input.businessName || '').trim() ||
+     selectedPhone.businessName ||
+     null,
+   encryptedAccessToken,
+   tokenLastUpdatedAt: new Date(),
+   qualityRating:
+     String(input.qualityRating || '').trim() ||
+     selectedPhone.qualityRating,
+   messagingLimitTier:
+     String(input.messagingLimitTier || '').trim() ||
+     selectedPhone.messagingLimitTier,
+   qualitySyncedAt: new Date(),
+   isActive: true,
+ },
+});
+
+return {
+ connected: true,
+ account: {
+   id: account.id,
+   metaAppId: account.metaAppId,
+   wabaId: account.wabaId,
+   phoneNumberId: account.phoneNumberId,
+   businessName: account.businessName,
+   qualityRating: account.qualityRating,
+   messagingLimitTier: account.messagingLimitTier,
+   isActive: account.isActive,
+ },
+};
+}
+
 private async exchangeEmbeddedSignupCode(input: {
   appId: string;
   appSecret: string;
@@ -345,6 +485,44 @@ await this.billingService.assertSubscriptionCanUseWorkspace(
  tenantId,
  'connecting WhatsApp',
 );
+}
+
+private async getSelectedPhoneDetails(phoneNumberId: string, accessToken: string) {
+const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
+
+const response = await fetch(
+ `https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,messaging_limit_tier`,
+ {
+   headers: {
+     Authorization: `Bearer ${accessToken}`,
+   },
+ },
+);
+
+const data: {
+ verified_name?: string;
+ display_phone_number?: string;
+ quality_rating?: string;
+ messaging_limit_tier?: string;
+ error?: unknown;
+} = await response.json();
+
+if (!response.ok) {
+ throw new BadRequestException({
+   message: 'Failed to verify selected WhatsApp phone number',
+   metaError: data,
+ });
+}
+
+return {
+ businessName:
+   String(data.verified_name || '').trim() ||
+   String(data.display_phone_number || '').trim() ||
+   null,
+ qualityRating: String(data.quality_rating || '').trim() || null,
+ messagingLimitTier:
+   String(data.messaging_limit_tier || '').trim() || null,
+};
 }
 
 private async findConnectedWhatsAppAccount(accessToken: string): Promise<{

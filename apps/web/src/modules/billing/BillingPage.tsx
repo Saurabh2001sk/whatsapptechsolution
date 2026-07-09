@@ -111,6 +111,7 @@ type EmbeddedSignupConfig = {
   configId: string | null
   redirectUri: string | null
   apiVersion: string
+  featureType: string
   missing: {
     appId: boolean
     configId: boolean
@@ -135,6 +136,179 @@ type MetaConnection = {
   } | null
 } | null
 
+type FacebookLoginResponse = {
+authResponse?: {
+ code?: string
+}
+status?: string
+}
+
+type EmbeddedSignupSelection = {
+wabaId: string
+phoneNumberId: string
+}
+
+declare global {
+interface Window {
+ FB?: {
+   init: (options: Record<string, unknown>) => void
+   login: (
+     callback: (response: FacebookLoginResponse) => void,
+     options: Record<string, unknown>,
+   ) => void
+ }
+ fbAsyncInit?: () => void
+}
+}
+
+function loadFacebookSdk(appId: string, apiVersion: string) {
+return new Promise<void>((resolve, reject) => {
+ if (window.FB) {
+   window.FB.init({
+     appId,
+     cookie: true,
+     xfbml: false,
+     version: apiVersion,
+   })
+   resolve()
+   return
+ }
+
+ window.fbAsyncInit = () => {
+   window.FB?.init({
+     appId,
+     cookie: true,
+     xfbml: false,
+     version: apiVersion,
+   })
+   resolve()
+ }
+
+ if (document.getElementById('facebook-jssdk')) {
+   return
+ }
+
+ const script = document.createElement('script')
+ script.id = 'facebook-jssdk'
+ script.src = 'https://connect.facebook.net/en_US/sdk.js'
+ script.async = true
+ script.defer = true
+ script.onerror = () => reject(new Error('Failed to load Facebook SDK'))
+
+ document.body.appendChild(script)
+})
+}
+
+function waitForEmbeddedSignupSelection() {
+return new Promise<EmbeddedSignupSelection>((resolve, reject) => {
+ const timeout = window.setTimeout(() => {
+   window.removeEventListener('message', handleMessage)
+   reject(
+     new Error(
+       'Embedded Signup finished but WhatsApp account details were not returned',
+     ),
+   )
+ }, 10 * 60 * 1000)
+
+ function handleMessage(event: MessageEvent) {
+   if (
+     ![
+       'https://www.facebook.com',
+       'https://web.facebook.com',
+     ].includes(event.origin)
+   ) {
+     return
+   }
+
+   let payload: {
+     type?: string
+     event?: string
+     data?: {
+       waba_id?: string
+       wabaId?: string
+       phone_number_id?: string
+       phoneNumberId?: string
+     }
+   }
+
+   try {
+     payload =
+       typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+   } catch {
+     return
+   }
+
+   if (payload?.type !== 'WA_EMBEDDED_SIGNUP') {
+     return
+   }
+
+   if (payload.event === 'CANCEL') {
+     window.clearTimeout(timeout)
+     window.removeEventListener('message', handleMessage)
+     reject(new Error('Embedded Signup was cancelled before completion'))
+     return
+   }
+
+   if (payload.event !== 'FINISH') {
+     return
+   }
+
+   const wabaId = String(
+     payload.data?.waba_id || payload.data?.wabaId || '',
+   ).trim()
+   const phoneNumberId = String(
+     payload.data?.phone_number_id || payload.data?.phoneNumberId || '',
+   ).trim()
+
+   if (!wabaId || !phoneNumberId) {
+     return
+   }
+
+   window.clearTimeout(timeout)
+   window.removeEventListener('message', handleMessage)
+
+   resolve({
+     wabaId,
+     phoneNumberId,
+   })
+ }
+
+ window.addEventListener('message', handleMessage)
+})
+}
+
+function loginWithFacebook(config: NonNullable<EmbeddedSignupConfig>) {
+return new Promise<string>((resolve, reject) => {
+ if (!window.FB || !config.appId || !config.configId) {
+   reject(new Error('Facebook SDK is not ready'))
+   return
+ }
+
+ window.FB.login(
+   (response) => {
+     const code = String(response.authResponse?.code || '').trim()
+
+     if (!code) {
+       reject(new Error('Facebook did not return authorization code'))
+       return
+     }
+
+     resolve(code)
+   },
+   {
+     config_id: config.configId,
+     response_type: 'code',
+     override_default_response_type: true,
+     scope:
+       'business_management,whatsapp_business_management,whatsapp_business_messaging',
+     extras: JSON.stringify({
+       featureType:
+         config.featureType || 'whatsapp_business_app_onboarding',
+     }),
+   },
+ )
+})
+}
 
 function formatMoney(priceMonthlyPaise: number, currency: string) {
   if (priceMonthlyPaise === 0) {
@@ -555,42 +729,61 @@ async function syncPhoneQuality() {
 }
 
 async function startEmbeddedSignup() {
-  if (!embeddedSignupConfig?.isConfigured) {
-    showToast(
-      'Facebook Embedded Signup is not configured yet. Please ask platform admin to configure Meta App ID, Config ID, and Redirect URI.',
-      'error',
-    )
-    return
-  }
+if (!embeddedSignupConfig?.isConfigured) {
+ showToast(
+   'Facebook Embedded Signup is not configured yet. Please ask platform admin to configure Meta App ID, Config ID, and Redirect URI.',
+   'error',
+ )
+ return
+}
 
-  try {
-    const response = await fetch(`${apiUrl}/meta-accounts/embedded-signup/start`, {
-      credentials: 'include',
-    })
+if (!embeddedSignupConfig.appId || !embeddedSignupConfig.configId) {
+ showToast('Meta App ID or Config ID is missing', 'error')
+ return
+}
 
-    if (!response.ok) {
-      throw new Error(
-        await readApiError(response, 'Failed to start Facebook Embedded Signup'),
-      )
-    }
+try {
+ await loadFacebookSdk(
+   embeddedSignupConfig.appId,
+   embeddedSignupConfig.apiVersion,
+ )
 
-    const data = (await response.json()) as {
-      url?: string
-    }
+ const selectionPromise = waitForEmbeddedSignupSelection()
+ const code = await loginWithFacebook(embeddedSignupConfig)
+ const selection = await selectionPromise
 
-    if (!data.url) {
-      throw new Error('Facebook Embedded Signup URL was not created')
-    }
+ const response = await fetch(
+   `${apiUrl}/meta-accounts/embedded-signup/complete`,
+   {
+     method: 'POST',
+     headers: {
+       'Content-Type': 'application/json',
+     },
+     credentials: 'include',
+     body: JSON.stringify({
+       code,
+       wabaId: selection.wabaId,
+       phoneNumberId: selection.phoneNumberId,
+     }),
+   },
+ )
 
-    window.location.href = data.url
-  } catch (error) {
-    showToast(
-      error instanceof Error
-        ? error.message
-        : 'Failed to start Facebook Embedded Signup',
-      'error',
-    )
-  }
+ if (!response.ok) {
+   throw new Error(
+     await readApiError(response, 'Failed to connect WhatsApp account'),
+   )
+ }
+
+ await loadBilling()
+ showToast('WhatsApp connected successfully')
+} catch (error) {
+ showToast(
+   error instanceof Error
+     ? error.message
+     : 'Failed to start Facebook Embedded Signup',
+   'error',
+ )
+}
 }
 
 useEffect(() => {

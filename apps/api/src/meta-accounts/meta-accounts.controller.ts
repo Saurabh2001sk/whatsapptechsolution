@@ -3,6 +3,7 @@ Body,
 Controller,
 ForbiddenException,
 Get,
+HttpCode,
 Param,
 Post,
 Query,
@@ -41,6 +42,30 @@ export class MetaAccountsController {
 
     return this.metaAccountsService.getEmbeddedSignupStartUrl(user);
   }
+
+  @Post('embedded-signup/complete')
+@HttpCode(200)
+async completeEmbeddedSignup(
+ @Req() request: Request,
+ @Body()
+ body: {
+   code?: string;
+   wabaId?: string;
+   phoneNumberId?: string;
+   businessName?: string;
+   qualityRating?: string;
+   messagingLimitTier?: string;
+ },
+) {
+ const user = await this.authService.requireUserFromRequest(request);
+
+ this.blockImpersonationWrites(user, 'connect WhatsApp account');
+
+ return this.metaAccountsService.connectFromEmbeddedSignupSelection(
+   user.tenantId,
+   body,
+ );
+}
 
   @Get('embedded-signup/callback')
   async handleEmbeddedSignupCallback(
