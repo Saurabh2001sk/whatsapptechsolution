@@ -266,7 +266,10 @@ onDebug(`Meta event received: ${eventName}`)
      return
    }
 
-   if (eventName !== 'FINISH') {
+   if (
+     eventName !== 'FINISH' &&
+     eventName !== 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'
+   ) {
      return
    }
 
@@ -288,12 +291,12 @@ onDebug(`Meta event received: ${eventName}`)
        '',
    ).trim()
 
-if (!wabaId || !phoneNumberId) {
-  finishWithError(
-    'Meta finished signup but did not return WABA ID or Phone Number ID. Please check the Meta Login Configuration uses WhatsApp Business App Onboarding and Session Info Version 3.',
-  )
-  return
-}
+   if (!wabaId || !phoneNumberId) {
+     finishWithError(
+       'Meta finished signup but did not return WABA ID or Phone Number ID. In Meta Login Configuration, confirm Session Info Version is 3 and the selected feature is WhatsApp Business App Onboarding.',
+     )
+     return
+   }
 
 onDebug('Meta returned WABA ID and Phone Number ID.')
 
