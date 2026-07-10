@@ -1289,15 +1289,19 @@ async deleteTemplate(tenantId: string, templateId: string) {
   }
 
 private cleanAdvancedComponents(value: unknown) {
- if (value === undefined || value === null || value === '') {
-   return [];
- }
+if (value === undefined || value === null || value === '') {
+return [];
+}
 
- if (!Array.isArray(value)) {
-   throw new BadRequestException('Advanced components must be an array');
- }
+if (!Array.isArray(value)) {
+throw new BadRequestException('Advanced components must be an array');
+}
 
- const jsonText = JSON.stringify(value);
+if (value.length === 0) {
+return [];
+}
+
+const jsonText = JSON.stringify(value);
 
  if (jsonText.length > 25000) {
    throw new BadRequestException('Advanced components JSON is too large');
