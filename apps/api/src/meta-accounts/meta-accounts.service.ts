@@ -842,7 +842,7 @@ const webhookEvent = await this.prisma.webhookEvent.create({
 });
 
 try {
- const result = await this.processWebhookBody(body);
+ const result = await this.processWebhookBody(body, tenantId);
 
  await this.prisma.webhookEvent.update({
    where: {
@@ -954,7 +954,7 @@ if (!webhookEvent) {
 const body = webhookEvent.payload as MetaWebhookBody;
 
 try {
- const result = await this.processWebhookBody(body);
+const result = await this.processWebhookBody(body, tenantId);
 
  await this.prisma.webhookEvent.update({
    where: {
@@ -999,7 +999,7 @@ replayed: true,
 }
 }
 
-private async processWebhookBody(body: MetaWebhookBody) {
+private async processWebhookBody(body: MetaWebhookBody, tenantId?: string | null) {
 const statusEvents = this.extractStatusEvents(body);
 
 if (statusEvents.length === 0) {
@@ -1016,7 +1016,10 @@ let synced = 0;
 let ignoredCount = 0;
 
 for (const statusEvent of statusEvents) {
- const result = await this.syncCampaignRecipientDeliveryStatus(statusEvent);
+const result = await this.syncCampaignRecipientDeliveryStatus(
+statusEvent,
+tenantId,
+);
 
  if (result.synced) {
    synced += 1;
@@ -1163,19 +1166,30 @@ private getWebhookErrorMessage(status: MetaWebhookStatus) {
  );
 }
 
-private async syncCampaignRecipientDeliveryStatus(input: {
- messageId: string;
- status: string;
- timestamp?: string;
- errorMessage?: string;
-}) {
- const eventAt = this.parseWebhookTimestamp(input.timestamp);
+private async syncCampaignRecipientDeliveryStatus(
+input: {
+messageId: string;
+status: string;
+timestamp?: string;
+errorMessage?: string;
+},
+tenantId?: string | null,
+) {
+const eventAt = this.parseWebhookTimestamp(input.timestamp);
 
- const recipient = await this.prisma.campaignRecipient.findFirst({
-   where: {
-     metaMessageId: input.messageId,
-   },
- });
+if (!tenantId) {
+return {
+  synced: false,
+  reason: 'Tenant was not resolved from webhook phone number',
+};
+}
+
+const recipient = await this.prisma.campaignRecipient.findFirst({
+where: {
+  tenantId,
+  metaMessageId: input.messageId,
+},
+});
 
  if (!recipient) {
    return {

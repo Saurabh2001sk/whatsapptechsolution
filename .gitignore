@@ -31,3 +31,11 @@ Thumbs.db
 apps/api/private/
 apps/api/private/backups/
 *.dump
+apps/*/.vite
+*.backup
+*.sql.gz
+
+apps/api/private/media/
+private/
+uploads/
+media/

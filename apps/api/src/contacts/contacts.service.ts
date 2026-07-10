@@ -685,13 +685,14 @@ async importContacts(tenantId: string, rows: ContactImportRow[]) {
       .slice(0, 20);
   }
 
-  private escapeCsvValue(value: string) {
-    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
+private escapeCsvValue(value: string) {
+ const rawValue = String(value ?? '');
+ const safeValue = /^[=+\-@\t\r]/.test(rawValue)
+   ? `'${rawValue}`
+   : rawValue;
 
-    return value;
-  }
+ return `"${safeValue.replace(/"/g, '""')}"`;
+}
 
   private async ensureContactTypeBelongsToTenant(
     tenantId: string,
