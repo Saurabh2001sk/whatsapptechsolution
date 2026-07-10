@@ -2106,15 +2106,26 @@ const createdTemplate = await response.json()
 let finalTemplate = createdTemplate
 
 if (templateNeedsHeaderMedia(headerType) && templateHeaderSampleFile) {
-  const { uploadedMedia, updatedTemplate } =
-    await uploadTemplateHeaderMediaSample(createdTemplate, templateHeaderSampleFile)
+try {
+ const { uploadedMedia, updatedTemplate } =
+   await uploadTemplateHeaderMediaSample(
+     createdTemplate,
+     templateHeaderSampleFile,
+   )
 
-  finalTemplate = updatedTemplate
+ finalTemplate = updatedTemplate
 
-  setMediaFiles((currentFiles) => [
-    uploadedMedia,
-    ...currentFiles.filter((mediaFile) => mediaFile.id !== uploadedMedia.id),
-  ])
+ setMediaFiles((currentFiles) => [
+   uploadedMedia,
+   ...currentFiles.filter((mediaFile) => mediaFile.id !== uploadedMedia.id),
+ ])
+} catch (error) {
+ throw new Error(
+   error instanceof Error
+     ? error.message
+     : 'Template draft created, but media upload failed',
+ )
+}
 }
 
 setTemplates((currentTemplates) => [
@@ -2143,9 +2154,12 @@ showToast(
     ? 'Template draft created and media sample uploaded'
     : 'Template draft created successfully',
 )
-  } catch {
-    showToast('Failed to create template', 'error')
-  }
+} catch (error) {
+ showToast(
+   error instanceof Error ? error.message : 'Failed to create template',
+   'error',
+ )
+}
 }
 
 async function syncTemplatesFromMeta() {
