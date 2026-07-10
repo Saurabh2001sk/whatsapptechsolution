@@ -8,6 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { MetaAccountsService } from '../meta-accounts/meta-accounts.service';
 import { BillingService } from '../billing/billing.service';
 import { CampaignQueue } from './campaigns.queue';
+import { MediaService } from '../media/media.service';
 
 type CreateCampaignInput = {
 name?: string;
@@ -53,12 +54,13 @@ export class CampaignsService {
   private readonly maxRecipientRetryCount =
     Number.parseInt(process.env.CAMPAIGN_MAX_RECIPIENT_RETRIES || '3', 10) || 3;
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly metaAccountsService: MetaAccountsService,
-    private readonly campaignQueue: CampaignQueue,
-    private readonly billingService: BillingService,
-  ) {}
+constructor(
+ private readonly prisma: PrismaService,
+ private readonly metaAccountsService: MetaAccountsService,
+ private readonly campaignQueue: CampaignQueue,
+ private readonly billingService: BillingService,
+ private readonly mediaService: MediaService,
+) {}
 
   listCampaigns(tenantId: string) {
     return this.prisma.campaign.findMany({
@@ -1111,6 +1113,14 @@ const campaign = await this.prisma.campaign.findFirst({
     accessToken: connection.accessToken,
   });
 
+  const headerMediaId = await this.uploadCampaignHeaderMediaIfNeeded({
+ tenantId: input.tenantId,
+ phoneNumberId: connection.phoneNumberId,
+ accessToken: connection.accessToken,
+ headerType: template.headerType,
+ headerMediaFileId: template.headerMediaFileId,
+});
+
   const retryResult = await this.prisma.campaignRecipient.updateMany({
     where: {
       tenantId: input.tenantId,
@@ -1240,15 +1250,17 @@ const campaign = await this.prisma.campaign.findFirst({
 
     try {
 const metaMessageId = await this.sendTemplateMessage({
-  phoneNumberId: connection.phoneNumberId,
-  accessToken: connection.accessToken,
-  to: recipient.phone,
-  templateName: template.name,
-  language: template.language,
-  headerText: template.headerText,
-  bodyText: template.bodyText,
-  components: template.components,
-  variableValues,
+phoneNumberId: connection.phoneNumberId,
+accessToken: connection.accessToken,
+to: recipient.phone,
+templateName: template.name,
+language: template.language,
+headerType: template.headerType,
+headerText: template.headerText,
+bodyText: template.bodyText,
+components: template.components,
+variableValues,
+headerMediaId,
 });
 
       const retryResult = await this.prisma.campaignRecipient.updateMany({
@@ -1917,22 +1929,25 @@ private parseWebhookTimestamp(value: unknown) {
 
   private validateTemplateForCampaign(
     template: {
-      headerType: string | null;
-      headerText: string | null;
-      bodyText: string;
-      variableCount: number;
-      components: Prisma.JsonValue;
+   headerType: string | null;
+   headerText: string | null;
+   headerMediaFileId?: string | null;
+   bodyText: string;
+   variableCount: number;
+   components: Prisma.JsonValue;
     },
     variableValues: string[],
   ) {
-    if (
-      template.headerType &&
-      ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(template.headerType)
-    ) {
-      throw new BadRequestException(
-        'Media header campaign sending will be added in the next campaign step',
-      );
-    }
+
+     if (
+   template.headerType &&
+   ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(template.headerType) &&
+   !template.headerMediaFileId
+ ) {
+   throw new BadRequestException(
+     'This media header template needs a saved header media file before campaign sending',
+   );
+ }
 
     const storedComponents = Array.isArray(template.components)
       ? template.components
@@ -2153,41 +2168,200 @@ if (totalVariablesNeeded !== variableValues.length) {
  };
 }
 
+private getTemplateHeaderMediaParameterType(headerType: string | null) {
+ const cleanHeaderType = String(headerType || '').trim().toUpperCase();
+
+ if (cleanHeaderType === 'IMAGE') {
+   return 'image';
+ }
+
+ if (cleanHeaderType === 'VIDEO') {
+   return 'video';
+ }
+
+ if (cleanHeaderType === 'DOCUMENT') {
+   return 'document';
+ }
+
+ return null;
+}
+
+private async uploadCampaignHeaderMediaIfNeeded(input: {
+ tenantId: string;
+ phoneNumberId: string;
+ accessToken: string;
+ headerType: string | null;
+ headerMediaFileId?: string | null;
+}) {
+ const headerMediaType = this.getTemplateHeaderMediaParameterType(
+   input.headerType,
+ );
+
+ if (!headerMediaType) {
+   return null;
+ }
+
+ if (!input.headerMediaFileId) {
+   throw new BadRequestException(
+     'This media header template needs a saved header media file before campaign sending',
+   );
+ }
+
+ const media = await this.mediaService.getMediaForMetaUpload(
+   input.tenantId,
+   input.headerMediaFileId,
+ );
+
+ if (media.mediaType !== String(input.headerType || '').toUpperCase()) {
+   throw new BadRequestException(
+     `Selected campaign header media must be ${String(
+       input.headerType,
+     ).toLowerCase()}`,
+   );
+ }
+
+ const apiVersion = process.env.META_GRAPH_API_VERSION || 'v20.0';
+ const formData = new FormData();
+
+const mediaArrayBuffer = new ArrayBuffer(media.buffer.byteLength);
+new Uint8Array(mediaArrayBuffer).set(media.buffer);
+
+formData.append('messaging_product', 'whatsapp');
+formData.append(
+'file',
+new Blob([mediaArrayBuffer], {
+  type: media.mimeType,
+}),
+media.originalName,
+);
+
+ const response = await fetch(
+   `https://graph.facebook.com/${apiVersion}/${input.phoneNumberId}/media`,
+   {
+     method: 'POST',
+     headers: {
+       Authorization: `Bearer ${input.accessToken}`,
+     },
+     body: formData as unknown as BodyInit,
+   },
+ );
+
+ const data: {
+   id?: string;
+   error?: {
+     message?: string;
+   };
+ } = await response.json();
+
+ if (!response.ok || !data.id) {
+   throw new Error(data.error?.message || 'Failed to upload campaign header media to Meta');
+ }
+
+ return data.id;
+}
+
   private async sendTemplateMessage(input: {
     phoneNumberId: string;
     accessToken: string;
     to: string;
     templateName: string;
     language: string;
+    headerType: string | null;
     headerText: string | null;
     bodyText: string;
     components: Prisma.JsonValue;
     variableValues: string[];
+    headerMediaId?: string | null;
   }) {
 const components: Array<{
-  type: 'header' | 'body' | 'button';
-  sub_type?: 'url';
-  index?: string;
-  parameters: Array<{
-    type: 'text';
-    text: string;
-  }>;
+type: 'header' | 'body' | 'button';
+sub_type?: 'url';
+index?: string;
+parameters: Array<
+ | {
+     type: 'text';
+     text: string;
+   }
+ | {
+     type: 'image';
+     image: {
+       id: string;
+     };
+   }
+ | {
+     type: 'video';
+     video: {
+       id: string;
+     };
+   }
+ | {
+     type: 'document';
+     document: {
+       id: string;
+     };
+   }
+>;
 }> = [];
 
-    const headerVariables = this.getVariableNumbers(input.headerText || '');
-    const bodyVariables = this.getVariableNumbers(input.bodyText);
+ const headerVariables = this.getVariableNumbers(input.headerText || '');
+ const bodyVariables = this.getVariableNumbers(input.bodyText);
+ const headerMediaType = this.getTemplateHeaderMediaParameterType(
+   input.headerType,
+ );
 
-    if (headerVariables.length > 0) {
-      components.push({
-        type: 'header',
-        parameters: input.variableValues
-          .slice(0, headerVariables.length)
-          .map((value) => ({
-            type: 'text',
-            text: value,
-          })),
-      });
-    }
+ if (headerMediaType && input.headerMediaId) {
+   if (headerMediaType === 'image') {
+     components.push({
+       type: 'header',
+       parameters: [
+         {
+           type: 'image',
+           image: {
+             id: input.headerMediaId,
+           },
+         },
+       ],
+     });
+   }
+
+   if (headerMediaType === 'video') {
+     components.push({
+       type: 'header',
+       parameters: [
+         {
+           type: 'video',
+           video: {
+             id: input.headerMediaId,
+           },
+         },
+       ],
+     });
+   }
+
+   if (headerMediaType === 'document') {
+     components.push({
+       type: 'header',
+       parameters: [
+         {
+           type: 'document',
+           document: {
+             id: input.headerMediaId,
+           },
+         },
+       ],
+     });
+   }
+ } else if (headerVariables.length > 0) {
+   components.push({
+     type: 'header',
+     parameters: input.variableValues
+       .slice(0, headerVariables.length)
+       .map((value) => ({
+         type: 'text',
+         text: value,
+       })),
+   });
+ }
 
     if (bodyVariables.length > 0) {
       components.push({
