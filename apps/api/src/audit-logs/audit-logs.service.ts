@@ -109,12 +109,23 @@ this.readinessCheck(
   this.isValidBase64EncryptionKey(env.tokenEncryptionKey),
   'TOKEN_ENCRYPTION_KEY must be a base64 encoded 32-byte key',
 ),
- this.readinessCheck(
-   'redis_url',
-   'REDIS_URL is configured',
-   Boolean(env.redisUrl),
-   'Redis is required for production campaign queues and rate limits',
- ),
+this.readinessCheck(
+'media_storage_driver',
+'Production media storage uses S3/R2/Spaces',
+!env.isProduction || env.mediaStorageDriver === 's3',
+env.isProduction
+  ? `Current MEDIA_STORAGE_DRIVER: ${env.mediaStorageDriver}`
+  : 'Local media storage is allowed only in development',
+),
+this.readinessCheck(
+'s3_media_config',
+'S3 media configuration is complete',
+!env.isProduction ||
+  Boolean(env.s3Bucket && env.s3AccessKeyId && env.s3SecretAccessKey),
+env.isProduction
+  ? 'S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY are required'
+  : 'S3 media config is optional in development',
+),
  this.readinessCheck(
    'meta_app_id',
    'META_APP_ID is configured',

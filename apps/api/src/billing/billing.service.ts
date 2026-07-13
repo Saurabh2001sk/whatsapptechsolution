@@ -823,206 +823,96 @@ return {
   };
 }
 
-   async approveSubscription(
+async approveSubscription(
   subscriptionId: string,
   actorUserId: string,
   adminNote?: string,
 ) {
-    const subscription = await this.prisma.tenantSubscription.findFirst({
-      where: {
-        id: subscriptionId,
+  const subscription = await this.prisma.tenantSubscription.findFirst({
+    where: {
+      id: subscriptionId,
+    },
+    include: {
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+        },
       },
-      include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            status: true,
-          },
-        },
-        plan: true,
-      },
-    });
+      plan: true,
+    },
+  });
 
-    if (!subscription) {
-      throw new NotFoundException('Subscription request not found');
-    }
-
-    if (subscription.status !== 'PENDING_APPROVAL') {
-      throw new BadRequestException(
-        `Only PENDING_APPROVAL subscriptions can be approved. Current status is ${subscription.status}.`,
-      );
-    }
-
-    const cleanAdminNote = String(adminNote || '').trim();
-
-if (cleanAdminNote.length > 500) {
-  throw new BadRequestException('Admin note cannot exceed 500 characters.');
-}
-
-if (
-  subscription.plan.priceMonthlyPaise > 0 &&
-  subscription.paymentProofStatus !== 'PENDING_VERIFICATION'
-) {
-  throw new BadRequestException(
-    'Payment proof must be submitted before approving this paid plan.',
-  );
-}
-
-    const now = new Date();
-    const periodEnd = this.addOneMonth(now);
-
-    const approvedSubscription = await this.prisma.$transaction(async (tx) => {
-      await tx.tenantSubscription.updateMany({
-        where: {
-          tenantId: subscription.tenantId,
-          id: {
-            not: subscription.id,
-          },
-          status: {
-            in: ['TRIAL', 'ACTIVE', 'PAST_DUE', 'PENDING_APPROVAL'],
-          },
-        },
-        data: {
-          status: 'CANCELED',
-          canceledAt: now,
-        },
-      });
-
-      return tx.tenantSubscription.update({
-        where: {
-          id: subscription.id,
-        },
-        data: {
-          status: 'ACTIVE',
-          currentPeriodStart: now,
-          currentPeriodEnd: periodEnd,
-          trialEndsAt: null,
-          canceledAt: null,
-                    paymentProofStatus:
-            subscription.plan.priceMonthlyPaise > 0 ? 'VERIFIED' : 'NOT_REQUIRED',
-          paymentVerifiedAt:
-            subscription.plan.priceMonthlyPaise > 0 ? now : null,
-          paymentVerifiedByUserId:
-            subscription.plan.priceMonthlyPaise > 0 ? actorUserId : null,
-          paymentAdminNote: cleanAdminNote || null,
-        },
-        include: {
-          tenant: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              status: true,
-            },
-          },
-          plan: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              priceMonthlyPaise: true,
-              currency: true,
-              monthlyCampaignRecipientLimit: true,
-              monthlyCampaignLimit: true,
-              maxContacts: true,
-              maxTeamUsers: true,
-              requiresApproval: true,
-            },
-          },
-        },
-      });
-    });
-
-await this.recordBillingAuditLog({
-  tenantId: approvedSubscription.tenant.id,
-  actorUserId,
-  action: 'BILLING_SUBSCRIPTION_APPROVED',
-  entityType: 'TenantSubscription',
-  entityId: approvedSubscription.id,
-  metadata: {
-    planId: approvedSubscription.plan.id,
-    planCode: approvedSubscription.plan.code,
-    planName: approvedSubscription.plan.name,
-    status: approvedSubscription.status,
-  },
-});
-
-await this.notifications.sendToTenantAdmins({
-  tenantId: approvedSubscription.tenant.id,
-  event: 'BILLING_SUBSCRIPTION_APPROVED',
-  subject: `Plan activated: ${approvedSubscription.plan.name}`,
-  text: [
-    `Your billing plan has been activated.`,
-    `Business: ${approvedSubscription.tenant.name}`,
-    `Plan: ${approvedSubscription.plan.name} (${approvedSubscription.plan.code})`,
-    `Status: ${approvedSubscription.status}`,
-    `Current period ends: ${approvedSubscription.currentPeriodEnd.toISOString()}`,
-  ].join('\n'),
-  metadata: {
-    subscriptionId: approvedSubscription.id,
-    planId: approvedSubscription.plan.id,
-    planCode: approvedSubscription.plan.code,
-    planName: approvedSubscription.plan.name,
-    status: approvedSubscription.status,
-  },
-});
-
-return {
-  ok: true,
-  approved: true,
-  approvedBy: actorUserId,
-  subscription: approvedSubscription,
-};
+  if (!subscription) {
+    throw new NotFoundException('Subscription request not found');
   }
 
-    async cancelSubscription(subscriptionId: string, actorUserId: string) {
-    const subscription = await this.prisma.tenantSubscription.findFirst({
+  if (subscription.status !== 'PENDING_APPROVAL') {
+    throw new BadRequestException(
+      `Only PENDING_APPROVAL subscriptions can be approved. Current status is ${subscription.status}.`,
+    );
+  }
+
+  const cleanAdminNote = String(adminNote || '').trim();
+
+  if (cleanAdminNote.length < 8) {
+    throw new BadRequestException(
+      'Admin approval note must be at least 8 characters.',
+    );
+  }
+
+  if (cleanAdminNote.length > 500) {
+    throw new BadRequestException('Admin note cannot exceed 500 characters.');
+  }
+
+  if (
+    subscription.plan.priceMonthlyPaise > 0 &&
+    subscription.paymentProofStatus !== 'PENDING_VERIFICATION'
+  ) {
+    throw new BadRequestException(
+      'Payment proof must be submitted before approving this paid plan.',
+    );
+  }
+
+  const now = new Date();
+  const periodEnd = this.addOneMonth(now);
+
+  const approvedSubscription = await this.prisma.$transaction(async (tx) => {
+    await tx.tenantSubscription.updateMany({
       where: {
-        id: subscriptionId,
+        tenantId: subscription.tenantId,
+        id: {
+          not: subscription.id,
+        },
+        status: {
+          in: ['TRIAL', 'ACTIVE', 'PAST_DUE', 'PENDING_APPROVAL'],
+        },
       },
-      include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            status: true,
-          },
-        },
-        plan: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
+      data: {
+        status: 'CANCELED',
+        canceledAt: now,
       },
     });
 
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
-
-    if (subscription.status === 'CANCELED') {
-      return {
-        ok: true,
-        unchanged: true,
-        canceledBy: actorUserId,
-        subscription,
-      };
-    }
-
-    const canceledSubscription = await this.prisma.tenantSubscription.update({
+    return tx.tenantSubscription.update({
       where: {
         id: subscription.id,
       },
       data: {
-        status: 'CANCELED',
-        canceledAt: new Date(),
-        paymentProofStatus: 'REJECTED',
-        paymentRejectedAt: new Date(),
+        status: 'ACTIVE',
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        trialEndsAt: null,
+        canceledAt: null,
+        paymentProofStatus:
+          subscription.plan.priceMonthlyPaise > 0 ? 'VERIFIED' : 'NOT_REQUIRED',
+        paymentVerifiedAt:
+          subscription.plan.priceMonthlyPaise > 0 ? now : null,
+        paymentVerifiedByUserId:
+          subscription.plan.priceMonthlyPaise > 0 ? actorUserId : null,
+        paymentAdminNote: cleanAdminNote,
       },
       include: {
         tenant: {
@@ -1038,51 +928,193 @@ return {
             id: true,
             code: true,
             name: true,
+            priceMonthlyPaise: true,
+            currency: true,
+            monthlyCampaignRecipientLimit: true,
+            monthlyCampaignLimit: true,
+            maxContacts: true,
+            maxTeamUsers: true,
+            requiresApproval: true,
           },
         },
       },
     });
+  });
 
-await this.recordBillingAuditLog({
-  tenantId: canceledSubscription.tenant.id,
-  actorUserId,
-  action: 'BILLING_SUBSCRIPTION_CANCELED',
-  entityType: 'TenantSubscription',
-  entityId: canceledSubscription.id,
-  metadata: {
-    planId: canceledSubscription.plan.id,
-    planCode: canceledSubscription.plan.code,
-    planName: canceledSubscription.plan.name,
-    status: canceledSubscription.status,
-  },
-});
+  await this.recordBillingAuditLog({
+    tenantId: approvedSubscription.tenant.id,
+    actorUserId,
+    action: 'BILLING_SUBSCRIPTION_APPROVED',
+    entityType: 'TenantSubscription',
+    entityId: approvedSubscription.id,
+    metadata: {
+      planId: approvedSubscription.plan.id,
+      planCode: approvedSubscription.plan.code,
+      planName: approvedSubscription.plan.name,
+      status: approvedSubscription.status,
+      adminNote: cleanAdminNote,
+      paymentProofStatus: approvedSubscription.paymentProofStatus,
+      paymentReference: approvedSubscription.paymentReference,
+      paymentAmountPaise: approvedSubscription.paymentAmountPaise,
+    },
+  });
 
-await this.notifications.sendToTenantAdmins({
-  tenantId: canceledSubscription.tenant.id,
-  event: 'BILLING_SUBSCRIPTION_CANCELED',
-  subject: `Plan request canceled: ${canceledSubscription.plan.name}`,
-  text: [
-    `Your billing plan request was canceled.`,
-    `Business: ${canceledSubscription.tenant.name}`,
-    `Plan: ${canceledSubscription.plan.name} (${canceledSubscription.plan.code})`,
-    `Status: ${canceledSubscription.status}`,
-  ].join('\n'),
-  metadata: {
-    subscriptionId: canceledSubscription.id,
-    planId: canceledSubscription.plan.id,
-    planCode: canceledSubscription.plan.code,
-    planName: canceledSubscription.plan.name,
-    status: canceledSubscription.status,
-  },
-});
+  await this.notifications.sendToTenantAdmins({
+    tenantId: approvedSubscription.tenant.id,
+    event: 'BILLING_SUBSCRIPTION_APPROVED',
+    subject: `Plan activated: ${approvedSubscription.plan.name}`,
+    text: [
+      `Your billing plan has been activated.`,
+      `Business: ${approvedSubscription.tenant.name}`,
+      `Plan: ${approvedSubscription.plan.name} (${approvedSubscription.plan.code})`,
+      `Status: ${approvedSubscription.status}`,
+      `Current period ends: ${approvedSubscription.currentPeriodEnd.toISOString()}`,
+      `Admin note: ${cleanAdminNote}`,
+    ].join('\n'),
+    metadata: {
+      subscriptionId: approvedSubscription.id,
+      planId: approvedSubscription.plan.id,
+      planCode: approvedSubscription.plan.code,
+      planName: approvedSubscription.plan.name,
+      status: approvedSubscription.status,
+      adminNote: cleanAdminNote,
+    },
+  });
 
-return {
-  ok: true,
-  canceled: true,
-  canceledBy: actorUserId,
-  subscription: canceledSubscription,
-};
+  return {
+    ok: true,
+    approved: true,
+    approvedBy: actorUserId,
+    subscription: approvedSubscription,
+  };
+}
+
+async cancelSubscription(
+  subscriptionId: string,
+  actorUserId: string,
+  adminNote?: string,
+) {
+  const subscription = await this.prisma.tenantSubscription.findFirst({
+    where: {
+      id: subscriptionId,
+    },
+    include: {
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+        },
+      },
+      plan: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  if (!subscription) {
+    throw new NotFoundException('Subscription not found');
   }
+
+  const cleanAdminNote = String(adminNote || '').trim();
+
+  if (cleanAdminNote.length < 8) {
+    throw new BadRequestException(
+      'Admin cancellation note must be at least 8 characters.',
+    );
+  }
+
+  if (cleanAdminNote.length > 500) {
+    throw new BadRequestException('Admin note cannot exceed 500 characters.');
+  }
+
+  if (subscription.status === 'CANCELED') {
+    return {
+      ok: true,
+      unchanged: true,
+      canceledBy: actorUserId,
+      subscription,
+    };
+  }
+
+  const canceledSubscription = await this.prisma.tenantSubscription.update({
+    where: {
+      id: subscription.id,
+    },
+    data: {
+      status: 'CANCELED',
+      canceledAt: new Date(),
+      paymentProofStatus: 'REJECTED',
+      paymentRejectedAt: new Date(),
+      paymentAdminNote: cleanAdminNote,
+    },
+    include: {
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+        },
+      },
+      plan: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  await this.recordBillingAuditLog({
+    tenantId: canceledSubscription.tenant.id,
+    actorUserId,
+    action: 'BILLING_SUBSCRIPTION_CANCELED',
+    entityType: 'TenantSubscription',
+    entityId: canceledSubscription.id,
+    metadata: {
+      planId: canceledSubscription.plan.id,
+      planCode: canceledSubscription.plan.code,
+      planName: canceledSubscription.plan.name,
+      status: canceledSubscription.status,
+      adminNote: cleanAdminNote,
+    },
+  });
+
+  await this.notifications.sendToTenantAdmins({
+    tenantId: canceledSubscription.tenant.id,
+    event: 'BILLING_SUBSCRIPTION_CANCELED',
+    subject: `Plan request canceled: ${canceledSubscription.plan.name}`,
+    text: [
+      `Your billing plan request was canceled.`,
+      `Business: ${canceledSubscription.tenant.name}`,
+      `Plan: ${canceledSubscription.plan.name} (${canceledSubscription.plan.code})`,
+      `Status: ${canceledSubscription.status}`,
+      `Admin note: ${cleanAdminNote}`,
+    ].join('\n'),
+    metadata: {
+      subscriptionId: canceledSubscription.id,
+      planId: canceledSubscription.plan.id,
+      planCode: canceledSubscription.plan.code,
+      planName: canceledSubscription.plan.name,
+      status: canceledSubscription.status,
+      adminNote: cleanAdminNote,
+    },
+  });
+
+  return {
+    ok: true,
+    canceled: true,
+    canceledBy: actorUserId,
+    subscription: canceledSubscription,
+  };
+}
 
     async getUsageSummary(tenantId: string) {
     const subscription = await this.getCurrentSubscription(tenantId);

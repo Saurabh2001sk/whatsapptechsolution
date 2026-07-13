@@ -136,26 +136,36 @@ export class BillingController {
   ) {
     const user = await this.authService.requireUserFromRequest(request);
 
-    requireRole(user, platformAdminRoles);
+ requireRole(user, platformAdminRoles);
+ this.blockImpersonationWrites(user, 'approve billing subscriptions');
 
-    return this.billingService.approveSubscription(
-      subscriptionId,
-      user.userId,
-      body?.adminNote,
-    );
+ return this.billingService.approveSubscription(
+   subscriptionId,
+   user.userId,
+   body?.adminNote,
+ );
   }
 
-  @Post('admin/subscriptions/:id/cancel')
-  async cancelSubscription(
-    @Req() request: Request,
-    @Param('id') subscriptionId: string,
-  ) {
-    const user = await this.authService.requireUserFromRequest(request);
+@Post('admin/subscriptions/:id/cancel')
+async cancelSubscription(
+ @Req() request: Request,
+ @Param('id') subscriptionId: string,
+ @Body()
+ body: {
+   adminNote?: string;
+ },
+) {
+ const user = await this.authService.requireUserFromRequest(request);
 
-    requireRole(user, platformAdminRoles);
+ requireRole(user, platformAdminRoles);
+ this.blockImpersonationWrites(user, 'cancel billing subscriptions');
 
-    return this.billingService.cancelSubscription(subscriptionId, user.userId);
-  }
+ return this.billingService.cancelSubscription(
+   subscriptionId,
+   user.userId,
+   body?.adminNote,
+ );
+}
 
   private blockImpersonationWrites(user: CurrentUser, action: string) {
     if (user.impersonating) {

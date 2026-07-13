@@ -653,79 +653,105 @@ await loadPendingSubscriptions()
   }
 }
 
-  async function approveSubscription(subscriptionId: string) {
-  const confirmed = window.confirm('Approve this subscription request?')
+async function approveSubscription(subscriptionId: string) {
+  const adminNote = String(adminNotes[subscriptionId] || '').trim();
 
-  if (!confirmed) {
-    return
+  if (adminNote.length < 8) {
+    showToast('Enter admin verification note before approval', 'error');
+    return;
   }
 
-  setAdminActionId(subscriptionId)
+  const confirmed = window.confirm(
+    'Approve this subscription request? This will activate the tenant plan.',
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  setAdminActionId(subscriptionId);
 
   try {
     const response = await fetch(
       `${apiUrl}/billing/admin/subscriptions/${subscriptionId}/approve`,
-{
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  credentials: 'include',
-  body: JSON.stringify({
-    adminNote: adminNotes[subscriptionId] || '',
-  }),
-},
-    )
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          adminNote,
+        }),
+      },
+    );
 
     if (!response.ok) {
-      throw new Error(await readApiError(response, 'Failed to approve plan'))
+      throw new Error(await readApiError(response, 'Failed to approve plan'));
     }
 
-await loadBilling()
-showToast('Subscription approved successfully')
+    await loadBilling();
+    showToast('Subscription approved successfully');
   } catch (error) {
     showToast(
       error instanceof Error ? error.message : 'Failed to approve plan',
       'error',
-    )
+    );
   } finally {
-    setAdminActionId('')
+    setAdminActionId('');
   }
 }
 
 async function cancelSubscription(subscriptionId: string) {
-  const confirmed = window.confirm('Cancel this subscription request?')
+  const adminNote = String(adminNotes[subscriptionId] || '').trim();
 
-  if (!confirmed) {
-    return
+  if (adminNote.length < 8) {
+    showToast('Enter admin cancellation note before cancel', 'error');
+    return;
   }
 
-  setAdminActionId(subscriptionId)
+  const confirmed = window.confirm(
+    'Cancel this subscription request? This will reject the plan/payment request.',
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  setAdminActionId(subscriptionId);
 
   try {
     const response = await fetch(
       `${apiUrl}/billing/admin/subscriptions/${subscriptionId}/cancel`,
       {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
+        body: JSON.stringify({
+          adminNote,
+        }),
       },
-    )
+    );
 
     if (!response.ok) {
-      throw new Error(await readApiError(response, 'Failed to cancel plan request'))
+      throw new Error(
+        await readApiError(response, 'Failed to cancel plan request'),
+      );
     }
 
-await loadBilling()
-showToast('Subscription request cancelled')
+    await loadBilling();
+    showToast('Subscription request cancelled');
   } catch (error) {
     showToast(
       error instanceof Error
         ? error.message
         : 'Failed to cancel plan request',
       'error',
-    )
+    );
   } finally {
-    setAdminActionId('')
+    setAdminActionId('');
   }
 }
 
@@ -1073,7 +1099,7 @@ useEffect(() => {
                         [item.id]: event.target.value,
                       }))
                     }
-                    placeholder="Admin verification note"
+                 placeholder="Required admin note, e.g. Payment verified from bank statement"
                   />
                 </div>
                 <div className="billing-admin-actions">
