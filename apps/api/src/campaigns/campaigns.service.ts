@@ -1113,13 +1113,16 @@ const campaign = await this.prisma.campaign.findFirst({
     accessToken: connection.accessToken,
   });
 
-  const headerMediaId = await this.uploadCampaignHeaderMediaIfNeeded({
- tenantId: input.tenantId,
- phoneNumberId: connection.phoneNumberId,
- accessToken: connection.accessToken,
- headerType: template.headerType,
- headerMediaFileId: template.headerMediaFileId,
-});
+  const headerMediaId = await this.getOrUploadCampaignHeaderMediaIfNeeded({
+    tenantId: input.tenantId,
+    campaignId: campaign.id,
+    phoneNumberId: connection.phoneNumberId,
+    accessToken: connection.accessToken,
+    headerType: template.headerType,
+    headerMediaFileId: template.headerMediaFileId,
+    cachedMetaHeaderMediaId: campaign.metaHeaderMediaId,
+    cachedMetaHeaderMediaUploadedAt: campaign.metaHeaderMediaUploadedAt,
+  });
 
   const retryResult = await this.prisma.campaignRecipient.updateMany({
     where: {
@@ -2184,6 +2187,58 @@ private getTemplateHeaderMediaParameterType(headerType: string | null) {
  }
 
  return null;
+}
+
+private async getOrUploadCampaignHeaderMediaIfNeeded(input: {
+  tenantId: string;
+  campaignId: string;
+  phoneNumberId: string;
+  accessToken: string;
+  headerType: string | null;
+  headerMediaFileId?: string | null;
+  cachedMetaHeaderMediaId?: string | null;
+  cachedMetaHeaderMediaUploadedAt?: Date | null;
+}) {
+  const headerMediaType = this.getTemplateHeaderMediaParameterType(
+    input.headerType,
+  );
+
+  if (!headerMediaType) {
+    return null;
+  }
+
+  const uploadedAt = input.cachedMetaHeaderMediaUploadedAt;
+  const cacheAgeMs = uploadedAt
+    ? Date.now() - uploadedAt.getTime()
+    : Number.MAX_SAFE_INTEGER;
+  const cacheIsFresh = cacheAgeMs >= 0 && cacheAgeMs < 23 * 60 * 60 * 1000;
+
+  if (input.cachedMetaHeaderMediaId && cacheIsFresh) {
+    return input.cachedMetaHeaderMediaId;
+  }
+
+  const metaHeaderMediaId = await this.uploadCampaignHeaderMediaIfNeeded({
+    tenantId: input.tenantId,
+    phoneNumberId: input.phoneNumberId,
+    accessToken: input.accessToken,
+    headerType: input.headerType,
+    headerMediaFileId: input.headerMediaFileId,
+  });
+
+  if (metaHeaderMediaId) {
+    await this.prisma.campaign.updateMany({
+      where: {
+        id: input.campaignId,
+        tenantId: input.tenantId,
+      },
+      data: {
+        metaHeaderMediaId,
+        metaHeaderMediaUploadedAt: new Date(),
+      },
+    });
+  }
+
+  return metaHeaderMediaId;
 }
 
 private async uploadCampaignHeaderMediaIfNeeded(input: {

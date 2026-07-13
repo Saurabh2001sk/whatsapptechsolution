@@ -2093,7 +2093,9 @@ body: JSON.stringify({
   bodyText,
   footerText,
   buttons: templatePayload.buttons,
-  advancedComponents: templatePayload.advancedComponents,
+  ...(templatePayload.advancedComponents.length > 0
+    ? { advancedComponents: templatePayload.advancedComponents }
+    : {}),
 }),
     })
 
@@ -2120,11 +2122,26 @@ try {
    ...currentFiles.filter((mediaFile) => mediaFile.id !== uploadedMedia.id),
  ])
 } catch (error) {
- throw new Error(
-   error instanceof Error
-     ? error.message
-     : 'Template draft created, but media upload failed',
- )
+const uploadErrorMessage =
+error instanceof Error
+  ? error.message
+  : 'Template draft created, but media upload failed'
+
+setTemplates((currentTemplates) => [
+createdTemplate,
+...currentTemplates.filter(
+  (template) => template.id !== createdTemplate.id,
+),
+])
+
+await loadTemplates()
+
+showToast(
+`Template draft created, but media upload failed: ${uploadErrorMessage}`,
+'error',
+)
+
+return
 }
 }
 

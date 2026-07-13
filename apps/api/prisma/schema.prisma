@@ -257,8 +257,10 @@ model Campaign {
   startedAt       DateTime?
   completedAt     DateTime?
   scheduledAt     DateTime?
-  canceledAt      DateTime?
-  lastError       String?
+  canceledAt                DateTime?
+  lastError                 String?
+  metaHeaderMediaId         String?
+  metaHeaderMediaUploadedAt DateTime?
 
   tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   template    WhatsappTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
