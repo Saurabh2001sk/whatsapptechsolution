@@ -37,9 +37,9 @@ jobs:
         run: npm run db:generate
         env:
           DATABASE_URL: postgresql://ci_user:ci_password@localhost:5432/ci_db
+          DIRECT_URL: postgresql://ci_user:ci_password@localhost:5432/ci_db
           JWT_SECRET: ci_jwt_secret_minimum_32_characters
           TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-
       - name: Build API
         working-directory: apps/api
         run: npm run build
