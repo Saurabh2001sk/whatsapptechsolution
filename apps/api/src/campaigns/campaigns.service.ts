@@ -92,86 +92,109 @@ constructor(
   }
 
   async getCampaignFailureSummary(tenantId: string, campaignId: string) {
-  const campaign = await this.prisma.campaign.findFirst({
-    where: {
-      id: campaignId,
-      tenantId,
-    },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      lastError: true,
-      totalRecipients: true,
-      sentCount: true,
-      deliveredCount: true,
-      readCount: true,
-      failedCount: true,
-      updatedAt: true,
-    },
-  });
-
-  if (!campaign) {
-    throw new NotFoundException('Campaign not found');
-  }
-
-  const failedRecipients = await this.prisma.campaignRecipient.findMany({
-    where: {
-      tenantId,
-      campaignId,
-      status: 'FAILED',
-    },
-    orderBy: {
-      updatedAt: 'desc',
-    },
-    take: 100,
-    select: {
-      id: true,
-      phone: true,
-      errorMessage: true,
-      retryCount: true,
-      failedAt: true,
-      statusWebhookAt: true,
-      contact: {
+    const [campaign, deliveredCount, readCount] = await Promise.all([
+      this.prisma.campaign.findFirst({
+        where: {
+          id: campaignId,
+          tenantId,
+        },
         select: {
           id: true,
           name: true,
-          optedIn: true,
-          optInSource: true,
-          deletedAt: true,
+          status: true,
+          lastError: true,
+          totalRecipients: true,
+          sentCount: true,
+          failedCount: true,
+          updatedAt: true,
         },
-      },
-    },
-  });
+      }),
+      this.prisma.campaignRecipient.count({
+        where: {
+          tenantId,
+          campaignId,
+          deliveredAt: {
+            not: null,
+          },
+        },
+      }),
+      this.prisma.campaignRecipient.count({
+        where: {
+          tenantId,
+          campaignId,
+          readAt: {
+            not: null,
+          },
+        },
+      }),
+    ])
 
-  const retryableFailedCount = await this.prisma.campaignRecipient.count({
-    where: {
-      tenantId,
-      campaignId,
-      status: 'FAILED',
-      retryCount: {
-        lt: this.maxRecipientRetryCount,
-      },
-      contact: {
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found')
+    }
+
+    const failedRecipients = await this.prisma.campaignRecipient.findMany({
+      where: {
         tenantId,
-        deletedAt: null,
-        optedIn: true,
-        optInSource: {
-          not: null,
+        campaignId,
+        status: 'FAILED',
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+      take: 100,
+      select: {
+        id: true,
+        phone: true,
+        errorMessage: true,
+        retryCount: true,
+        failedAt: true,
+        statusWebhookAt: true,
+        contact: {
+          select: {
+            id: true,
+            name: true,
+            optedIn: true,
+            optInSource: true,
+            deletedAt: true,
+          },
         },
       },
-    },
-  });
+    })
 
-  return {
-    campaign,
-    retryPolicy: {
-      maxRecipientRetryCount: this.maxRecipientRetryCount,
-      retryableFailedCount,
-    },
-    failedRecipients,
-  };
-}
+    const retryableFailedCount =
+      await this.prisma.campaignRecipient.count({
+        where: {
+          tenantId,
+          campaignId,
+          status: 'FAILED',
+          retryCount: {
+            lt: this.maxRecipientRetryCount,
+          },
+          contact: {
+            tenantId,
+            deletedAt: null,
+            optedIn: true,
+            optInSource: {
+              not: null,
+            },
+          },
+        },
+      })
+
+    return {
+      campaign: {
+        ...campaign,
+        deliveredCount,
+        readCount,
+      },
+      retryPolicy: {
+        maxRecipientRetryCount: this.maxRecipientRetryCount,
+        retryableFailedCount,
+      },
+      failedRecipients,
+    }
+  }
 
 async exportCampaignFailuresCsv(tenantId: string, campaignId: string) {
   const summary = await this.getCampaignFailureSummary(tenantId, campaignId);

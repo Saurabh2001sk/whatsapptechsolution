@@ -173,3 +173,27 @@ const packageJson = JSON.parse(read('../package.json'))
 
 assert.equal(packageJson.scripts.test, 'node --test tests/*.test.mjs')
 })
+
+test('campaign delivery summary uses recipient timestamps', () => {
+  const campaignsService = read('../src/campaigns/campaigns.service.ts')
+
+  const methodStart = campaignsService.indexOf(
+    'async getCampaignFailureSummary',
+  )
+  const methodEnd = campaignsService.indexOf(
+    'async exportCampaignFailuresCsv',
+  )
+
+  assert.ok(methodStart >= 0)
+  assert.ok(methodEnd > methodStart)
+
+  const summaryMethod = campaignsService.slice(methodStart, methodEnd)
+
+  assert.doesNotMatch(summaryMethod, /deliveredCount:\s*true/)
+  assert.doesNotMatch(summaryMethod, /readCount:\s*true/)
+  assert.match(summaryMethod, /deliveredAt:\s*\{\s*not:\s*null/)
+  assert.match(summaryMethod, /readAt:\s*\{\s*not:\s*null/)
+  assert.match(summaryMethod, /\.\.\.campaign/)
+  assert.match(summaryMethod, /deliveredCount/)
+  assert.match(summaryMethod, /readCount/)
+})
