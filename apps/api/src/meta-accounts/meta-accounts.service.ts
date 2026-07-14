@@ -1,9 +1,10 @@
 import {
-BadRequestException,
-Injectable,
-NotFoundException,
-UnauthorizedException,
-} from '@nestjs/common';
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common'
 import { Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
 import { BillingService } from '../billing/billing.service';
@@ -82,6 +83,17 @@ qualityRating?: string;
 messagingLimitTier?: string;
 };
 
+type SaveConnectedMetaAccountInput = {
+  tenantId: string
+  metaAppId: string
+  wabaId: string
+  phoneNumberId: string
+  businessName: string | null
+  encryptedAccessToken: string
+  qualityRating: string | null
+  messagingLimitTier: string | null
+}
+
 @Injectable()
 export class MetaAccountsService {
 constructor(
@@ -89,6 +101,99 @@ private readonly prisma: PrismaService,
 private readonly cryptoService: CryptoService,
 private readonly billingService: BillingService,
 ) {}
+
+  private async saveConnectedMetaAccount(
+    input: SaveConnectedMetaAccountInput,
+  ) {
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const existingOwner =
+          await transaction.tenantMetaAccount.findUnique({
+            where: {
+              phoneNumberId: input.phoneNumberId,
+            },
+            select: {
+              id: true,
+              tenantId: true,
+              wabaId: true,
+            },
+          })
+
+        if (
+          existingOwner &&
+          (existingOwner.tenantId !== input.tenantId ||
+            existingOwner.wabaId !== input.wabaId)
+        ) {
+          throw new ConflictException(
+            'This WhatsApp phone number is already connected to another workspace',
+          )
+        }
+
+        const account = await transaction.tenantMetaAccount.upsert({
+          where: {
+            tenantId_wabaId: {
+              tenantId: input.tenantId,
+              wabaId: input.wabaId,
+            },
+          },
+          update: {
+            metaAppId: input.metaAppId,
+            phoneNumberId: input.phoneNumberId,
+            businessName: input.businessName,
+            encryptedAccessToken: input.encryptedAccessToken,
+            tokenLastUpdatedAt: new Date(),
+            qualityRating: input.qualityRating,
+            messagingLimitTier: input.messagingLimitTier,
+            qualitySyncedAt: new Date(),
+            isActive: true,
+          },
+          create: {
+            tenantId: input.tenantId,
+            metaAppId: input.metaAppId,
+            wabaId: input.wabaId,
+            phoneNumberId: input.phoneNumberId,
+            businessName: input.businessName,
+            encryptedAccessToken: input.encryptedAccessToken,
+            tokenLastUpdatedAt: new Date(),
+            qualityRating: input.qualityRating,
+            messagingLimitTier: input.messagingLimitTier,
+            qualitySyncedAt: new Date(),
+            isActive: true,
+          },
+        })
+
+        await transaction.tenantMetaAccount.updateMany({
+          where: {
+            tenantId: input.tenantId,
+            isActive: true,
+            id: {
+              not: account.id,
+            },
+          },
+          data: {
+            isActive: false,
+          },
+        })
+
+        return account
+      })
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        throw error
+      }
+
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'This WhatsApp phone number is already connected to another workspace',
+        )
+      }
+
+      throw error
+    }
+  }
 
 getEmbeddedSignupConfig() {
   const appId = String(process.env.META_APP_ID || '').trim();
@@ -250,48 +355,16 @@ async connectFromEmbeddedSignup(tenantId: string, code: string) {
 
   const encryptedAccessToken = this.cryptoService.encrypt(accessToken);
 
-  await this.prisma.tenantMetaAccount.updateMany({
-    where: {
-      tenantId,
-      isActive: true,
-    },
-    data: {
-      isActive: false,
-    },
-  });
-
-  const account = await this.prisma.tenantMetaAccount.upsert({
-    where: {
-      tenantId_wabaId: {
-        tenantId,
-        wabaId: connectedAccount.wabaId,
-      },
-    },
-    update: {
-      metaAppId: appId,
-      phoneNumberId: connectedAccount.phoneNumberId,
-      businessName: connectedAccount.businessName,
-      encryptedAccessToken,
-      tokenLastUpdatedAt: new Date(),
-      qualityRating: connectedAccount.qualityRating,
-      messagingLimitTier: connectedAccount.messagingLimitTier,
-      qualitySyncedAt: new Date(),
-      isActive: true,
-    },
-    create: {
-      tenantId,
-      metaAppId: appId,
-      wabaId: connectedAccount.wabaId,
-      phoneNumberId: connectedAccount.phoneNumberId,
-      businessName: connectedAccount.businessName,
-      encryptedAccessToken,
-      tokenLastUpdatedAt: new Date(),
-      qualityRating: connectedAccount.qualityRating,
-      messagingLimitTier: connectedAccount.messagingLimitTier,
-      qualitySyncedAt: new Date(),
-      isActive: true,
-    },
-  });
+  const account = await this.saveConnectedMetaAccount({
+    tenantId,
+    metaAppId: appId,
+    wabaId: connectedAccount.wabaId,
+    phoneNumberId: connectedAccount.phoneNumberId,
+    businessName: connectedAccount.businessName,
+    encryptedAccessToken,
+    qualityRating: connectedAccount.qualityRating,
+    messagingLimitTier: connectedAccount.messagingLimitTier,
+  })
 
   return {
     connected: true,
@@ -370,62 +443,23 @@ selectedPhone = {
 
 const encryptedAccessToken = this.cryptoService.encrypt(accessToken);
 
-await this.prisma.tenantMetaAccount.updateMany({
- where: {
-   tenantId,
-   isActive: true,
- },
- data: {
-   isActive: false,
- },
-});
-
-const account = await this.prisma.tenantMetaAccount.upsert({
- where: {
-   tenantId_wabaId: {
-     tenantId,
-     wabaId,
-   },
- },
- update: {
-   metaAppId: appId,
-   phoneNumberId,
-   businessName:
-     String(input.businessName || '').trim() ||
-     selectedPhone.businessName ||
-     null,
-   encryptedAccessToken,
-   tokenLastUpdatedAt: new Date(),
-   qualityRating:
-     String(input.qualityRating || '').trim() ||
-     selectedPhone.qualityRating,
-   messagingLimitTier:
-     String(input.messagingLimitTier || '').trim() ||
-     selectedPhone.messagingLimitTier,
-   qualitySyncedAt: new Date(),
-   isActive: true,
- },
- create: {
-   tenantId,
-   metaAppId: appId,
-   wabaId,
-   phoneNumberId,
-   businessName:
-     String(input.businessName || '').trim() ||
-     selectedPhone.businessName ||
-     null,
-   encryptedAccessToken,
-   tokenLastUpdatedAt: new Date(),
-   qualityRating:
-     String(input.qualityRating || '').trim() ||
-     selectedPhone.qualityRating,
-   messagingLimitTier:
-     String(input.messagingLimitTier || '').trim() ||
-     selectedPhone.messagingLimitTier,
-   qualitySyncedAt: new Date(),
-   isActive: true,
- },
-});
+const account = await this.saveConnectedMetaAccount({
+  tenantId,
+  metaAppId: appId,
+  wabaId,
+  phoneNumberId,
+  businessName:
+    String(input.businessName || '').trim() ||
+    selectedPhone.businessName ||
+    null,
+  encryptedAccessToken,
+  qualityRating:
+    String(input.qualityRating || '').trim() ||
+    selectedPhone.qualityRating,
+  messagingLimitTier:
+    String(input.messagingLimitTier || '').trim() ||
+    selectedPhone.messagingLimitTier,
+})
 
 return {
  connected: true,
@@ -1053,22 +1087,24 @@ for (const entry of body.entry || []) {
 return null;
 }
 
-private async resolveTenantIdFromWebhookPhone(phoneNumberId: string | null) {
-if (!phoneNumberId) {
- return null;
-}
+private async resolveTenantIdFromWebhookPhone(
+  phoneNumberId: string | null,
+) {
+  if (!phoneNumberId) {
+    return null
+  }
 
-const account = await this.prisma.tenantMetaAccount.findFirst({
- where: {
-   phoneNumberId,
-   isActive: true,
- },
- select: {
-   tenantId: true,
- },
-});
+  const account = await this.prisma.tenantMetaAccount.findUnique({
+    where: {
+      phoneNumberId,
+    },
+    select: {
+      tenantId: true,
+      isActive: true,
+    },
+  })
 
-return account?.tenantId || null;
+  return account?.isActive ? account.tenantId : null
 }
 
 private verifyWebhookSignature(

@@ -197,3 +197,28 @@ test('campaign delivery summary uses recipient timestamps', () => {
   assert.match(summaryMethod, /deliveredCount/)
   assert.match(summaryMethod, /readCount/)
 })
+
+test('Meta phone ownership is globally unique and transaction protected', () => {
+  const schema = read('../prisma/schema.prisma')
+  const metaAccountsService = read(
+    '../src/meta-accounts/meta-accounts.service.ts',
+  )
+
+  assert.match(schema, /phoneNumberId\s+String\s+@unique/)
+  assert.doesNotMatch(
+    schema,
+    /@@unique\(\[tenantId,\s*phoneNumberId\]\)/,
+  )
+
+  assert.match(metaAccountsService, /saveConnectedMetaAccount/)
+  assert.match(metaAccountsService, /\$transaction/)
+  assert.match(metaAccountsService, /P2002/)
+  assert.match(
+    metaAccountsService,
+    /tenantMetaAccount\.findUnique/,
+  )
+  assert.match(
+    metaAccountsService,
+    /account\?\.isActive\s*\?\s*account\.tenantId\s*:\s*null/,
+  )
+})
