@@ -75,7 +75,7 @@ export class TeamUsersService {
     const passwordHash = await bcrypt.hash(password, 12);
 
     try {
-      return await this.prisma.$transaction(
+      const user = await this.prisma.$transaction(
         async (tx) => {
           await this.billingService.assertCanCreateTeamUsersInTransaction(
             tx,
@@ -127,13 +127,20 @@ export class TeamUsersService {
           isolationLevel:
             Prisma.TransactionIsolationLevel.Serializable,
         },
-      ).then(async (user) => {
-        await this.authService.requestEmailVerification({
+      );
+
+      void this.authService
+        .requestEmailVerification({
           email: user.email,
+        })
+        .catch(() => {
+          /*
+           * Email failure is recorded by NotificationsService.
+           * User creation should not remain stuck because SMTP is slow.
+           */
         });
 
-        return user;
-      });
+      return user;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

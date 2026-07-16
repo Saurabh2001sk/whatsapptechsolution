@@ -347,11 +347,14 @@ useEffect(() => {
     }
   }
 
-  async function createCampaign(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setLoading(true)
+async function createCampaign(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault()
 
-    const form = new FormData(event.currentTarget)
+  const formElement = event.currentTarget
+
+  setLoading(true)
+
+  const form = new FormData(formElement)
     const name = String(form.get('name') || '').trim()
     const templateId = String(form.get('templateId') || '').trim()
     const contactTypeId = String(form.get('contactTypeId') || '').trim()
@@ -412,10 +415,10 @@ return
         ),
       ])
 
-      event.currentTarget.reset()
-      setSelectedTemplateId('')
-      setAudienceType('ALL')
-      setAudiencePreview(null)
+formElement.reset()
+setSelectedTemplateId('')
+setAudienceType('ALL')
+setAudiencePreview(null)
             showToast(
         createdCampaign.status === 'SCHEDULED'
           ? 'Campaign scheduled successfully'

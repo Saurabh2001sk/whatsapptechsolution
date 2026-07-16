@@ -92,6 +92,8 @@ const loadTeamUsers = useCallback(async () => {
 async function createTeamUser(event: React.FormEvent<HTMLFormElement>) {
 event.preventDefault()
 
+const formElement = event.currentTarget
+
 if (!isAdmin) {
   showToast('Only tenant admin can create team users', 'error')
   return
@@ -131,10 +133,11 @@ try {
     ...current.filter((user) => user.id !== createdUser.id),
   ])
 
-  event.currentTarget.reset()
-  showToast(
-    'Team user created. Verification email has been sent.',
-  )
+formElement.reset()
+
+showToast(
+  'Team user created. Verification email has been requested.',
+)
 } catch (error) {
   showToast(
     error instanceof Error ? error.message : 'Failed to create team user',

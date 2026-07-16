@@ -133,25 +133,33 @@ export class NotificationsService {
       return;
     }
 
-    if (!this.transporter || !this.smtpFrom) {
-      await this.createLog({
-        ...input,
-        recipientEmail,
-        subject,
-        status: 'SKIPPED',
-        error: 'SMTP is not configured',
-      });
+if (!this.transporter || !this.smtpFrom) {
+  console.error(
+    `[NotificationsService] Email skipped for ${recipientEmail}: SMTP is not configured`,
+  );
 
-      return;
-    }
+  await this.createLog({
+    ...input,
+    recipientEmail,
+    subject,
+    status: 'SKIPPED',
+    error: 'SMTP is not configured',
+  });
+
+  return;
+}
 
     try {
-      await this.transporter.sendMail({
-        from: this.smtpFrom,
-        to: recipientEmail,
-        subject,
-        text,
-      });
+await this.transporter.sendMail({
+  from: this.smtpFrom,
+  to: recipientEmail,
+  subject,
+  text,
+});
+
+console.log(
+  `[NotificationsService] Email sent successfully to ${recipientEmail}`,
+);
 
       await this.createLog({
         ...input,
@@ -160,6 +168,10 @@ export class NotificationsService {
         status: 'SENT',
       });
     } catch (error) {
+      console.error(
+  `[NotificationsService] Email failed for ${recipientEmail}:`,
+  error instanceof Error ? error.message : 'Unknown SMTP error',
+);
       await this.createLog({
         ...input,
         recipientEmail,

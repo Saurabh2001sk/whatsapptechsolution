@@ -346,6 +346,17 @@ async connectFromEmbeddedSignup(tenantId: string, code: string) {
     );
   }
 
+  await this.verifyPhoneBelongsToWaba({
+    wabaId: connectedAccount.wabaId,
+    phoneNumberId: connectedAccount.phoneNumberId,
+    accessToken,
+  });
+
+  await this.subscribeAppToWaba({
+    wabaId: connectedAccount.wabaId,
+    accessToken,
+  });
+
   const encryptedAccessToken = this.cryptoService.encrypt(accessToken);
 
   const account = await this.saveConnectedMetaAccount({
@@ -414,6 +425,11 @@ const accessToken = await this.exchangeEmbeddedSignupCode({
 await this.verifyPhoneBelongsToWaba({
   wabaId,
   phoneNumberId,
+  accessToken,
+});
+
+await this.subscribeAppToWaba({
+  wabaId,
   accessToken,
 });
 
@@ -527,6 +543,45 @@ await this.billingService.assertSubscriptionCanUseWorkspace(
  tenantId,
  'connecting WhatsApp',
 );
+}
+
+private async subscribeAppToWaba(input: {
+  wabaId: string;
+  accessToken: string;
+}) {
+  const apiVersion = env.metaGraphApiVersion;
+
+  const response = await fetch(
+    `https://graph.facebook.com/${apiVersion}/${input.wabaId}/subscribed_apps`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    },
+  );
+
+  const data: {
+    success?: boolean;
+    error?: {
+      message?: string;
+      type?: string;
+      code?: number;
+      error_subcode?: number;
+    };
+  } = await response.json();
+
+  if (!response.ok || data.success !== true) {
+    throw new BadRequestException(
+      data.error?.message ||
+        'Failed to subscribe WhatsApp Business Account to platform webhooks',
+    );
+  }
+
+  return {
+    success: true,
+  };
 }
 
 private async verifyPhoneBelongsToWaba(input: {
@@ -720,6 +775,66 @@ messagingLimitTier: string | null;
 throw new BadRequestException(
  'No connected WhatsApp Business phone number was found',
 );
+}
+
+async syncActiveWebhookSubscription(tenantId: string) {
+  await this.billingService.assertSubscriptionCanUseWorkspace(
+    tenantId,
+    'configuring WhatsApp webhooks',
+  );
+
+  const account = await this.prisma.tenantMetaAccount.findFirst({
+    where: {
+      tenantId,
+      isActive: true,
+    },
+    select: {
+      id: true,
+      wabaId: true,
+      phoneNumberId: true,
+      encryptedAccessToken: true,
+    },
+  });
+
+  if (!account) {
+    throw new NotFoundException('Meta account is not connected');
+  }
+
+  const accessToken = this.cryptoService.decrypt(
+    account.encryptedAccessToken,
+  );
+
+  await this.verifyPhoneBelongsToWaba({
+    wabaId: account.wabaId,
+    phoneNumberId: account.phoneNumberId,
+    accessToken,
+  });
+
+  await this.subscribeAppToWaba({
+    wabaId: account.wabaId,
+    accessToken,
+  });
+
+  await this.prisma.auditLog.create({
+    data: {
+      tenantId,
+      actorUserId: null,
+      action: 'META_WEBHOOK_SUBSCRIPTION_SYNCED',
+      entityType: 'TENANT_META_ACCOUNT',
+      entityId: account.id,
+      metadata: {
+        wabaId: account.wabaId,
+        phoneNumberId: account.phoneNumberId,
+      },
+    },
+  });
+
+  return {
+    ok: true,
+    subscribed: true,
+    wabaId: account.wabaId,
+    phoneNumberId: account.phoneNumberId,
+  };
 }
 
 async syncActivePhoneQuality(tenantId: string) {

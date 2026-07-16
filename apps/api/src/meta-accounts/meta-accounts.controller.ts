@@ -138,6 +138,23 @@ export class MetaAccountsController {
     return this.metaAccountsService.testActiveConnection(user.tenantId);
   }
 
+    @Post('sync-webhook-subscription')
+  async syncWebhookSubscription(
+    @Req() request: Request,
+  ) {
+    const user =
+      await this.authService.requireUserFromRequest(request);
+
+    this.blockImpersonationWrites(
+      user,
+      'configure WhatsApp webhooks',
+    );
+
+    return this.metaAccountsService.syncActiveWebhookSubscription(
+      user.tenantId,
+    );
+  }
+
   @Post('sync-phone-quality')
   async syncPhoneQuality(@Req() request: Request) {
     const user = await this.authService.requireUserFromRequest(request);

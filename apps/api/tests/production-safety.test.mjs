@@ -223,3 +223,47 @@ test('Meta phone ownership is globally unique and transaction protected', () => 
     /account\?\.isActive\s*\?\s*account\.tenantId\s*:\s*null/,
   )
 })
+
+test('Embedded Signup automatically subscribes WABA to platform webhooks', () => {
+  const metaAccountsService = read(
+    '../src/meta-accounts/meta-accounts.service.ts',
+  )
+  const metaAccountsController = read(
+    '../src/meta-accounts/meta-accounts.controller.ts',
+  )
+
+  assert.match(
+    metaAccountsService,
+    /subscribeAppToWaba/,
+  )
+
+  assert.match(
+    metaAccountsService,
+    /\/subscribed_apps/,
+  )
+
+  assert.match(
+    metaAccountsService,
+    /method:\s*'POST'/,
+  )
+
+  assert.match(
+    metaAccountsService,
+    /Authorization:\s*`Bearer \$\{input\.accessToken\}`/,
+  )
+
+  assert.match(
+    metaAccountsService,
+    /syncActiveWebhookSubscription/,
+  )
+
+  assert.match(
+    metaAccountsController,
+    /sync-webhook-subscription/,
+  )
+
+  assert.match(
+    metaAccountsController,
+    /blockImpersonationWrites/,
+  )
+})
