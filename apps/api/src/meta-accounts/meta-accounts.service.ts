@@ -196,16 +196,11 @@ private readonly billingService: BillingService,
   }
 
 getEmbeddedSignupConfig() {
-  const appId = String(process.env.META_APP_ID || '').trim();
-  const configId = String(process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || '').trim();
-  const redirectUri = String(
-    process.env.META_EMBEDDED_SIGNUP_REDIRECT_URI || '',
-  ).trim();
-  const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
-const featureType = String(
- process.env.META_EMBEDDED_SIGNUP_FEATURE_TYPE ||
-   'whatsapp_business_app_onboarding',
-).trim();
+  const appId = env.metaAppId;
+  const configId = env.metaEmbeddedSignupConfigId;
+  const redirectUri = env.metaEmbeddedSignupRedirectUri
+  const apiVersion = env.metaGraphApiVersion;
+const featureType = env.metaEmbeddedSignupFeatureType
   const isConfigured = Boolean(appId && configId && redirectUri);
 
   return {
@@ -326,11 +321,9 @@ async connectFromEmbeddedSignup(tenantId: string, code: string) {
 
   await this.assertTenantCanConnectWhatsApp(tenantId);
 
-  const appId = String(process.env.META_APP_ID || '').trim();
-  const appSecret = String(process.env.META_APP_SECRET || '').trim();
-  const redirectUri = String(
-    process.env.META_EMBEDDED_SIGNUP_REDIRECT_URI || '',
-  ).trim();
+  const appId = env.metaAppId;
+  const appSecret = env.metaAppSecret;
+  const redirectUri = env.metaEmbeddedSignupRedirectUri
 
   if (!appId || !appSecret || !redirectUri) {
     throw new BadRequestException(
@@ -403,8 +396,8 @@ if (!phoneNumberId) {
 
 await this.assertTenantCanConnectWhatsApp(tenantId);
 
-const appId = String(process.env.META_APP_ID || '').trim();
-const appSecret = String(process.env.META_APP_SECRET || '').trim();
+const appId = env.metaAppId;
+const appSecret = env.metaAppSecret;
 
 if (!appId || !appSecret) {
   throw new BadRequestException(
@@ -416,6 +409,12 @@ const accessToken = await this.exchangeEmbeddedSignupCode({
   appId,
   appSecret,
   code,
+});
+
+await this.verifyPhoneBelongsToWaba({
+  wabaId,
+  phoneNumberId,
+  accessToken,
 });
 
 let selectedPhone: {
@@ -482,7 +481,7 @@ appSecret: string;
 redirectUri?: string;
 code: string;
 }) {
-  const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
+  const apiVersion = env.metaGraphApiVersion;
   const url = new URL(
     `https://graph.facebook.com/${apiVersion}/oauth/access_token`,
   );
@@ -530,8 +529,68 @@ await this.billingService.assertSubscriptionCanUseWorkspace(
 );
 }
 
+private async verifyPhoneBelongsToWaba(input: {
+  wabaId: string;
+  phoneNumberId: string;
+  accessToken: string;
+}) {
+  const apiVersion = String(
+    env.metaGraphApiVersion,
+  ).trim();
+
+  let nextUrl: string | null =
+    `https://graph.facebook.com/${apiVersion}/${input.wabaId}/phone_numbers?fields=id&limit=100`;
+
+  let checkedPages = 0;
+
+  while (nextUrl && checkedPages < 10) {
+    const response = await fetch(nextUrl, {
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+      },
+    });
+
+    const data: {
+      data?: Array<{
+        id?: string;
+      }>;
+      paging?: {
+        next?: string;
+      };
+      error?: {
+        message?: string;
+      };
+    } = await response.json();
+
+    if (!response.ok) {
+      throw new BadRequestException(
+        data.error?.message ||
+          'Failed to verify WhatsApp Business Account ownership',
+      );
+    }
+
+    const phoneBelongsToWaba = Array.isArray(data.data)
+      ? data.data.some(
+          (phone) =>
+            String(phone.id || '').trim() === input.phoneNumberId,
+        )
+      : false;
+
+    if (phoneBelongsToWaba) {
+      return;
+    }
+
+    nextUrl = String(data.paging?.next || '').trim() || null;
+    checkedPages += 1;
+  }
+
+  throw new BadRequestException(
+    'Selected WhatsApp phone number does not belong to the selected WhatsApp Business Account',
+  );
+}
+
 private async getSelectedPhoneDetails(phoneNumberId: string, accessToken: string) {
-const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
+const apiVersion = env.metaGraphApiVersion;
 
 const response = await fetch(
  `https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,messaging_limit_tier`,
@@ -575,7 +634,7 @@ phoneNumberId: string;
 qualityRating: string | null;
 messagingLimitTier: string | null;
 }> {
-  const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
+  const apiVersion = env.metaGraphApiVersion;
 
   const businessesResponse = await fetch(
     `https://graph.facebook.com/${apiVersion}/me/businesses?fields=id,name&limit=25`,
@@ -676,7 +735,7 @@ async syncActivePhoneQuality(tenantId: string) {
   }
 
   const accessToken = this.cryptoService.decrypt(account.encryptedAccessToken);
-  const apiVersion = String(process.env.META_GRAPH_API_VERSION || 'v20.0').trim();
+  const apiVersion = env.metaGraphApiVersion;
 
   const response = await fetch(
     `https://graph.facebook.com/${apiVersion}/${account.phoneNumberId}?fields=quality_rating,messaging_limit_tier,verified_name,display_phone_number`,
@@ -788,7 +847,7 @@ const account = await this.prisma.tenantMetaAccount.findFirst({
  }
 
  const accessToken = this.cryptoService.decrypt(account.encryptedAccessToken);
- const apiVersion = process.env.META_GRAPH_API_VERSION || 'v20.0';
+ const apiVersion = env.metaGraphApiVersion;
 
  const response = await fetch(
    `https://graph.facebook.com/${apiVersion}/${account.wabaId}/message_templates?limit=1`,
@@ -840,7 +899,7 @@ verifyWebhookChallenge(query: Record<string, string>) {
  const mode = String(query['hub.mode'] || '').trim();
  const token = String(query['hub.verify_token'] || '').trim();
  const challenge = String(query['hub.challenge'] || '').trim();
- const expectedToken = String(process.env.META_WEBHOOK_VERIFY_TOKEN || '').trim();
+ const expectedToken = env.metaWebhookVerifyToken;
 
  if (!expectedToken) {
    throw new BadRequestException('META_WEBHOOK_VERIFY_TOKEN is required');
@@ -1112,10 +1171,10 @@ private verifyWebhookSignature(
  rawBody: Buffer | undefined,
  body: Record<string, unknown>,
 ) {
- const appSecret = String(process.env.META_APP_SECRET || '').trim();
+ const appSecret = env.metaAppSecret;
 
  if (!appSecret) {
-   if (process.env.NODE_ENV === 'production') {
+  if (env.isProduction) {
      throw new BadRequestException('META_APP_SECRET is required in production');
    }
 

@@ -113,7 +113,7 @@ export class BillingController {
 
     requireRole(user, platformAdminRoles);
 
-    return this.billingService.listBillingAuditLogs(user.tenantId);
+    return this.billingService.listBillingAuditLogs();
   }
 
   @Get('admin/notification-logs')
@@ -122,7 +122,7 @@ export class BillingController {
 
     requireRole(user, platformAdminRoles);
 
-    return this.billingService.listNotificationLogs(user.tenantId);
+    return this.billingService.listNotificationLogs();
   }
 
   @Post('admin/subscriptions/:id/approve')

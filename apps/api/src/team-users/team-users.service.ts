@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { BillingService } from '../billing/billing.service';
 import { PrismaService } from '../database/prisma.service';
+import { AuthService } from '../auth/auth.service';
 
 const allowedTenantRoles = new Set(['admin', 'manager', 'agent']);
 
@@ -16,6 +17,7 @@ export class TeamUsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly billingService: BillingService,
+    private readonly authService: AuthService,
   ) {}
 
   listTeamUsers(tenantId: string) {
@@ -89,7 +91,7 @@ export class TeamUsersService {
               role,
               passwordHash,
               isActive: true,
-              emailVerifiedAt: new Date(),
+              emailVerifiedAt: null,
             },
             select: {
               id: true,
@@ -122,9 +124,16 @@ export class TeamUsersService {
           return user;
         },
         {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          isolationLevel:
+            Prisma.TransactionIsolationLevel.Serializable,
         },
-      );
+      ).then(async (user) => {
+        await this.authService.requestEmailVerification({
+          email: user.email,
+        });
+
+        return user;
+      });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

@@ -132,7 +132,9 @@ try {
   ])
 
   event.currentTarget.reset()
-  showToast('Team user created successfully')
+  showToast(
+    'Team user created. Verification email has been sent.',
+  )
 } catch (error) {
   showToast(
     error instanceof Error ? error.message : 'Failed to create team user',

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../database/prisma.service';
+import { env } from '../config/env';
 
 type NotifyInput = {
   tenantId?: string | null;
@@ -13,9 +14,40 @@ type NotifyInput = {
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly smtpFrom = env.smtpFrom;
 
-  async sendToTenantAdmins(input: NotifyInput & { tenantId: string }) {
+  private readonly transporter: nodemailer.Transporter | null;
+
+  constructor(private readonly prisma: PrismaService) {
+    const smtpHost = env.smtpHost;
+    const smtpPort = env.smtpPort;
+    const smtpUser = env.smtpUser;
+    const smtpPass = env.smtpPass;
+    const smtpSecure = env.smtpSecure;
+
+    this.transporter =
+      smtpHost && this.smtpFrom
+        ? nodemailer.createTransport({
+            host: smtpHost,
+            port: smtpPort,
+            secure: smtpSecure,
+            pool: true,
+            maxConnections: 3,
+            maxMessages: 100,
+            auth:
+              smtpUser && smtpPass
+                ? {
+                    user: smtpUser,
+                    pass: smtpPass,
+                  }
+                : undefined,
+          })
+        : null;
+  }
+
+  async sendToTenantAdmins(
+    input: NotifyInput & { tenantId: string },
+  ) {
     const users = await this.prisma.user.findMany({
       where: {
         tenantId: input.tenantId,
@@ -52,10 +84,15 @@ export class NotificationsService {
       },
     });
 
-    const fallbackEmail = String(process.env.BILLING_ALERT_EMAIL || '').trim();
+    const fallbackEmail =
+      env.billingAlertEmail;
+
     const recipients = users.map((user) => user.email);
 
-    if (fallbackEmail && !recipients.includes(fallbackEmail)) {
+    if (
+      fallbackEmail &&
+      !recipients.includes(fallbackEmail)
+    ) {
       recipients.push(fallbackEmail);
     }
 
@@ -69,16 +106,26 @@ export class NotificationsService {
     );
   }
 
-  async sendToEmail(input: NotifyInput & { recipientEmail: string }) {
- await this.sendEmail(input);
-}
+  async sendToEmail(
+    input: NotifyInput & { recipientEmail: string },
+  ) {
+    await this.sendEmail(input);
+  }
 
-  private async sendEmail(input: NotifyInput & { recipientEmail: string }) {
-    const recipientEmail = String(input.recipientEmail || '').trim();
+  private async sendEmail(
+    input: NotifyInput & { recipientEmail: string },
+  ) {
+    const recipientEmail = String(
+      input.recipientEmail || '',
+    ).trim();
+
     const subject = String(input.subject || '').trim();
     const text = String(input.text || '').trim();
 
-    if (!recipientEmail || !recipientEmail.includes('@')) {
+    if (
+      !recipientEmail ||
+      !recipientEmail.includes('@')
+    ) {
       return;
     }
 
@@ -86,14 +133,7 @@ export class NotificationsService {
       return;
     }
 
-    const smtpHost = String(process.env.SMTP_HOST || '').trim();
-    const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = String(process.env.SMTP_USER || '').trim();
-    const smtpPass = String(process.env.SMTP_PASS || '').trim();
-    const smtpFrom = String(process.env.SMTP_FROM || '').trim();
-    const smtpSecure = String(process.env.SMTP_SECURE || 'false') === 'true';
-
-    if (!smtpHost || !smtpFrom) {
+    if (!this.transporter || !this.smtpFrom) {
       await this.createLog({
         ...input,
         recipientEmail,
@@ -101,25 +141,13 @@ export class NotificationsService {
         status: 'SKIPPED',
         error: 'SMTP is not configured',
       });
+
       return;
     }
 
     try {
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpSecure,
-        auth:
-          smtpUser && smtpPass
-            ? {
-                user: smtpUser,
-                pass: smtpPass,
-              }
-            : undefined,
-      });
-
-      await transporter.sendMail({
-        from: smtpFrom,
+      await this.transporter.sendMail({
+        from: this.smtpFrom,
         to: recipientEmail,
         subject,
         text,
@@ -137,7 +165,10 @@ export class NotificationsService {
         recipientEmail,
         subject,
         status: 'FAILED',
-        error: error instanceof Error ? error.message : 'Email send failed',
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Email send failed',
       });
     }
   }

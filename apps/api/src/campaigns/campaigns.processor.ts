@@ -10,19 +10,25 @@ import {
   CampaignSendJobData,
 } from './campaigns.queue';
 import { CampaignsService } from './campaigns.service';
+import { env } from '../config/env';
 
 function getRedisConnectionOptions() {
-  const redisUrl = process.env.REDIS_URL;
-
-  if (!redisUrl && process.env.NODE_ENV === 'production') {
-    throw new Error('REDIS_URL is required for campaign worker in production');
+  if (!env.redisUrl && env.isProduction) {
+    throw new Error(
+      'REDIS_URL is required for campaign worker in production',
+    );
   }
 
+  const redisUrl =
+    env.redisUrl || 'redis://localhost:6379';
+
   return {
-    url: redisUrl || 'redis://localhost:6379',
+    url: redisUrl,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
-    tls: redisUrl?.startsWith('rediss://') ? {} : undefined,
+    tls: redisUrl.startsWith('rediss://')
+      ? {}
+      : undefined,
   };
 }
 

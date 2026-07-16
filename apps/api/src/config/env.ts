@@ -58,7 +58,69 @@ databaseUrl: requiredEnv('DATABASE_URL'),
 jwtSecret: requiredEnv('JWT_SECRET'),
 tokenEncryptionKey: requiredEnv('TOKEN_ENCRYPTION_KEY'),
 
+metaGraphApiVersion: optionalEnv(
+  'META_GRAPH_API_VERSION',
+  'v20.0',
+),
+
+metaAppId: optionalEnv('META_APP_ID'),
+
+metaAppSecret: optionalEnv(
+  'META_APP_SECRET',
+),
+
+metaWebhookVerifyToken: optionalEnv(
+  'META_WEBHOOK_VERIFY_TOKEN',
+),
+
+metaEmbeddedSignupConfigId: optionalEnv(
+  'META_EMBEDDED_SIGNUP_CONFIG_ID',
+),
+
+metaEmbeddedSignupRedirectUri: optionalEnv(
+  'META_EMBEDDED_SIGNUP_REDIRECT_URI',
+),
+
+metaEmbeddedSignupFeatureType: optionalEnv(
+  'META_EMBEDDED_SIGNUP_FEATURE_TYPE',
+  'whatsapp_business_app_onboarding',
+),
+
+webAppUrl: optionalEnv(
+  'WEB_APP_URL',
+  'http://localhost:5173',
+),
+
+frontendUrl: optionalEnv(
+  'FRONTEND_URL',
+  'http://localhost:5173',
+),
+
 redisUrl: optionalEnv('REDIS_URL'),
+
+campaignBatchSize: numberEnv(
+  'CAMPAIGN_BATCH_SIZE',
+  50,
+),
+
+campaignNextBatchDelayMs: numberEnv(
+  'CAMPAIGN_NEXT_BATCH_DELAY_MS',
+  3000,
+),
+
+campaignMessagesPerMinute: numberEnv(
+  'CAMPAIGN_MESSAGES_PER_MINUTE',
+  20,
+),
+
+campaignMaxRecipientRetries: numberEnv(
+  'CAMPAIGN_MAX_RECIPIENT_RETRIES',
+  3,
+),
+
+campaignWebhookSyncSecret: optionalEnv(
+  'CAMPAIGN_WEBHOOK_SYNC_SECRET',
+),
 
 mediaStorageDriver: optionalEnv('MEDIA_STORAGE_DRIVER', 'local')
 .trim()
@@ -75,15 +137,56 @@ s3AccessKeyId: optionalEnv('S3_ACCESS_KEY_ID'),
 s3SecretAccessKey: optionalEnv('S3_SECRET_ACCESS_KEY'),
 s3ForcePathStyle: optionalEnv('S3_FORCE_PATH_STYLE', 'true') !== 'false',
 
+smtpHost: optionalEnv('SMTP_HOST'),
+
+smtpPort: numberEnv(
+  'SMTP_PORT',
+  587,
+),
+
+smtpUser: optionalEnv('SMTP_USER'),
+
+smtpPass: optionalEnv('SMTP_PASS'),
+
+smtpFrom: optionalEnv('SMTP_FROM'),
+
+smtpSecure:
+  optionalEnv(
+    'SMTP_SECURE',
+    'false',
+  ) === 'true',
+
+billingAlertEmail:
+  optionalEnv('BILLING_ALERT_EMAIL'),
+
 sentryDsn: optionalEnv('SENTRY_DSN'),
+
 sentryEnvironment: optionalEnv(
 'SENTRY_ENVIRONMENT',
 process.env.NODE_ENV || 'development',
 ),
 
-backupDirectory: optionalEnv('DB_BACKUP_DIR', 'private/backups'),
-enableApiCampaignProcessor:
-process.env.ENABLE_API_CAMPAIGN_PROCESSOR === 'true',
+backupDirectory: optionalEnv(
+  'DB_BACKUP_DIR',
+  'private/backups',
+),
 
-isProduction: requiredEnv('NODE_ENV', 'development') === 'production',
+healthDbSecret: optionalEnv('HEALTH_DB_SECRET'),
+
+auditRetentionEnabled:
+  optionalEnv(
+    'AUDIT_RETENTION_ENABLED',
+    'false',
+  ) === 'true',
+
+auditRetentionDays: numberEnv(
+  'AUDIT_RETENTION_DAYS',
+  180,
+),
+
+enableApiCampaignProcessor:
+  process.env.ENABLE_API_CAMPAIGN_PROCESSOR === 'true',
+
+isProduction:
+  requiredEnv('NODE_ENV', 'development') === 'production',
 };

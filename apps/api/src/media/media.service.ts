@@ -94,6 +94,8 @@ if (!file.buffer || file.buffer.length === 0) {
   throw new BadRequestException('Uploaded file is empty');
 }
 
+this.assertFileSignature(file.mimetype, file.buffer);
+
 if (file.size > MAX_MEDIA_FILE_SIZE_BYTES) {
   throw new BadRequestException(
     `Media file is too large. Maximum allowed size is ${Math.floor(
@@ -380,6 +382,57 @@ const cleaned = String(value || 'file')
 
 return cleaned.slice(0, 120) || 'file';
 
+}
+
+private assertFileSignature(mimeType: string, buffer: Buffer) {
+  const hasBytes = (...bytes: number[]) =>
+    bytes.every((byte, index) => buffer[index] === byte);
+
+  let valid = false;
+
+  if (mimeType === 'image/jpeg') {
+    valid = buffer.length >= 3 && hasBytes(0xff, 0xd8, 0xff);
+  }
+
+  if (mimeType === 'image/png') {
+    valid =
+      buffer.length >= 8 &&
+      hasBytes(
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+      );
+  }
+
+  if (mimeType === 'image/webp') {
+    valid =
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+
+  if (mimeType === 'application/pdf') {
+    valid =
+      buffer.length >= 5 &&
+      buffer.subarray(0, 5).toString('ascii') === '%PDF-';
+  }
+
+  if (mimeType === 'video/mp4') {
+    valid =
+      buffer.length >= 12 &&
+      buffer.subarray(4, 8).toString('ascii') === 'ftyp';
+  }
+
+  if (!valid) {
+    throw new BadRequestException(
+      'Uploaded file content does not match its file type',
+    );
+  }
 }
 
 private getFileExtension(filename: string) {

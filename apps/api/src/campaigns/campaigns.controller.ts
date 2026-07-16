@@ -16,7 +16,7 @@ import { AuthService } from '../auth/auth.service';
 import type { CurrentUser } from '../auth/current-user';
 import { CampaignsService } from './campaigns.service';
 import { timingSafeEqual } from 'crypto';
-
+import { env } from '../config/env';
 @Controller('campaigns')
 export class CampaignsController {
   constructor(
@@ -164,12 +164,13 @@ export class CampaignsController {
     @Body()
     body: {
       messageId?: string;
+      phoneNumberId?: string;
       status?: string;
       timestamp?: string | number;
       errorMessage?: string;
     },
   ) {
-    const requiredSecret = process.env.CAMPAIGN_WEBHOOK_SYNC_SECRET;
+    const requiredSecret = env.campaignWebhookSyncSecret;
     const providedSecret = String(
       request.headers['x-campaign-webhook-sync-secret'] || '',
     );

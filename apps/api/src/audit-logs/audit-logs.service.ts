@@ -29,8 +29,8 @@ const sensitiveMetadataKeys = [
   'twofactortoken',
 ];
 
-const auditRetentionDays = 180;
-const auditRetentionIntervalMs = 24 * 60 * 60 * 1000;
+const auditRetentionIntervalMs =
+  24 * 60 * 60 * 1000;
 
 export type AuditLogFilters = {
   q?: string;
@@ -49,6 +49,14 @@ export class AuditLogsService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit() {
+    if (!env.auditRetentionEnabled) {
+      this.logger.log(
+        'Automatic audit retention cleanup is disabled',
+      );
+
+      return;
+    }
+
     this.retentionTimer = setInterval(() => {
       void this.cleanupOldAuditLogs();
     }, auditRetentionIntervalMs);
@@ -129,25 +137,25 @@ env.isProduction
  this.readinessCheck(
    'meta_app_id',
    'META_APP_ID is configured',
-   Boolean(String(process.env.META_APP_ID || '').trim()),
+    Boolean(env.metaAppId),
    'Meta app id is required for Embedded Signup',
  ),
  this.readinessCheck(
    'meta_app_secret',
    'META_APP_SECRET is configured',
-   Boolean(String(process.env.META_APP_SECRET || '').trim()),
+   Boolean(env.metaAppSecret),
    'Meta app secret is required for webhook signature verification',
  ),
  this.readinessCheck(
    'meta_webhook_verify_token',
    'META_WEBHOOK_VERIFY_TOKEN is configured',
-   Boolean(String(process.env.META_WEBHOOK_VERIFY_TOKEN || '').trim()),
+   Boolean(String(env.metaWebhookVerifyToken || '').trim()),
    'Webhook verify token is required for Meta webhook setup',
  ),
  this.readinessCheck(
    'campaign_webhook_sync_secret',
    'CAMPAIGN_WEBHOOK_SYNC_SECRET is configured',
-   Boolean(String(process.env.CAMPAIGN_WEBHOOK_SYNC_SECRET || '').trim()),
+   Boolean(String(env.campaignWebhookSyncSecret || '').trim()),
    'Internal campaign webhook sync route must be secret protected',
  ),
  this.readinessCheck(
@@ -195,7 +203,12 @@ return {
 
   async cleanupOldAuditLogs() {
     const cutoffDate = new Date(
-      Date.now() - auditRetentionDays * 24 * 60 * 60 * 1000,
+      Date.now() -
+        env.auditRetentionDays *
+          24 *
+          60 *
+          60 *
+          1000,
     );
 
     try {
@@ -239,7 +252,7 @@ return {
 
       if (deletedCount > 0) {
         this.logger.log(
-          `Audit retention cleanup deleted ${deletedCount} logs older than ${auditRetentionDays} days`,
+          `Audit retention cleanup deleted ${deletedCount} logs older than ${env.auditRetentionDays} days`,
         );
       }
     } catch (error) {

@@ -509,50 +509,115 @@ return {
 }
 
   private async createTrialSubscription(tenantId: string) {
-    const trialPlan = await this.prisma.plan.findUnique({
-      where: {
-        code: 'trial',
-      },
-    });
+    return this.prisma.$transaction(
+      async (tx) => {
+        /*
+         * PostgreSQL tenant-level transaction lock.
+         *
+         * Same tenant ke two parallel requests ko trial creation ke
+         * time ek saath execute hone se rokta hai.
+         */
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtext(${`trial-subscription:${tenantId}`})
+          )
+        `;
 
-    if (!trialPlan) {
-      throw new BadRequestException('Trial plan is not configured');
-    }
+        const existingSubscription =
+          await tx.tenantSubscription.findFirst({
+            where: {
+              tenantId,
+              status: {
+                in: [
+                  'TRIAL',
+                  'ACTIVE',
+                  'PAST_DUE',
+                  'PENDING_APPROVAL',
+                ],
+              },
+            },
+            orderBy: {
+              createdAt: 'desc',
+            },
+            include: {
+              plan: {
+                select: {
+                  id: true,
+                  code: true,
+                  name: true,
+                  description: true,
+                  priceMonthlyPaise: true,
+                  currency: true,
+                  monthlyCampaignRecipientLimit: true,
+                  monthlyCampaignLimit: true,
+                  maxContacts: true,
+                  maxTeamUsers: true,
+                  maxAutomationRules: true,
+                  mediaStorageMb: true,
+                  supportLevel: true,
+                  requiresApproval: true,
+                },
+              },
+            },
+          });
 
-    const now = new Date();
-    const periodEnd = this.addOneMonth(now);
+        if (existingSubscription) {
+          return existingSubscription;
+        }
 
-    return this.prisma.tenantSubscription.create({
-      data: {
-        tenantId,
-        planId: trialPlan.id,
-        status: 'TRIAL',
-        billingResponsibility: 'CUSTOMER_META_BILLING',
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
-        trialEndsAt: periodEnd,
-      },
-      include: {
-        plan: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            description: true,
-            priceMonthlyPaise: true,
-            currency: true,
-            monthlyCampaignRecipientLimit: true,
-            monthlyCampaignLimit: true,
-            maxContacts: true,
-            maxTeamUsers: true,
-            maxAutomationRules: true,
-            mediaStorageMb: true,
-            supportLevel: true,
-            requiresApproval: true,
+        const trialPlan = await tx.plan.findUnique({
+          where: {
+            code: 'trial',
           },
-        },
+        });
+
+        if (!trialPlan) {
+          throw new BadRequestException(
+            'Trial plan is not configured',
+          );
+        }
+
+        const now = new Date();
+        const periodEnd = this.addOneMonth(now);
+
+        return tx.tenantSubscription.create({
+          data: {
+            tenantId,
+            planId: trialPlan.id,
+            status: 'TRIAL',
+            billingResponsibility:
+              'CUSTOMER_META_BILLING',
+            currentPeriodStart: now,
+            currentPeriodEnd: periodEnd,
+            trialEndsAt: periodEnd,
+          },
+          include: {
+            plan: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                description: true,
+                priceMonthlyPaise: true,
+                currency: true,
+                monthlyCampaignRecipientLimit: true,
+                monthlyCampaignLimit: true,
+                maxContacts: true,
+                maxTeamUsers: true,
+                maxAutomationRules: true,
+                mediaStorageMb: true,
+                supportLevel: true,
+                requiresApproval: true,
+              },
+            },
+          },
+        });
       },
-    });
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
   }
 
   private async ensureDefaultPlans() {

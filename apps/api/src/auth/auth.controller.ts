@@ -299,15 +299,31 @@ response.cookie(
     };
   }
 
-@Post('logout')
-@HttpCode(200)
-async logout(@Res({ passthrough: true }) response: Response) {
-response.clearCookie('access_token', clearAccessTokenCookieOptions);
+  @Post('logout')
+  @HttpCode(200)
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const trustedDeviceToken =
+      request.cookies?.[trustedDeviceCookieName];
 
-return {
- ok: true,
-};
-}
+    await this.authService.revokeTrustedDevice(trustedDeviceToken);
+
+    response.clearCookie(
+      'access_token',
+      clearAccessTokenCookieOptions,
+    );
+
+    response.clearCookie(
+      trustedDeviceCookieName,
+      clearTrustedDeviceCookieOptions,
+    );
+
+    return {
+      ok: true,
+    };
+  }
 
   @Get('me')
   me(@Req() request: Request) {

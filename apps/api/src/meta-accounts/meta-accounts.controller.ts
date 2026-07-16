@@ -15,6 +15,7 @@ import { AuthService } from '../auth/auth.service';
 import type { CurrentUser } from '../auth/current-user';
 import { MetaAccountsService } from './meta-accounts.service';
 import { requireRole } from '../auth/require-role';
+import { env } from '../config/env';
 
 type RawBodyRequest = Request & {
   rawBody?: Buffer;
@@ -87,9 +88,7 @@ export class MetaAccountsController {
     @Query('error') error?: string,
     @Query('error_description') errorDescription?: string,
   ) {
-    const frontendUrl = String(
-      process.env.WEB_APP_URL || 'http://localhost:5173',
-    ).trim();
+    const frontendUrl = env.webAppUrl;
 
     if (error) {
       return response.redirect(

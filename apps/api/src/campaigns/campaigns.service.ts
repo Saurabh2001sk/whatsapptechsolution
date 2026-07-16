@@ -9,6 +9,7 @@ import { MetaAccountsService } from '../meta-accounts/meta-accounts.service';
 import { BillingService } from '../billing/billing.service';
 import { CampaignQueue } from './campaigns.queue';
 import { MediaService } from '../media/media.service';
+import { env } from '../config/env';
 
 type CreateCampaignInput = {
 name?: string;
@@ -28,10 +29,11 @@ nextBatchDelayMs: number;
 };
 
 type DeliveryStatusInput = {
-messageId?: string;
-status?: string;
-timestamp?: string | number;
-errorMessage?: string;
+  messageId?: string;
+  phoneNumberId?: string;
+  status?: string;
+  timestamp?: string | number;
+  errorMessage?: string;
 };
 
 function sleep(ms: number) {
@@ -41,18 +43,16 @@ function sleep(ms: number) {
 @Injectable()
 export class CampaignsService {
   private readonly directSendLimit =
-    Number.parseInt(process.env.CAMPAIGN_BATCH_SIZE || '50', 10) || 50;
+    env.campaignBatchSize;
 
   private readonly nextBatchDelayMs =
-    Number.parseInt(process.env.CAMPAIGN_NEXT_BATCH_DELAY_MS || '3000', 10) ||
-    3000;
+    env.campaignNextBatchDelayMs;
 
   private readonly messagesPerMinute =
-    Number.parseInt(process.env.CAMPAIGN_MESSAGES_PER_MINUTE || '20', 10) || 20;
+    env.campaignMessagesPerMinute;
 
-    
   private readonly maxRecipientRetryCount =
-    Number.parseInt(process.env.CAMPAIGN_MAX_RECIPIENT_RETRIES || '3', 10) || 3;
+    env.campaignMaxRecipientRetries;
 
 constructor(
  private readonly prisma: PrismaService,
@@ -1289,45 +1289,53 @@ variableValues,
 headerMediaId,
 });
 
-      const retryResult = await this.prisma.campaignRecipient.updateMany({
-        where: {
-          id: recipient.id,
-          tenantId: input.tenantId,
-          campaignId: input.campaignId,
-          status: 'PROCESSING',
-        },
-        data: {
-          status: 'SENT',
-          metaMessageId,
-          errorMessage: null,
-          sentAt: new Date(),
-          failedAt: null,
-          statusWebhookAt: null,
-        },
-      });
+      const sentUpdate =
+        await this.prisma.campaignRecipient.updateMany({
+          where: {
+            id: recipient.id,
+            tenantId: input.tenantId,
+            campaignId: input.campaignId,
+            status: 'PROCESSING',
+          },
+          data: {
+            status: 'SENT',
+            metaMessageId,
+            errorMessage: null,
+            sentAt: new Date(),
+            failedAt: null,
+            statusWebhookAt: null,
+          },
+        });
 
-      sentCount += 1;
+      if (sentUpdate.count === 1) {
+        sentCount += 1;
+      }
 
       if (throttle.messagesPerMinute > 0) {
         await sleep(Math.ceil(60000 / throttle.messagesPerMinute));
       }
     } catch (error) {
-      const retryResult = await this.prisma.campaignRecipient.updateMany({
-        where: {
-          id: recipient.id,
-          tenantId: input.tenantId,
-          campaignId: input.campaignId,
-          status: 'PROCESSING',
-        },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          errorMessage:
-            error instanceof Error ? error.message : 'Failed to send message',
-        },
-      });
+      const failedUpdate =
+        await this.prisma.campaignRecipient.updateMany({
+          where: {
+            id: recipient.id,
+            tenantId: input.tenantId,
+            campaignId: input.campaignId,
+            status: 'PROCESSING',
+          },
+          data: {
+            status: 'FAILED',
+            failedAt: new Date(),
+            errorMessage:
+              error instanceof Error
+                ? error.message
+                : 'Failed to send message',
+          },
+        });
 
-      failedCount += 1;
+      if (failedUpdate.count === 1) {
+        failedCount += 1;
+      }
     }
   }
 
@@ -1591,15 +1599,42 @@ if (!['SCHEDULED', 'QUEUED', 'SENDING'].includes(campaign.status)) {
 }
 
 async syncMessageDeliveryStatusFromWebhook(input: DeliveryStatusInput) {
- const messageId = String(input.messageId || '').trim();
- const status = String(input.status || '').trim().toUpperCase();
- const eventAt = this.parseWebhookTimestamp(input.timestamp);
+  const messageId = String(input.messageId || '').trim();
+  const phoneNumberId = String(input.phoneNumberId || '').trim();
+  const status = String(input.status || '').trim().toUpperCase();
+  const eventAt = this.parseWebhookTimestamp(input.timestamp);
 
- if (!messageId) {
-   throw new BadRequestException('Webhook message ID is required');
- }
+  if (!messageId) {
+    throw new BadRequestException('Webhook message ID is required');
+  }
 
- if (!['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(status)) {
+  if (!phoneNumberId) {
+    throw new BadRequestException(
+      'Webhook phone number ID is required',
+    );
+  }
+
+  const metaAccount =
+    await this.prisma.tenantMetaAccount.findUnique({
+      where: {
+        phoneNumberId,
+      },
+      select: {
+        tenantId: true,
+        isActive: true,
+      },
+    });
+
+  if (!metaAccount?.isActive) {
+    return {
+      ok: true,
+      ignored: true,
+      reason:
+        'Phone number is not linked to an active tenant Meta account',
+    };
+  }
+
+  if (!['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(status)) {
    return {
      ok: true,
      ignored: true,
@@ -1607,14 +1642,16 @@ async syncMessageDeliveryStatusFromWebhook(input: DeliveryStatusInput) {
    };
  }
 
- const recipient = await this.prisma.campaignRecipient.findFirst({
-   where: {
-     metaMessageId: messageId,
-   },
-   include: {
-     campaign: true,
-   },
- });
+  const recipient =
+    await this.prisma.campaignRecipient.findFirst({
+      where: {
+        tenantId: metaAccount.tenantId,
+        metaMessageId: messageId,
+      },
+      include: {
+        campaign: true,
+      },
+    });
 
  if (!recipient) {
    return {
@@ -2119,7 +2156,7 @@ if (totalVariablesNeeded !== variableValues.length) {
  const baseBatchSize = Math.max(1, this.directSendLimit);
  const baseMessagesPerMinute = Math.max(1, this.messagesPerMinute);
  const baseNextBatchDelayMs = Math.max(1000, this.nextBatchDelayMs);
- const apiVersion = process.env.META_GRAPH_API_VERSION || 'v20.0';
+ const apiVersion = env.metaGraphApiVersion;
 
  let qualityRating = 'UNKNOWN';
  let messagingLimitTier: string | null = null;
@@ -2298,7 +2335,7 @@ private async uploadCampaignHeaderMediaIfNeeded(input: {
    );
  }
 
- const apiVersion = process.env.META_GRAPH_API_VERSION || 'v20.0';
+ const apiVersion = env.metaGraphApiVersion;
  const formData = new FormData();
 
 const mediaArrayBuffer = new ArrayBuffer(media.buffer.byteLength);
@@ -2474,7 +2511,7 @@ for (const buttonSlot of buttonVariableSlots) {
   buttonVariableStartIndex += 1;
 }
 
-    const apiVersion = process.env.META_GRAPH_API_VERSION || 'v20.0';
+    const apiVersion = env.metaGraphApiVersion;
 
     const response = await fetch(
       `https://graph.facebook.com/${apiVersion}/${input.phoneNumberId}/messages`,

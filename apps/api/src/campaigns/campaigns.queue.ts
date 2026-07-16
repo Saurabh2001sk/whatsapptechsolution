@@ -1,4 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { env } from '../config/env';
 import { Queue } from 'bullmq';
 
 export type CampaignSendJobData = {
@@ -9,17 +10,22 @@ export type CampaignSendJobData = {
 export const CAMPAIGN_SEND_QUEUE = 'campaign-send-queue';
 
 function getRedisConnectionOptions() {
-  const redisUrl = process.env.REDIS_URL;
-
-  if (!redisUrl && process.env.NODE_ENV === 'production') {
-    throw new Error('REDIS_URL is required for campaign queue in production');
+  if (!env.redisUrl && env.isProduction) {
+    throw new Error(
+      'REDIS_URL is required for campaign queue in production',
+    );
   }
 
+  const redisUrl =
+    env.redisUrl || 'redis://localhost:6379';
+
   return {
-    url: redisUrl || 'redis://localhost:6379',
+    url: redisUrl,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
-    tls: redisUrl?.startsWith('rediss://') ? {} : undefined,
+    tls: redisUrl.startsWith('rediss://')
+      ? {}
+      : undefined,
   };
 }
 
@@ -44,38 +50,70 @@ export class CampaignQueue implements OnModuleDestroy {
     },
   });
 
+  private getCampaignJobId(campaignId: string) {
+    return `campaign-${campaignId}`;
+  }
+
   async addCampaignSendJob(
     data: CampaignSendJobData,
     options?: {
       delay?: number;
     },
   ) {
-    await this.removeCampaignJobs(data.campaignId);
+    const jobId = this.getCampaignJobId(
+      data.campaignId,
+    );
 
-    return this.queue.add('send-campaign', data, {
-      delay: Math.max(0, options?.delay || 0),
-      jobId: `campaign-${data.campaignId}-${Date.now()}`,
-    });
-  }
+    const existingJob =
+      await this.queue.getJob(jobId);
 
-  async removeCampaignJobs(campaignId: string) {
-    const jobs = await this.queue.getJobs([
-      'delayed',
-      'waiting',
-      'paused',
-      'prioritized',
-    ]);
+    if (existingJob) {
+      const state = await existingJob.getState();
 
-    let removedCount = 0;
-
-    for (const job of jobs) {
-      if (job.data?.campaignId === campaignId) {
-        await job.remove();
-        removedCount += 1;
+      /*
+       * Active worker job ko remove nahi karte.
+       * Same deterministic job ID duplicate active job
+       * create hone se rokega.
+       */
+      if (state !== 'active') {
+        await existingJob.remove();
+      } else {
+        return existingJob;
       }
     }
 
-    return removedCount;
+    return this.queue.add(
+      'send-campaign',
+      data,
+      {
+        delay: Math.max(
+          0,
+          options?.delay || 0,
+        ),
+        jobId,
+      },
+    );
+  }
+
+  async removeCampaignJobs(campaignId: string) {
+    const jobId =
+      this.getCampaignJobId(campaignId);
+
+    const job = await this.queue.getJob(jobId);
+
+    if (!job) {
+      return 0;
+    }
+
+    const state = await job.getState();
+
+    if (state === 'active') {
+      return 0;
+    }
+
+    await job.remove();
+
+    return 1;
   }
 
   async onModuleDestroy() {
