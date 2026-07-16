@@ -156,6 +156,17 @@ smtpSecure:
     'false',
   ) === 'true',
 
+brevoApiKey: optionalEnv('BREVO_API_KEY'),
+
+brevoSenderName: optionalEnv(
+  'BREVO_SENDER_NAME',
+  'Blue Ocean Steels LLP',
+),
+
+brevoSenderEmail: optionalEnv(
+  'BREVO_SENDER_EMAIL',
+),
+
 billingAlertEmail:
   optionalEnv('BILLING_ALERT_EMAIL'),
 

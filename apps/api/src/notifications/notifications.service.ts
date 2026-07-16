@@ -23,6 +23,12 @@ export class NotificationsService implements OnModuleInit {
 
   private readonly smtpFrom = env.smtpFrom;
 
+  private readonly brevoApiKey = env.brevoApiKey;
+
+  private readonly brevoSenderName = env.brevoSenderName;
+
+  private readonly brevoSenderEmail = env.brevoSenderEmail;
+
   private readonly transporter: nodemailer.Transporter | null;
 
   constructor(private readonly prisma: PrismaService) {
@@ -53,29 +59,38 @@ export class NotificationsService implements OnModuleInit {
   }
 
   async onModuleInit() {
-  if (!this.transporter || !this.smtpFrom) {
-    this.logger.error(
-      'SMTP is not configured. Check SMTP_HOST and SMTP_FROM.',
-    );
-    return;
-  }
+    if (this.brevoApiKey && this.brevoSenderEmail) {
+      this.logger.log(
+        'Brevo HTTPS email delivery is configured.',
+      );
 
-  try {
-    await this.transporter.verify();
+      return;
+    }
 
-    this.logger.log(
-      'SMTP connection verified successfully.',
-    );
-  } catch (error) {
-    this.logger.error(
-      `SMTP verification failed: ${
-        error instanceof Error
-          ? error.message
-          : 'Unknown SMTP error'
-      }`,
-    );
+    if (!this.transporter || !this.smtpFrom) {
+      this.logger.error(
+        'Email delivery is not configured. Add BREVO_API_KEY and BREVO_SENDER_EMAIL.',
+      );
+
+      return;
+    }
+
+    try {
+      await this.transporter.verify();
+
+      this.logger.log(
+        'SMTP connection verified successfully.',
+      );
+    } catch (error) {
+      this.logger.error(
+        `SMTP verification failed: ${
+          error instanceof Error
+            ? error.message
+            : 'Unknown SMTP error'
+        }`,
+      );
+    }
   }
-}
 
   async sendToTenantAdmins(
     input: NotifyInput & { tenantId: string },
@@ -165,21 +180,90 @@ export class NotificationsService implements OnModuleInit {
       return;
     }
 
-if (!this.transporter || !this.smtpFrom) {
-this.logger.error(
-  `Email skipped for ${recipientEmail}: SMTP is not configured`,
-);
+    if (this.brevoApiKey && this.brevoSenderEmail) {
+      try {
+        const response = await fetch(
+          'https://api.brevo.com/v3/smtp/email',
+          {
+            method: 'POST',
+            headers: {
+              accept: 'application/json',
+              'api-key': this.brevoApiKey,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              sender: {
+                name: this.brevoSenderName,
+                email: this.brevoSenderEmail,
+              },
+              to: [
+                {
+                  email: recipientEmail,
+                },
+              ],
+              subject,
+              textContent: text,
+            }),
+          },
+        );
 
-  await this.createLog({
-    ...input,
-    recipientEmail,
-    subject,
-    status: 'SKIPPED',
-    error: 'SMTP is not configured',
-  });
+        if (!response.ok) {
+          const responseText = await response.text();
 
-  return;
-}
+          throw new Error(
+            `Brevo API returned ${response.status}: ${responseText.slice(0, 500)}`,
+          );
+        }
+
+        this.logger.log(
+          `Email sent successfully through Brevo to ${recipientEmail}`,
+        );
+
+        await this.createLog({
+          ...input,
+          recipientEmail,
+          subject,
+          status: 'SENT',
+        });
+
+        return;
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Brevo email send failed';
+
+        this.logger.error(
+          `Brevo email failed for ${recipientEmail}: ${errorMessage}`,
+        );
+
+        await this.createLog({
+          ...input,
+          recipientEmail,
+          subject,
+          status: 'FAILED',
+          error: errorMessage,
+        });
+
+        return;
+      }
+    }
+
+    if (!this.transporter || !this.smtpFrom) {
+      this.logger.error(
+        `Email skipped for ${recipientEmail}: email delivery is not configured`,
+      );
+
+      await this.createLog({
+        ...input,
+        recipientEmail,
+        subject,
+        status: 'SKIPPED',
+        error: 'Email delivery is not configured',
+      });
+
+      return;
+    }
 
     try {
 await this.transporter.sendMail({
@@ -189,9 +273,9 @@ await this.transporter.sendMail({
   text,
 });
 
-this.logger.log(
-  `Email sent successfully to ${recipientEmail}`,
-);
+      this.logger.log(
+        `Email sent successfully through SMTP to ${recipientEmail}`,
+      );
       await this.createLog({
         ...input,
         recipientEmail,
