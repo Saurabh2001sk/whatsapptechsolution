@@ -1,8 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../database/prisma.service';
 import { env } from '../config/env';
+
 
 type NotifyInput = {
   tenantId?: string | null;
@@ -13,7 +18,9 @@ type NotifyInput = {
 };
 
 @Injectable()
-export class NotificationsService {
+export class NotificationsService implements OnModuleInit {
+  private readonly logger = new Logger(NotificationsService.name);
+
   private readonly smtpFrom = env.smtpFrom;
 
   private readonly transporter: nodemailer.Transporter | null;
@@ -44,6 +51,31 @@ export class NotificationsService {
           })
         : null;
   }
+
+  async onModuleInit() {
+  if (!this.transporter || !this.smtpFrom) {
+    this.logger.error(
+      'SMTP is not configured. Check SMTP_HOST and SMTP_FROM.',
+    );
+    return;
+  }
+
+  try {
+    await this.transporter.verify();
+
+    this.logger.log(
+      'SMTP connection verified successfully.',
+    );
+  } catch (error) {
+    this.logger.error(
+      `SMTP verification failed: ${
+        error instanceof Error
+          ? error.message
+          : 'Unknown SMTP error'
+      }`,
+    );
+  }
+}
 
   async sendToTenantAdmins(
     input: NotifyInput & { tenantId: string },
@@ -134,9 +166,9 @@ export class NotificationsService {
     }
 
 if (!this.transporter || !this.smtpFrom) {
-  console.error(
-    `[NotificationsService] Email skipped for ${recipientEmail}: SMTP is not configured`,
-  );
+this.logger.error(
+  `Email skipped for ${recipientEmail}: SMTP is not configured`,
+);
 
   await this.createLog({
     ...input,
@@ -157,32 +189,34 @@ await this.transporter.sendMail({
   text,
 });
 
-console.log(
-  `[NotificationsService] Email sent successfully to ${recipientEmail}`,
+this.logger.log(
+  `Email sent successfully to ${recipientEmail}`,
 );
-
       await this.createLog({
         ...input,
         recipientEmail,
         subject,
         status: 'SENT',
       });
-    } catch (error) {
-      console.error(
-  `[NotificationsService] Email failed for ${recipientEmail}:`,
-  error instanceof Error ? error.message : 'Unknown SMTP error',
-);
-      await this.createLog({
-        ...input,
-        recipientEmail,
-        subject,
-        status: 'FAILED',
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Email send failed',
-      });
-    }
+
+} catch (error) {
+  const errorMessage =
+    error instanceof Error
+      ? error.message
+      : 'Email send failed';
+
+  this.logger.error(
+    `Email failed for ${recipientEmail}: ${errorMessage}`,
+  );
+
+  await this.createLog({
+    ...input,
+    recipientEmail,
+    subject,
+    status: 'FAILED',
+    error: errorMessage,
+  });
+}
   }
 
   private async createLog(input: {
