@@ -1,0 +1,424 @@
+.drips-page {
+  display: grid;
+  gap: 18px;
+}
+
+.drips-toolbar,
+.drips-panel {
+  border: 1px solid #dbe5ef;
+  border-radius: 20px;
+  padding: 20px;
+  color: #0f172a;
+  background: #ffffff;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.04);
+}
+
+.drips-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.drips-toolbar h2,
+.drips-panel h3 {
+  margin: 0;
+}
+
+.drips-toolbar p,
+.drips-panel p {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+.drips-toolbar-actions,
+.drip-card-actions,
+.drips-submit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.drips-toolbar button,
+.drips-panel button {
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: #ffffff;
+  background: #0f8f78;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.drips-toolbar button.active {
+  background: #0f172a;
+}
+
+.drips-toolbar button:disabled,
+.drips-panel button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.drips-panel button.danger,
+.drip-card-actions button.danger {
+  background: #dc2626;
+}
+
+.drips-panel button.secondary {
+  color: #334155;
+  background: #e2e8f0;
+}
+
+.drips-filter-row,
+.drips-section-heading,
+.drip-workflow-header,
+.drips-step-header,
+.drips-enrollment-header,
+.drips-message-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.drips-filter-row {
+  align-items: center;
+}
+
+.drips-filter-row input,
+.drips-contact-search input,
+.drips-form-grid input,
+.drips-form-grid select,
+.drips-form-grid textarea,
+.drips-cooldown-field input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 11px 12px;
+  color: #0f172a;
+  background: #ffffff;
+  font: inherit;
+}
+
+.drips-filter-row input {
+  max-width: 420px;
+}
+
+.drips-workflow-grid,
+.drips-step-list,
+.drips-enrollment-list,
+.drips-message-list,
+.drips-details-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.drips-workflow-grid,
+.drips-step-list,
+.drips-enrollment-list {
+  margin-top: 18px;
+}
+
+.drip-workflow-card,
+.drips-step-card,
+.drips-enrollment-card {
+  border: 1px solid #dbe5ef;
+  border-radius: 18px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  background: #f8fafc;
+}
+
+.drip-workflow-header strong,
+.drips-enrollment-header strong {
+  display: block;
+  font-size: 18px;
+}
+
+.drip-workflow-header span,
+.drips-enrollment-header span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.drip-status {
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: #334155;
+  background: #e2e8f0;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.drip-status.active,
+.drip-status.sent,
+.drip-status.delivered,
+.drip-status.read,
+.drip-status.approved,
+.drip-status.completed {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.drip-status.draft,
+.drip-status.pending,
+.drip-status.waiting,
+.drip-status.processing {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.drip-status.paused,
+.drip-status.stopped,
+.drip-status.canceled,
+.drip-status.archived {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.drip-status.failed {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.drip-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.drip-summary-grid div {
+  border: 1px solid #dbe5ef;
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  background: #ffffff;
+}
+
+.drip-summary-grid span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.drip-summary-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.drips-form-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.drips-form-grid label,
+.drips-fixed-field,
+.drips-cooldown-field {
+  display: grid;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drips-fixed-field strong {
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 11px 12px;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.drips-full-width {
+  grid-column: 1 / -1;
+}
+
+.drips-days,
+.drips-option-grid {
+  margin-top: 18px;
+  border: 1px solid #dbe5ef;
+  border-radius: 16px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  background: #f8fafc;
+}
+
+.drips-days > div,
+.drips-option-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.drips-days label,
+.drips-option-grid label {
+  border: 1px solid #dbe5ef;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.drips-cooldown-field {
+  margin-top: 18px;
+  max-width: 320px;
+}
+
+.drips-submit-row {
+  margin-top: 18px;
+}
+
+.drips-contact-list {
+  margin-top: 16px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.drips-contact-search {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.drips-contact-search input {
+  min-width: min(100%, 320px);
+  flex: 1;
+}
+
+.drips-helper-text {
+  color: #047857;
+  font-weight: 800;
+}
+
+.drips-helper-text.warning,
+.drips-summary-alert {
+  color: #b45309;
+}
+
+.drips-summary-alert {
+  margin-top: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 14px;
+  padding: 12px;
+  background: #fffbeb;
+  font-weight: 800;
+}
+
+.drips-contact-list label {
+  border: 1px solid #dbe5ef;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f8fafc;
+}
+
+.drips-contact-list span {
+  display: grid;
+}
+
+.drips-contact-list small {
+  color: #64748b;
+}
+
+.drips-message-list {
+  border-top: 1px solid #dbe5ef;
+  padding-top: 14px;
+}
+
+.drips-message-row {
+  border: 1px solid #dbe5ef;
+  border-radius: 14px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.drips-message-row > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.drips-message-row span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.drips-message-action {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.drips-error-text {
+  margin-top: 5px;
+  color: #b91c1c;
+  overflow-wrap: anywhere;
+}
+
+.drips-empty-state {
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  padding: 22px;
+  color: #64748b;
+  text-align: center;
+  background: #f8fafc;
+}
+
+.drips-empty-state button {
+  margin-top: 12px;
+}
+
+@media (max-width: 1050px) {
+  .drip-summary-grid,
+  .drips-form-grid {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .drips-toolbar,
+  .drips-section-heading,
+  .drip-workflow-header,
+  .drips-enrollment-header,
+  .drips-message-row {
+    flex-direction: column;
+  }
+
+  .drips-toolbar-actions,
+  .drip-card-actions,
+  .drips-submit-row {
+    width: 100%;
+  }
+
+  .drips-toolbar button,
+  .drip-card-actions button,
+  .drips-submit-row button {
+    flex: 1;
+  }
+
+  .drip-summary-grid,
+  .drips-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .drips-full-width {
+    grid-column: auto;
+  }
+
+  .drips-message-action {
+    justify-items: start;
+  }
+}

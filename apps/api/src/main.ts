@@ -3,8 +3,8 @@ import * as Sentry from '@sentry/node';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { NextFunction, Request, Response, json } from 'express';
-import { AppModule } from './app.module';
-import { env } from './config/env';
+import { AppModule } from './modules/app.module';
+import { env } from './env';
 import { RedactingLogger } from './security/redacting-logger';
 
 const writeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);

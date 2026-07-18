@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import * as Sentry from '@sentry/node';
 import { Request, Response } from 'express';
-import { env } from '../config/env';
+import { env } from '../env';
 
 @Catch()
 export class SentryExceptionFilter implements ExceptionFilter {
@@ -22,10 +22,11 @@ export class SentryExceptionFilter implements ExceptionFilter {
       Sentry.withScope((scope) => {
         scope.setTag('path', request.path);
         scope.setTag('method', request.method);
+
         scope.setContext('request', {
           path: request.path,
           method: request.method,
-          query: request.query,
+          queryKeys: Object.keys(request.query || {}).slice(0, 50),
         });
 
         Sentry.captureException(exception);

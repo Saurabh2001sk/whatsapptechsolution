@@ -8,9 +8,13 @@
     "promote:platform-admin": "ts-node src/scripts/promote-platform-admin.ts",
     "start": "node dist/main.js",
     "start:campaign-worker": "node dist/workers/campaign-worker.js",
+    "start:drip-worker": "node dist/workers/drip-worker.js",
     "start:dev:campaign-worker": "ts-node-dev --respawn --transpile-only src/workers/campaign-worker.ts",
+    "start:dev:drip-worker": "ts-node-dev --respawn --transpile-only src/workers/drip-worker.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status",
     "test": "node --test tests/*.test.mjs",
     "db:backup": "node src/scripts/db-backup.mjs",
     "db:restore": "node src/scripts/db-restore.mjs"

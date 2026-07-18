@@ -22,6 +22,10 @@ model Tenant {
   mediaFiles        MediaFile[]
   campaigns         Campaign[]
   campaignAuditLogs CampaignAuditLog[]
+  dripWorkflows     DripWorkflow[]
+  dripEnrollments   DripEnrollment[]
+  dripMessages      DripMessage[]
+  dripAuditLogs     DripAuditLog[]
   webhookEvents     WebhookEvent[]
   subscriptions     TenantSubscription[]
   usageRecords      TenantUsage[]
@@ -49,6 +53,7 @@ model User {
 
   tenant                   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   campaignAuditLogs        CampaignAuditLog[]
+  dripAuditLogs            DripAuditLog[]
   passwordResetTokens      PasswordResetToken[]
   emailVerificationTokens  EmailVerificationToken[]
   twoFactorLoginChallenges TwoFactorLoginChallenge[]
@@ -147,8 +152,9 @@ model ContactType {
   updatedAt DateTime @updatedAt
 
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contacts  Contact[]
-  campaigns Campaign[]
+  contacts      Contact[]
+  campaigns     Campaign[]
+  dripWorkflows DripWorkflow[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -174,6 +180,8 @@ model Contact {
   tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contactType        ContactType?        @relation(fields: [contactTypeId], references: [id], onDelete: SetNull)
   campaignRecipients CampaignRecipient[]
+  dripEnrollments    DripEnrollment[]
+  dripMessages       DripMessage[]
 
   @@unique([tenantId, phone])
   @@index([tenantId])
@@ -230,6 +238,7 @@ model WhatsappTemplate {
   tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   headerMediaFile MediaFile? @relation(fields: [headerMediaFileId], references: [id], onDelete: SetNull)
   campaigns       Campaign[]
+  dripSteps       DripStep[]
 
   @@unique([tenantId, name, language])
   @@index([tenantId])
@@ -321,6 +330,160 @@ model CampaignAuditLog {
   @@index([tenantId, action])
   @@index([actorUserId])
   @@map("campaign_audit_logs")
+}
+
+model DripWorkflow {
+  id                      String    @id @default(uuid())
+  tenantId                String
+  targetContactTypeId     String?
+  name                    String
+  description             String?
+  status                  String    @default("DRAFT")
+  audienceType            String    @default("ALL_OPTED_IN")
+  timezone                String    @default("Asia/Kolkata")
+  sendingStartTime        String    @default("09:00")
+  sendingEndTime          String    @default("19:00")
+  sendingDays             Int[]     @default([1, 2, 3, 4, 5, 6])
+  autoEnrollNewContacts   Boolean   @default(true)
+  autoEnrollInbound       Boolean   @default(true)
+  includeExistingContacts Boolean   @default(false)
+  allowReentry            Boolean   @default(false)
+  reentryCooldownDays     Int?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  activatedAt             DateTime?
+  pausedAt                DateTime?
+  archivedAt              DateTime?
+
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetContactType ContactType?     @relation(fields: [targetContactTypeId], references: [id], onDelete: SetNull)
+  steps             DripStep[]
+  enrollments       DripEnrollment[]
+  messages          DripMessage[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, targetContactTypeId])
+  @@map("drip_workflows")
+}
+
+model DripStep {
+  id               String   @id @default(uuid())
+  tenantId         String
+  workflowId       String
+  templateId       String
+  name             String
+  dayOffset        Int
+  minuteOffset     Int      @default(0)
+  position         Int
+  variableValues            Json?
+  isActive                  Boolean   @default(true)
+  metaHeaderMediaId         String?
+  metaHeaderMediaUploadedAt DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workflow   DripWorkflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  template   WhatsappTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  messages   DripMessage[]
+
+  @@unique([workflowId, position])
+  @@index([tenantId])
+  @@index([tenantId, workflowId])
+  @@index([templateId])
+  @@map("drip_steps")
+}
+
+model DripEnrollment {
+  id                 String    @id @default(uuid())
+  tenantId           String
+  workflowId         String
+  contactId          String
+  status             String    @default("ACTIVE")
+  source             String
+  currentStepPosition Int       @default(0)
+  enrolledAt         DateTime  @default(now())
+  nextRunAt           DateTime?
+  lastProcessedAt     DateTime?
+  completedAt         DateTime?
+  pausedAt            DateTime?
+  stoppedAt           DateTime?
+  stopReason          String?
+  entryCount          Int       @default(1)
+  enrollmentCycle     Int       @default(1)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow  DripWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  contact   Contact      @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  messages  DripMessage[]
+
+  @@unique([workflowId, contactId, enrollmentCycle])
+  @@index([tenantId])
+  @@index([tenantId, workflowId, contactId, status])
+  @@index([tenantId, status])
+  @@index([tenantId, nextRunAt])
+  @@index([workflowId])
+  @@index([contactId])
+  @@map("drip_enrollments")
+}
+
+model DripMessage {
+  id              String    @id @default(uuid())
+  tenantId        String
+  workflowId      String
+  enrollmentId    String
+  stepId          String
+  contactId       String
+  status          String    @default("PENDING")
+  metaMessageId   String?
+  errorMessage    String?
+  retryCount      Int       @default(0)
+  scheduledFor    DateTime
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  failedAt        DateTime?
+  statusWebhookAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow   DripWorkflow   @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  enrollment DripEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step       DripStep       @relation(fields: [stepId], references: [id], onDelete: Restrict)
+  contact    Contact        @relation(fields: [contactId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, stepId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, scheduledFor])
+  @@index([workflowId])
+  @@index([contactId])
+  @@index([metaMessageId])
+  @@map("drip_messages")
+}
+
+model DripAuditLog {
+  id          String   @id @default(uuid())
+  tenantId    String
+  workflowId  String?
+  contactId   String?
+  actorUserId String?
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorUser User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, workflowId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, action])
+  @@index([actorUserId])
+  @@map("drip_audit_logs")
 }
 
 model WebhookEvent {

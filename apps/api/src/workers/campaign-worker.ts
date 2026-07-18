@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { CampaignsWorkerModule } from '../campaigns/campaigns-worker.module';
+import { CampaignsWorkerModule } from '../modules/campaigns-worker.module';
 import { RedactingLogger } from '../security/redacting-logger';
 
 async function bootstrap() {
