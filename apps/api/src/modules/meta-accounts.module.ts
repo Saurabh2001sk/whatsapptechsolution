@@ -3,6 +3,7 @@ import { DripsModule } from './drips.module';
 import { AuthModule } from './auth.module';
 import { CryptoModule } from './crypto.module';
 import { BillingModule } from './billing.module';
+import { ConversationsModule } from './conversations.module';
 import { SecurityModule } from './security.module';
 import { MetaAccountsController } from '../controller/meta-accounts.controller';
 import { MetaAccountsService } from '../services/meta-accounts.service';
@@ -13,6 +14,7 @@ import { MetaAccountsService } from '../services/meta-accounts.service';
     AuthModule,
     BillingModule,
     SecurityModule,
+    ConversationsModule,
     forwardRef(() => DripsModule),
   ],
   controllers: [MetaAccountsController],

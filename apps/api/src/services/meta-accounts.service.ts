@@ -15,6 +15,7 @@ import { PrismaService } from './prisma.service';
 import * as jwt from 'jsonwebtoken';
 import { env } from '../env';
 import { DripsService } from './drips.service';
+import { ConversationsService } from './conversations.service';
 
 type MetaWebhookStatus = {
 id?: string;
@@ -30,6 +31,38 @@ errors?: Array<{
 }>;
 };
 
+type MetaWebhookMessage =
+  Record<string, unknown> & {
+    id?: string;
+    from?: string;
+    timestamp?: string;
+    type?: string;
+    text?: {
+      body?: string;
+    };
+    image?: {
+      caption?: string;
+    };
+    video?: {
+      caption?: string;
+    };
+    document?: {
+      caption?: string;
+      filename?: string;
+    };
+    button?: {
+      text?: string;
+    };
+    interactive?: {
+      button_reply?: {
+        title?: string;
+      };
+      list_reply?: {
+        title?: string;
+      };
+    };
+  };
+
 type MetaWebhookBody = {
 object?: string;
 entry?: Array<{
@@ -39,12 +72,7 @@ entry?: Array<{
        phone_number_id?: string;
      };
      statuses?: MetaWebhookStatus[];
-     messages?: Array<{
-       id?: string;
-       from?: string;
-       timestamp?: string;
-       type?: string;
-     }>;
+     messages?: MetaWebhookMessage[];
    };
  }>;
 }>;
@@ -109,8 +137,11 @@ constructor(
   private readonly prisma: PrismaService,
   private readonly cryptoService: CryptoService,
   private readonly billingService: BillingService,
+  private readonly conversationsService:
+    ConversationsService,
   @Inject(forwardRef(() => DripsService))
-  private readonly dripsService: DripsService,
+  private readonly dripsService:
+    DripsService,
 ) {}
 
   private async saveConnectedMetaAccount(
@@ -1064,6 +1095,7 @@ try {
  const result = await this.processWebhookBody(
    body,
    tenantId,
+   webhookEvent.id,
  );
 
  await this.prisma.webhookEvent.update({
@@ -1203,6 +1235,7 @@ async replayWebhookEvent(
           await this.processWebhookBody(
             body,
             tenantId,
+            webhookEvent.id,
           );
 
         await tx.webhookEvent.update({
@@ -1264,6 +1297,7 @@ async replayWebhookEvent(
 private async processWebhookBody(
   body: MetaWebhookBody,
   tenantId: string | null,
+  webhookEventId?: string | null,
 ) {
   const statusEvents =
     this.extractStatusEvents(body);
@@ -1327,20 +1361,68 @@ for (const inboundMessage of inboundMessages) {
     continue;
   }
 
-  try {
-    const result =
-      await this.dripsService.autoEnrollInboundContact({
+  /*
+   * Store the verified inbound message first.
+   *
+   * Even if drip automation fails, the customer
+   * message must remain safely stored.
+   */
+  const storedMessage =
+    await this.conversationsService
+      .ingestInboundMessage({
         tenantId,
-        fromPhone: inboundMessage.fromPhone,
-        metaMessageId: inboundMessage.messageId,
+        phoneNumberId:
+          inboundMessage.phoneNumberId,
+        webhookEventId,
+        metaMessageId:
+          inboundMessage.messageId,
+        fromPhone:
+          inboundMessage.fromPhone,
+        messageType:
+          inboundMessage.type,
+        bodyText:
+          inboundMessage.bodyText,
+        caption:
+          inboundMessage.caption,
+        timestamp:
+          inboundMessage.timestamp,
+        rawPayload:
+          inboundMessage.rawPayload,
       });
 
-    if (result.enrolled > 0) {
-      synced += 1;
-    } else {
-      ignoredCount += 1;
-    }
+  let dripEnrolled = 0;
+
+  /*
+   * Existing inbound drip automation runs only
+   * after message persistence succeeds.
+   */
+  try {
+    const dripResult =
+      await this.dripsService
+        .autoEnrollInboundContact({
+          tenantId,
+          fromPhone:
+            inboundMessage.fromPhone,
+          metaMessageId:
+            inboundMessage.messageId,
+        });
+
+    dripEnrolled =
+      dripResult.enrolled;
   } catch {
+    /*
+     * A drip failure must not delete or reject
+     * the saved inbox message.
+     */
+    dripEnrolled = 0;
+  }
+
+  if (
+    storedMessage.created ||
+    dripEnrolled > 0
+  ) {
+    synced += 1;
+  } else {
     ignoredCount += 1;
   }
 }
@@ -1429,25 +1511,47 @@ private verifyWebhookSignature(
  }
 }
 
-private extractInboundMessages(body: MetaWebhookBody) {
+private extractInboundMessages(
+  body: MetaWebhookBody,
+) {
   const inboundMessages: Array<{
     messageId: string;
+    phoneNumberId: string;
     fromPhone: string;
     timestamp?: string;
     type?: string;
+    bodyText: string | null;
+    caption: string | null;
+    rawPayload: Record<string, unknown>;
   }> = [];
 
   for (const entry of body.entry || []) {
-    for (const change of entry.changes || []) {
-      for (const message of change.value?.messages || []) {
-        const messageId = String(message.id || '').trim();
-        const fromPhone = String(message.from || '')
+    for (
+      const change of entry.changes || []
+    ) {
+      const phoneNumberId = String(
+        change.value?.metadata
+          ?.phone_number_id || '',
+      ).trim();
+
+      for (
+        const message of
+        change.value?.messages || []
+      ) {
+        const messageId = String(
+          message.id || '',
+        ).trim();
+
+        const fromPhone = String(
+          message.from || '',
+        )
           .replace(/\D/g, '')
           .trim();
 
         if (
           !messageId ||
           messageId.length > 255 ||
+          !phoneNumberId ||
           !fromPhone ||
           fromPhone.length < 8 ||
           fromPhone.length > 15
@@ -1457,15 +1561,69 @@ private extractInboundMessages(body: MetaWebhookBody) {
 
         inboundMessages.push({
           messageId,
+          phoneNumberId,
           fromPhone,
-          timestamp: message.timestamp,
-          type: String(message.type || '').trim() || undefined,
+          timestamp:
+            message.timestamp,
+          type:
+            String(
+              message.type || '',
+            ).trim() || undefined,
+          bodyText:
+            this.extractInboundMessageText(
+              message,
+            ),
+          caption:
+            this.extractInboundMessageCaption(
+              message,
+            ),
+          rawPayload: message,
         });
       }
     }
   }
 
   return inboundMessages;
+}
+
+private extractInboundMessageText(
+  message: MetaWebhookMessage,
+) {
+  const value =
+    message.text?.body ||
+    message.button?.text ||
+    message.interactive
+      ?.button_reply?.title ||
+    message.interactive
+      ?.list_reply?.title ||
+    '';
+
+  const cleaned = String(
+    value,
+  ).trim();
+
+  return cleaned
+    ? cleaned.slice(0, 10_000)
+    : null;
+}
+
+private extractInboundMessageCaption(
+  message: MetaWebhookMessage,
+) {
+  const value =
+    message.image?.caption ||
+    message.video?.caption ||
+    message.document?.caption ||
+    message.document?.filename ||
+    '';
+
+  const cleaned = String(
+    value,
+  ).trim();
+
+  return cleaned
+    ? cleaned.slice(0, 2_000)
+    : null;
 }
 
 private extractStatusEvents(body: MetaWebhookBody) {

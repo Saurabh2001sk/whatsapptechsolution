@@ -1982,3 +1982,262 @@ test('drip migration preserves existing data while adding required fields', () =
     /TRUNCATE/,
   )
 })
+
+test(
+  'conversation schema is tenant isolated and message idempotent',
+  () => {
+    const schema = read(
+      '../prisma/schema.prisma',
+    )
+
+    assert.match(
+      schema,
+      /model Conversation \{/,
+    )
+
+    assert.match(
+      schema,
+      /model WhatsappMessage \{/,
+    )
+
+    assert.match(
+      schema,
+      /model ConversationAssignment \{/,
+    )
+
+    assert.match(
+      schema,
+      /@@unique\(\[tenantId, customerPhone, metaAccountId\]\)/,
+    )
+
+    assert.match(
+      schema,
+      /metaMessageId\s+String\?\s+@unique/,
+    )
+
+    assert.match(
+      schema,
+      /@@unique\(\[tenantId, idempotencyKey\]\)/,
+    )
+
+    assert.match(
+      schema,
+      /@@index\(\[tenantId, conversationId, occurredAt\]\)/,
+    )
+  },
+)
+
+test(
+  'conversation routes derive tenant from authenticated backend context',
+  () => {
+    const controller = read(
+      '../src/controller/conversations.controller.ts',
+    )
+
+    assert.match(
+      controller,
+      /requireUserFromRequest\(request\)/,
+    )
+
+    assert.match(
+      controller,
+      /user\.tenantId/,
+    )
+
+    assert.match(
+      controller,
+      /requireRole\(\s*user,\s*conversationUserRoles,\s*\)/,
+    )
+
+    assert.match(
+      controller,
+      /requireRole\(\s*user,\s*conversationManagerRoles,\s*\)/,
+    )
+
+    assert.match(
+      controller,
+      /blockImpersonationWrites/,
+    )
+
+    assert.doesNotMatch(
+      controller,
+      /body\.tenantId/,
+    )
+
+    assert.doesNotMatch(
+      controller,
+      /query\.tenantId/,
+    )
+  },
+)
+
+test(
+  'conversation service scopes ownership and updates by tenant',
+  () => {
+    const service = read(
+      '../src/services/conversations.service.ts',
+    )
+
+    assert.match(
+      service,
+      /conversation-assignment:\$\{tenantId\}:\$\{conversationId\}/,
+    )
+
+    assert.match(
+      service,
+      /conversation-inbound:\$\{tenantId\}:\$\{phoneNumberId\}:\$\{fromPhone\}/,
+    )
+
+    assert.match(
+      service,
+      /id:\s*conversationId,\s*tenantId/,
+    )
+
+    assert.match(
+      service,
+      /id:\s*assignedUserId,\s*tenantId,\s*isActive:\s*true/,
+    )
+
+    assert.match(
+      service,
+      /tenantId_phone:/,
+    )
+
+    assert.match(
+      service,
+      /tenantId_customerPhone_metaAccountId:/,
+    )
+
+    assert.match(
+      service,
+      /assertCanCreateContactsInTransaction/,
+    )
+
+    assert.match(
+      service,
+      /metaMessageId/,
+    )
+  },
+)
+
+test(
+  'verified Meta webhooks persist inbound messages before drip automation',
+  () => {
+    const service = read(
+      '../src/services/meta-accounts.service.ts',
+    )
+
+    assert.match(
+      service,
+      /ConversationsService/,
+    )
+
+    assert.match(
+      service,
+      /ingestInboundMessage/,
+    )
+
+    assert.match(
+      service,
+      /webhookEventId/,
+    )
+
+    assert.match(
+      service,
+      /phoneNumberId:\s*inboundMessage\.phoneNumberId/,
+    )
+
+    const persistenceIndex =
+      service.indexOf(
+        'this.conversationsService',
+      )
+
+    const ingestIndex =
+      service.indexOf(
+        '.ingestInboundMessage',
+        persistenceIndex,
+      )
+
+    const dripIndex =
+      service.indexOf(
+        'this.dripsService',
+        ingestIndex,
+      )
+
+    const autoEnrollIndex =
+      service.indexOf(
+        '.autoEnrollInboundContact',
+        dripIndex,
+      )
+
+    assert.ok(
+      persistenceIndex >= 0,
+    )
+
+    assert.ok(
+      ingestIndex > persistenceIndex,
+    )
+
+    assert.ok(
+      dripIndex > ingestIndex,
+    )
+
+    assert.ok(
+      autoEnrollIndex > dripIndex,
+    )
+  },
+)
+
+test(
+  'conversation migration only adds tenant-safe tables and indexes',
+  () => {
+    const migration = read(
+      '../prisma/migrations/20260720160000_add_conversations_core/migration.sql',
+    )
+
+    assert.match(
+      migration,
+      /CREATE TABLE "conversations"/,
+    )
+
+    assert.match(
+      migration,
+      /CREATE TABLE "whatsapp_messages"/,
+    )
+
+    assert.match(
+      migration,
+      /CREATE TABLE "conversation_assignments"/,
+    )
+
+    assert.match(
+      migration,
+      /conversations_tenantId_customerPhone_metaAccountId_key/,
+    )
+
+    assert.match(
+      migration,
+      /whatsapp_messages_metaMessageId_key/,
+    )
+
+    assert.match(
+      migration,
+      /FOREIGN KEY \("tenantId"\)\s+REFERENCES "tenants"/,
+    )
+
+    assert.doesNotMatch(
+      migration,
+      /DROP TABLE/,
+    )
+
+    assert.doesNotMatch(
+      migration,
+      /DELETE FROM/,
+    )
+
+    assert.doesNotMatch(
+      migration,
+      /TRUNCATE/,
+    )
+  },
+)
