@@ -14,50 +14,57 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users             User[]
-  contacts          Contact[]
-  contactTypes      ContactType[]
-  metaAccounts      TenantMetaAccount[]
-  templates         WhatsappTemplate[]
-  mediaFiles        MediaFile[]
-  campaigns         Campaign[]
-  campaignAuditLogs CampaignAuditLog[]
-  dripWorkflows     DripWorkflow[]
-  dripEnrollments   DripEnrollment[]
-  dripMessages      DripMessage[]
-  dripAuditLogs     DripAuditLog[]
-  webhookEvents     WebhookEvent[]
-  subscriptions     TenantSubscription[]
-  usageRecords      TenantUsage[]
+  users                   User[]
+  contacts                Contact[]
+  contactTypes            ContactType[]
+  metaAccounts            TenantMetaAccount[]
+  templates               WhatsappTemplate[]
+  mediaFiles              MediaFile[]
+  campaigns               Campaign[]
+  campaignAuditLogs       CampaignAuditLog[]
+  dripWorkflows           DripWorkflow[]
+  dripEnrollments         DripEnrollment[]
+  dripMessages            DripMessage[]
+  dripAuditLogs           DripAuditLog[]
+  webhookEvents           WebhookEvent[]
+  conversations           Conversation[]
+  whatsappMessages        WhatsappMessage[]
+  conversationAssignments ConversationAssignment[]
+  subscriptions           TenantSubscription[]
+  usageRecords            TenantUsage[]
 
   @@map("tenants")
 }
 
 model User {
-  id                       String    @id @default(uuid())
+  id                       String          @id @default(uuid())
   tenantId                 String
-  email                    String    @unique
+  email                    String          @unique
   passwordHash             String
   name                     String
-  role                     String    @default("admin")
-  isActive                 Boolean   @default(true)
+  role                     String          @default("admin")
+  isActive                 Boolean         @default(true)
   emailVerifiedAt          DateTime?
-  twoFactorEnabled         Boolean   @default(false)
+  twoFactorEnabled         Boolean         @default(false)
   twoFactorSecretEncrypted String?
   twoFactorConfirmedAt     DateTime?
   twoFactorLastUsedAt      DateTime?
-  sessionVersion           Int       @default(0)
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  sessionVersion           Int             @default(0)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
   trustedDevices           TrustedDevice[]
 
-  tenant                   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  campaignAuditLogs        CampaignAuditLog[]
-  dripAuditLogs            DripAuditLog[]
-  passwordResetTokens      PasswordResetToken[]
-  emailVerificationTokens  EmailVerificationToken[]
-  twoFactorLoginChallenges TwoFactorLoginChallenge[]
-  twoFactorBackupCodes     TwoFactorBackupCode[]
+  tenant                         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignAuditLogs              CampaignAuditLog[]
+  dripAuditLogs                  DripAuditLog[]
+  passwordResetTokens            PasswordResetToken[]
+  emailVerificationTokens        EmailVerificationToken[]
+  twoFactorLoginChallenges       TwoFactorLoginChallenge[]
+  twoFactorBackupCodes           TwoFactorBackupCode[]
+  assignedConversations          Conversation[]            @relation("ConversationAssignedUser")
+  sentWhatsappMessages           WhatsappMessage[]         @relation("WhatsappMessageSender")
+  conversationAssignments        ConversationAssignment[]  @relation("ConversationAssignedUserHistory")
+  conversationAssignmentsCreated ConversationAssignment[]  @relation("ConversationAssignedByUser")
 
   @@index([tenantId])
   @@map("users")
@@ -94,14 +101,14 @@ model EmailVerificationToken {
 }
 
 model TwoFactorLoginChallenge {
-  id        String    @id @default(cuid())
-  userId    String
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
+  id             String    @id @default(cuid())
+  userId         String
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
   failedAttempts Int       @default(0)
   lockedAt       DateTime?
-  createdAt DateTime  @default(now())
+  createdAt      DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -125,15 +132,15 @@ model TwoFactorBackupCode {
 }
 
 model TrustedDevice {
-  id          String    @id @default(cuid())
-  userId      String
-  tokenHash   String    @unique
-  userAgent   String?
-  ipAddress   String?
-  lastUsedAt  DateTime?
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  userAgent  String?
+  ipAddress  String?
+  lastUsedAt DateTime?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -151,7 +158,7 @@ model ContactType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contacts      Contact[]
   campaigns     Campaign[]
   dripWorkflows DripWorkflow[]
@@ -182,6 +189,8 @@ model Contact {
   campaignRecipients CampaignRecipient[]
   dripEnrollments    DripEnrollment[]
   dripMessages       DripMessage[]
+  conversations      Conversation[]
+  whatsappMessages   WhatsappMessage[]
 
   @@unique([tenantId, phone])
   @@index([tenantId])
@@ -190,22 +199,23 @@ model Contact {
 }
 
 model TenantMetaAccount {
-  id                   String   @id @default(uuid())
+  id                   String    @id @default(uuid())
   tenantId             String
   metaAppId            String?
   wabaId               String
-  phoneNumberId        String   @unique
+  phoneNumberId        String    @unique
   businessName         String?
   encryptedAccessToken String
-  tokenLastUpdatedAt   DateTime @default(now())
+  tokenLastUpdatedAt   DateTime  @default(now())
   qualityRating        String?
   messagingLimitTier   String?
   qualitySyncedAt      DateTime?
-  isActive             Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  isActive             Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
 
   @@unique([tenantId, wabaId])
   @@index([tenantId])
@@ -249,22 +259,22 @@ model WhatsappTemplate {
 }
 
 model Campaign {
-  id              String    @id @default(uuid())
-  tenantId        String
-  templateId      String
-  contactTypeId   String?
-  name            String
-  audienceType    String
-  status          String    @default("DRAFT")
-  variableValues  Json?
-  totalRecipients Int       @default(0)
-  sentCount       Int       @default(0)
-  failedCount     Int       @default(0)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  startedAt       DateTime?
-  completedAt     DateTime?
-  scheduledAt     DateTime?
+  id                        String    @id @default(uuid())
+  tenantId                  String
+  templateId                String
+  contactTypeId             String?
+  name                      String
+  audienceType              String
+  status                    String    @default("DRAFT")
+  variableValues            Json?
+  totalRecipients           Int       @default(0)
+  sentCount                 Int       @default(0)
+  failedCount               Int       @default(0)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  startedAt                 DateTime?
+  completedAt               DateTime?
+  scheduledAt               DateTime?
   canceledAt                DateTime?
   lastError                 String?
   metaHeaderMediaId         String?
@@ -368,24 +378,24 @@ model DripWorkflow {
 }
 
 model DripStep {
-  id               String   @id @default(uuid())
-  tenantId         String
-  workflowId       String
-  templateId       String
-  name             String
-  dayOffset        Int
-  minuteOffset     Int      @default(0)
-  position         Int
+  id                        String    @id @default(uuid())
+  tenantId                  String
+  workflowId                String
+  templateId                String
+  name                      String
+  dayOffset                 Int
+  minuteOffset              Int       @default(0)
+  position                  Int
   variableValues            Json?
   isActive                  Boolean   @default(true)
   metaHeaderMediaId         String?
   metaHeaderMediaUploadedAt DateTime?
   createdAt                 DateTime  @default(now())
-  updatedAt        DateTime @updatedAt
+  updatedAt                 DateTime  @updatedAt
 
-  workflow   DripWorkflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  template   WhatsappTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  messages   DripMessage[]
+  workflow DripWorkflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  template WhatsappTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  messages DripMessage[]
 
   @@unique([workflowId, position])
   @@index([tenantId])
@@ -395,14 +405,14 @@ model DripStep {
 }
 
 model DripEnrollment {
-  id                 String    @id @default(uuid())
-  tenantId           String
-  workflowId         String
-  contactId          String
-  status             String    @default("ACTIVE")
-  source             String
+  id                  String    @id @default(uuid())
+  tenantId            String
+  workflowId          String
+  contactId           String
+  status              String    @default("ACTIVE")
+  source              String
   currentStepPosition Int       @default(0)
-  enrolledAt         DateTime  @default(now())
+  enrolledAt          DateTime  @default(now())
   nextRunAt           DateTime?
   lastProcessedAt     DateTime?
   completedAt         DateTime?
@@ -414,10 +424,10 @@ model DripEnrollment {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  workflow  DripWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  contact   Contact      @relation(fields: [contactId], references: [id], onDelete: Restrict)
-  messages  DripMessage[]
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow DripWorkflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  contact  Contact       @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  messages DripMessage[]
 
   @@unique([workflowId, contactId, enrollmentCycle])
   @@index([tenantId])
@@ -487,29 +497,125 @@ model DripAuditLog {
 }
 
 model WebhookEvent {
-id             String    @id @default(cuid())
-tenantId       String?
-source         String    @default("META")
-status         String    @default("RECEIVED")
-metaObject     String?
-phoneNumberId  String?
-payload        Json
-processedCount Int       @default(0)
-syncedCount    Int       @default(0)
-ignoredCount   Int       @default(0)
-replayCount    Int       @default(0)
-lastError      String?
-lastReplayedAt DateTime?
-createdAt      DateTime  @default(now())
-updatedAt      DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  tenantId       String?
+  source         String    @default("META")
+  status         String    @default("RECEIVED")
+  metaObject     String?
+  phoneNumberId  String?
+  payload        Json
+  processedCount Int       @default(0)
+  syncedCount    Int       @default(0)
+  ignoredCount   Int       @default(0)
+  replayCount    Int       @default(0)
+  lastError      String?
+  lastReplayedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant           Tenant?           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappMessages WhatsappMessage[]
 
-@@index([tenantId])
-@@index([tenantId, status])
-@@index([phoneNumberId])
-@@index([createdAt])
-@@map("webhook_events")
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([phoneNumberId])
+  @@index([createdAt])
+  @@map("webhook_events")
+}
+
+model Conversation {
+  id                 String    @id @default(uuid())
+  tenantId           String
+  contactId          String?
+  metaAccountId      String
+  customerPhone      String
+  assignedUserId     String?
+  status             String    @default("OPEN")
+  unreadCount        Int       @default(0)
+  lastMessagePreview String?
+  lastMessageAt      DateTime?
+  lastInboundAt      DateTime?
+  lastOutboundAt     DateTime?
+  resolvedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant       Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact?                 @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  metaAccount  TenantMetaAccount        @relation(fields: [metaAccountId], references: [id], onDelete: Restrict)
+  assignedUser User?                    @relation("ConversationAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages     WhatsappMessage[]
+  assignments  ConversationAssignment[]
+
+  @@unique([tenantId, customerPhone, metaAccountId])
+  @@index([tenantId, status, lastMessageAt])
+  @@index([tenantId, assignedUserId, status])
+  @@index([tenantId, contactId])
+  @@map("conversations")
+}
+
+model WhatsappMessage {
+  id                   String    @id @default(uuid())
+  tenantId             String
+  conversationId       String
+  contactId            String?
+  customerPhone        String
+  webhookEventId       String?
+  mediaFileId          String?
+  sentByUserId         String?
+  metaMessageId        String?   @unique
+  idempotencyKey       String?
+  direction            String
+  messageType          String
+  status               String
+  bodyText             String?
+  caption              String?
+  replyToMetaMessageId String?
+  rawPayload           Json?
+  errorCode            String?
+  errorMessage         String?
+  occurredAt           DateTime
+  sentAt               DateTime?
+  deliveredAt          DateTime?
+  readAt               DateTime?
+  failedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  webhookEvent WebhookEvent? @relation(fields: [webhookEventId], references: [id], onDelete: SetNull)
+  mediaFile    MediaFile?    @relation(fields: [mediaFileId], references: [id], onDelete: SetNull)
+  sentByUser   User?         @relation("WhatsappMessageSender", fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, conversationId, occurredAt])
+  @@index([tenantId, customerPhone, occurredAt])
+  @@index([tenantId, contactId, occurredAt])
+  @@index([tenantId, status])
+  @@index([webhookEventId])
+  @@map("whatsapp_messages")
+}
+
+model ConversationAssignment {
+  id               String    @id @default(uuid())
+  tenantId         String
+  conversationId   String
+  assignedUserId   String?
+  assignedByUserId String?
+  assignedAt       DateTime  @default(now())
+  unassignedAt     DateTime?
+  createdAt        DateTime  @default(now())
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  assignedUser   User?        @relation("ConversationAssignedUserHistory", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedByUser User?        @relation("ConversationAssignedByUser", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, conversationId, assignedAt])
+  @@index([tenantId, assignedUserId, unassignedAt])
+  @@map("conversation_assignments")
 }
 
 enum BillingResponsibility {
@@ -627,6 +733,7 @@ model MediaFile {
 
   tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   templateHeaderSamples WhatsappTemplate[]
+  whatsappMessages      WhatsappMessage[]
 
   @@index([tenantId])
   @@index([tenantId, mediaType])
