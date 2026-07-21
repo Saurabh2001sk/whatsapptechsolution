@@ -19,6 +19,7 @@ import { PlatformAdminModule } from './platform-admin.module';
 import { TeamUsersModule } from './team-users.module';
 import { DripsModule } from './drips.module';
 import { ConversationsModule } from './conversations.module';
+import { OutboundMessagesModule } from './outbound-messages.module';
 import { SentryExceptionFilter } from '../security/sentry.filter';
 
 @Module({
@@ -41,6 +42,7 @@ import { SentryExceptionFilter } from '../security/sentry.filter';
     TeamUsersModule,
     DripsModule,
     ConversationsModule,
+    OutboundMessagesModule,
   ],
   controllers: [HealthController],
   providers: [

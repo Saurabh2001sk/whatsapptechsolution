@@ -2241,3 +2241,153 @@ test(
     )
   },
 )
+test(
+  'outbound message schema stores queue state and tenant-owned template',
+  () => {
+    const schema = read(
+      '../prisma/schema.prisma',
+    )
+
+    assert.match(
+      schema,
+      /templateId\s+String\?/,
+    )
+
+    assert.match(
+      schema,
+      /failureClass\s+String\?/,
+    )
+
+    assert.match(
+      schema,
+      /retryCount\s+Int\s+@default\(0\)/,
+    )
+
+    assert.match(
+      schema,
+      /queuedAt\s+DateTime\?/,
+    )
+
+    assert.match(
+      schema,
+      /processingStartedAt\s+DateTime\?/,
+    )
+
+    assert.match(
+      schema,
+      /nextRetryAt\s+DateTime\?/,
+    )
+
+    assert.match(
+      schema,
+      /template\s+WhatsappTemplate\?\s+@relation/,
+    )
+
+    assert.match(
+      schema,
+      /@@index\(\[tenantId, status, nextRetryAt\]\)/,
+    )
+
+    assert.match(
+      schema,
+      /outboundMessages\s+WhatsappMessage\[\]/,
+    )
+  },
+)
+
+test(
+  'outbound message queue uses deterministic jobs and bounded retries',
+  () => {
+    const queue = read(
+      '../src/Queues/messages.queue.ts',
+    )
+
+    assert.match(
+      queue,
+      /OUTBOUND_MESSAGE_QUEUE/,
+    )
+
+    assert.match(
+      queue,
+      /outbound-message-\$\{whatsappMessageId\}/,
+    )
+
+    assert.match(
+      queue,
+      /attempts:\s*3/,
+    )
+
+    assert.match(
+      queue,
+      /type:\s*'exponential'/,
+    )
+
+    assert.match(
+      queue,
+      /delay:\s*5000/,
+    )
+
+    assert.match(
+      queue,
+      /'active'/,
+    )
+
+    assert.match(
+      queue,
+      /'waiting'/,
+    )
+
+    assert.match(
+      queue,
+      /'delayed'/,
+    )
+
+    assert.match(
+      queue,
+      /reusableStates\.has\(state\)/,
+    )
+
+    assert.match(
+      queue,
+      /return existingJob/,
+    )
+
+    assert.match(
+      queue,
+      /if \(state === 'active'\)/,
+    )
+  },
+)
+
+test(
+  'outbound queue module is registered without starting a worker in the API',
+  () => {
+    const module = read(
+      '../src/modules/outbound-messages.module.ts',
+    )
+
+    const appModule = read(
+      '../src/modules/app.module.ts',
+    )
+
+    assert.match(
+      module,
+      /MessagesQueue/,
+    )
+
+    assert.match(
+      module,
+      /exports:\s*\[\s*MessagesQueue/,
+    )
+
+    assert.doesNotMatch(
+      module,
+      /MessagesProcessor/,
+    )
+
+    assert.match(
+      appModule,
+      /OutboundMessagesModule/,
+    )
+  },
+)

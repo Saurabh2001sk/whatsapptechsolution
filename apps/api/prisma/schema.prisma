@@ -245,10 +245,11 @@ model WhatsappTemplate {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  headerMediaFile MediaFile? @relation(fields: [headerMediaFileId], references: [id], onDelete: SetNull)
-  campaigns       Campaign[]
-  dripSteps       DripStep[]
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  headerMediaFile  MediaFile?        @relation(fields: [headerMediaFileId], references: [id], onDelete: SetNull)
+  campaigns        Campaign[]
+  dripSteps        DripStep[]
+  outboundMessages WhatsappMessage[]
 
   @@unique([tenantId, name, language])
   @@index([tenantId])
@@ -562,6 +563,7 @@ model WhatsappMessage {
   customerPhone        String
   webhookEventId       String?
   mediaFileId          String?
+  templateId           String?
   sentByUserId         String?
   metaMessageId        String?   @unique
   idempotencyKey       String?
@@ -574,6 +576,11 @@ model WhatsappMessage {
   rawPayload           Json?
   errorCode            String?
   errorMessage         String?
+  failureClass         String?
+  retryCount           Int       @default(0)
+  queuedAt             DateTime?
+  processingStartedAt  DateTime?
+  nextRetryAt          DateTime?
   occurredAt           DateTime
   sentAt               DateTime?
   deliveredAt          DateTime?
@@ -582,18 +589,21 @@ model WhatsappMessage {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  webhookEvent WebhookEvent? @relation(fields: [webhookEventId], references: [id], onDelete: SetNull)
-  mediaFile    MediaFile?    @relation(fields: [mediaFileId], references: [id], onDelete: SetNull)
-  sentByUser   User?         @relation("WhatsappMessageSender", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  webhookEvent WebhookEvent?     @relation(fields: [webhookEventId], references: [id], onDelete: SetNull)
+  mediaFile    MediaFile?        @relation(fields: [mediaFileId], references: [id], onDelete: SetNull)
+  template     WhatsappTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  sentByUser   User?             @relation("WhatsappMessageSender", fields: [sentByUserId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, conversationId, occurredAt])
   @@index([tenantId, customerPhone, occurredAt])
   @@index([tenantId, contactId, occurredAt])
   @@index([tenantId, status])
+  @@index([tenantId, status, nextRetryAt])
+  @@index([templateId])
   @@index([webhookEventId])
   @@map("whatsapp_messages")
 }
