@@ -1,9 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { MessagesQueue } from '../Queues/messages.queue';
 import { BillingService } from './billing.service';
 import { PrismaService } from './prisma.service';
 
@@ -45,11 +48,43 @@ type InboundMessageInput = {
   rawPayload?: Record<string, unknown>;
 };
 
+type QueueTextReplyInput = {
+  tenantId: string;
+  actorUserId: string;
+  conversationId: string;
+  idempotencyKey: string;
+  bodyText?: string;
+};
+
+type QueueTemplateReplyInput = {
+  tenantId: string;
+  actorUserId: string;
+  conversationId: string;
+  idempotencyKey: string;
+  templateId?: string;
+  variableValues?: unknown;
+};
+
+type QueueOutboundReplyInput = {
+  tenantId: string;
+  actorUserId: string;
+  conversationId: string;
+  idempotencyKey: string;
+  messageType: 'TEXT' | 'TEMPLATE';
+  bodyText?: string;
+  templateId?: string;
+  variableValues?: unknown;
+};
+
+const CUSTOMER_SERVICE_WINDOW_MS =
+  24 * 60 * 60 * 1000;
+
 @Injectable()
 export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly billingService: BillingService,
+    private readonly messagesQueue: MessagesQueue,
   ) {}
   async listConversations(
     tenantId: string,
@@ -396,12 +431,26 @@ export class ConversationsService {
           replyToMetaMessageId: true,
           errorCode: true,
           errorMessage: true,
+          failureClass: true,
+          retryCount: true,
+          queuedAt: true,
+          processingStartedAt: true,
+          nextRetryAt: true,
           occurredAt: true,
           sentAt: true,
           deliveredAt: true,
           readAt: true,
           failedAt: true,
           createdAt: true,
+          template: {
+            select: {
+              id: true,
+              name: true,
+              language: true,
+              category: true,
+              status: true,
+            },
+          },
           mediaFile: {
             select: {
               id: true,
@@ -676,6 +725,583 @@ export class ConversationsService {
 
     return {
       ok: true,
+    };
+  }
+
+    async getReplyPolicy(
+    tenantId: string,
+    conversationId: string,
+  ) {
+    const conversation =
+      await this.prisma.conversation.findFirst({
+        where: {
+          id: conversationId,
+          tenantId,
+        },
+        select: {
+          id: true,
+          lastInboundAt: true,
+          customerPhone: true,
+          metaAccount: {
+            select: {
+              id: true,
+              isActive: true,
+            },
+          },
+          contact: {
+            select: {
+              id: true,
+              optedIn: true,
+              optInSource: true,
+              deletedAt: true,
+            },
+          },
+        },
+      });
+
+    if (!conversation) {
+      throw new NotFoundException(
+        'Conversation not found',
+      );
+    }
+
+    const serviceWindowClosesAt =
+      conversation.lastInboundAt
+        ? new Date(
+            conversation.lastInboundAt.getTime() +
+              CUSTOMER_SERVICE_WINDOW_MS,
+          )
+        : null;
+
+    const serviceWindowOpen =
+      Boolean(
+        serviceWindowClosesAt &&
+          serviceWindowClosesAt.getTime() >
+            Date.now(),
+      );
+
+    const hasValidOptIn =
+      Boolean(
+        conversation.contact &&
+          !conversation.contact.deletedAt &&
+          conversation.contact.optedIn &&
+          conversation.contact.optInSource,
+      );
+
+    return {
+      conversationId: conversation.id,
+      customerPhone:
+        conversation.customerPhone,
+      serviceWindowOpen,
+      serviceWindowClosesAt,
+      canSendText:
+        conversation.metaAccount.isActive &&
+        serviceWindowOpen,
+      canSendTemplate:
+        conversation.metaAccount.isActive &&
+        (serviceWindowOpen ||
+          hasValidOptIn),
+      requiresTemplate:
+        !serviceWindowOpen,
+      hasValidOptIn,
+      metaAccountActive:
+        conversation.metaAccount.isActive,
+    };
+  }
+
+  async queueTextReply(
+    input: QueueTextReplyInput,
+  ) {
+    const bodyText =
+      this.cleanRequiredText(
+        input.bodyText,
+        4096,
+        'Reply text is required',
+      );
+
+    return this.queueOutboundReply({
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      conversationId:
+        input.conversationId,
+      idempotencyKey:
+        input.idempotencyKey,
+      messageType: 'TEXT',
+      bodyText,
+    });
+  }
+
+  async queueTemplateReply(
+    input: QueueTemplateReplyInput,
+  ) {
+    const templateId = String(
+      input.templateId || '',
+    ).trim();
+
+    if (!templateId) {
+      throw new BadRequestException(
+        'Approved template is required',
+      );
+    }
+
+    return this.queueOutboundReply({
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      conversationId:
+        input.conversationId,
+      idempotencyKey:
+        input.idempotencyKey,
+      messageType: 'TEMPLATE',
+      templateId,
+      variableValues:
+        input.variableValues,
+    });
+  }
+
+  private async queueOutboundReply(
+    input: QueueOutboundReplyInput,
+  ) {
+    const tenantId = String(
+      input.tenantId || '',
+    ).trim();
+
+    const actorUserId = String(
+      input.actorUserId || '',
+    ).trim();
+
+    const conversationId = String(
+      input.conversationId || '',
+    ).trim();
+
+    const idempotencyKey =
+      this.cleanIdempotencyKey(
+        input.idempotencyKey,
+      );
+
+    if (
+      !tenantId ||
+      !actorUserId ||
+      !conversationId
+    ) {
+      throw new BadRequestException(
+        'Reply ownership information is required',
+      );
+    }
+
+    await this.billingService
+      .assertSubscriptionCanUseWorkspace(
+        tenantId,
+        'sending conversation replies',
+      );
+
+    const result =
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRaw(
+            Prisma.sql`
+              SELECT pg_advisory_xact_lock(
+                hashtextextended(
+                  ${`conversation-outbound:${tenantId}:${idempotencyKey}`},
+                  0
+                )
+              )
+            `,
+          );
+
+          const existingMessage =
+            await tx.whatsappMessage.findUnique({
+              where: {
+                tenantId_idempotencyKey: {
+                  tenantId,
+                  idempotencyKey,
+                },
+              },
+              select: {
+                id: true,
+                tenantId: true,
+                conversationId: true,
+                direction: true,
+                messageType: true,
+                bodyText: true,
+                templateId: true,
+                rawPayload: true,
+                status: true,
+                failureClass: true,
+                metaMessageId: true,
+                queuedAt: true,
+              },
+            });
+
+          if (existingMessage) {
+            this.assertIdempotencyMatches({
+              existingMessage,
+              conversationId,
+              messageType:
+                input.messageType,
+              bodyText:
+                input.bodyText || null,
+              templateId:
+                input.templateId || null,
+              variableValues:
+                input.variableValues,
+            });
+
+            if (
+              existingMessage.status ===
+                'FAILED' &&
+              existingMessage.failureClass ===
+                'TEMPORARY' &&
+              !existingMessage.metaMessageId
+            ) {
+              const resetMessage =
+                await tx.whatsappMessage.update({
+                  where: {
+                    id: existingMessage.id,
+                  },
+                  data: {
+                    status: 'QUEUED',
+                    failureClass: null,
+                    errorCode: null,
+                    errorMessage: null,
+                    failedAt: null,
+                    nextRetryAt: null,
+                    queuedAt: new Date(),
+                    processingStartedAt: null,
+                  },
+                  select: {
+                    id: true,
+                    status: true,
+                    conversationId: true,
+                    messageType: true,
+                    bodyText: true,
+                    templateId: true,
+                    queuedAt: true,
+                    createdAt: true,
+                  },
+                });
+
+              return {
+                message: resetMessage,
+                shouldQueue: true,
+                duplicate: true,
+              };
+            }
+
+            return {
+              message: existingMessage,
+              shouldQueue:
+                existingMessage.status ===
+                'QUEUED',
+              duplicate: true,
+            };
+          }
+
+          const conversation =
+            await tx.conversation.findFirst({
+              where: {
+                id: conversationId,
+                tenantId,
+              },
+              select: {
+                id: true,
+                customerPhone: true,
+                contactId: true,
+                lastInboundAt: true,
+                metaAccount: {
+                  select: {
+                    id: true,
+                    isActive: true,
+                  },
+                },
+                contact: {
+                  select: {
+                    id: true,
+                    optedIn: true,
+                    optInSource: true,
+                    deletedAt: true,
+                  },
+                },
+              },
+            });
+
+          if (!conversation) {
+            throw new NotFoundException(
+              'Conversation not found',
+            );
+          }
+
+          if (
+            !conversation.metaAccount.isActive
+          ) {
+            throw new BadRequestException(
+              'The WhatsApp account for this conversation is not active',
+            );
+          }
+
+          const serviceWindowOpen =
+            this.isServiceWindowOpen(
+              conversation.lastInboundAt,
+            );
+
+          let templateId: string | null =
+            null;
+
+          let bodyText: string | null =
+            null;
+
+          let rawPayload:
+            | Prisma.InputJsonValue
+            | undefined;
+
+          let preview: string;
+
+          if (
+            input.messageType === 'TEXT'
+          ) {
+            if (!serviceWindowOpen) {
+              throw new BadRequestException(
+                'The 24-hour customer service window is closed. Use an approved template instead.',
+              );
+            }
+
+            bodyText =
+              this.cleanRequiredText(
+                input.bodyText,
+                4096,
+                'Reply text is required',
+              );
+
+            preview = bodyText;
+          } else {
+            const template =
+              await tx.whatsappTemplate.findFirst({
+                where: {
+                  id: input.templateId,
+                  tenantId,
+                  status: 'APPROVED',
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  language: true,
+                  category: true,
+                  bodyText: true,
+                  variableCount: true,
+                },
+              });
+
+            if (!template) {
+              throw new BadRequestException(
+                'Approved tenant-owned template was not found',
+              );
+            }
+
+            const hasValidOptIn =
+              Boolean(
+                conversation.contact &&
+                  !conversation.contact
+                    .deletedAt &&
+                  conversation.contact
+                    .optedIn &&
+                  conversation.contact
+                    .optInSource,
+              );
+
+            if (
+              !serviceWindowOpen &&
+              !hasValidOptIn
+            ) {
+              throw new BadRequestException(
+                'This contact does not have valid opt-in proof for a business-initiated template message.',
+              );
+            }
+
+            const variableValues =
+              this.cleanTemplateVariableValues(
+                input.variableValues,
+                template.variableCount,
+              );
+
+            templateId = template.id;
+
+            bodyText =
+              this.renderTemplatePreview(
+                template.bodyText,
+                variableValues,
+              );
+
+            preview = bodyText;
+
+            rawPayload = {
+              templateName:
+                template.name,
+              language:
+                template.language,
+              category:
+                template.category,
+              variableValues,
+            };
+          }
+
+          const now = new Date();
+
+          const message =
+            await tx.whatsappMessage.create({
+              data: {
+                tenantId,
+                conversationId:
+                  conversation.id,
+                contactId:
+                  conversation.contactId,
+                customerPhone:
+                  conversation.customerPhone,
+                templateId,
+                sentByUserId:
+                  actorUserId,
+                idempotencyKey,
+                direction: 'OUTBOUND',
+                messageType:
+                  input.messageType,
+                status: 'QUEUED',
+                bodyText,
+                rawPayload,
+                occurredAt: now,
+                queuedAt: now,
+              },
+              select: {
+                id: true,
+                status: true,
+                conversationId: true,
+                messageType: true,
+                bodyText: true,
+                templateId: true,
+                queuedAt: true,
+                createdAt: true,
+              },
+            });
+
+          const updatedConversation =
+            await tx.conversation.updateMany({
+              where: {
+                id: conversation.id,
+                tenantId,
+              },
+              data: {
+                status: 'OPEN',
+                resolvedAt: null,
+                lastMessagePreview:
+                  preview.slice(0, 240),
+                lastMessageAt: now,
+              },
+            });
+
+          if (
+            updatedConversation.count !== 1
+          ) {
+            throw new NotFoundException(
+              'Conversation could not be updated',
+            );
+          }
+
+          await tx.auditLog.create({
+            data: {
+              tenantId,
+              actorUserId,
+              action:
+                'CONVERSATION_REPLY_QUEUED',
+              entityType:
+                'WHATSAPP_MESSAGE',
+              entityId: message.id,
+              metadata: {
+                conversationId:
+                  conversation.id,
+                messageType:
+                  input.messageType,
+                templateId,
+                idempotencyKey,
+                serviceWindowOpen,
+              },
+            },
+          });
+
+          return {
+            message,
+            shouldQueue: true,
+            duplicate: false,
+          };
+        },
+        {
+          isolationLevel:
+            Prisma.TransactionIsolationLevel
+              .Serializable,
+        },
+      );
+
+    if (result.shouldQueue) {
+      try {
+        await this.messagesQueue
+          .addOutboundMessageJob({
+            tenantId,
+            whatsappMessageId:
+              result.message.id,
+          });
+      } catch (error) {
+        const safeError =
+          this.sanitizeQueueError(error);
+
+        await this.prisma.$transaction([
+          this.prisma.whatsappMessage
+            .updateMany({
+              where: {
+                id: result.message.id,
+                tenantId,
+                status: 'QUEUED',
+                metaMessageId: null,
+              },
+              data: {
+                status: 'FAILED',
+                failureClass:
+                  'UNCERTAIN',
+                failedAt: new Date(),
+                errorMessage:
+                  safeError,
+              },
+            }),
+          this.prisma.auditLog.create({
+            data: {
+              tenantId,
+              actorUserId,
+              action:
+                'CONVERSATION_REPLY_QUEUE_FAILED',
+              entityType:
+                'WHATSAPP_MESSAGE',
+              entityId:
+                result.message.id,
+              metadata: {
+                conversationId,
+                failureClass:
+                  'UNCERTAIN',
+              },
+            },
+          }),
+        ]);
+
+        throw new ServiceUnavailableException(
+          'The reply was saved, but queue submission could not be confirmed. Automatic resend was blocked to prevent a duplicate WhatsApp message.',
+        );
+      }
+    }
+
+    return {
+      ok: true,
+      duplicate:
+        result.duplicate,
+      queued:
+        result.message.status ===
+          'QUEUED' ||
+        result.shouldQueue,
+      message:
+        result.message,
     };
   }
 
@@ -1325,5 +1951,275 @@ export class ConversationsService {
     }
 
     return `[${messageType}]`;
+  }
+
+  private isServiceWindowOpen(
+    lastInboundAt: Date | null,
+  ) {
+    if (!lastInboundAt) {
+      return false;
+    }
+
+    return (
+      lastInboundAt.getTime() +
+        CUSTOMER_SERVICE_WINDOW_MS >
+      Date.now()
+    );
+  }
+
+  private cleanIdempotencyKey(
+    value: unknown,
+  ) {
+    const key = String(
+      value || '',
+    ).trim();
+
+    if (
+      key.length < 16 ||
+      key.length > 128 ||
+      !/^[A-Za-z0-9._:-]+$/.test(key)
+    ) {
+      throw new BadRequestException(
+        'Idempotency-Key must be 16 to 128 characters and use only letters, numbers, dots, underscores, colons, or hyphens.',
+      );
+    }
+
+    return key;
+  }
+
+  private cleanRequiredText(
+    value: unknown,
+    maximumLength: number,
+    message: string,
+  ) {
+    const cleaned = String(
+      value || '',
+    ).trim();
+
+    if (!cleaned) {
+      throw new BadRequestException(
+        message,
+      );
+    }
+
+    if (
+      cleaned.length >
+      maximumLength
+    ) {
+      throw new BadRequestException(
+        `Text cannot exceed ${maximumLength} characters`,
+      );
+    }
+
+    return cleaned;
+  }
+
+  private cleanTemplateVariableValues(
+    value: unknown,
+    expectedCount: number,
+  ) {
+    const rawValues =
+      Array.isArray(value)
+        ? value
+        : [];
+
+    if (
+      rawValues.length !==
+      expectedCount
+    ) {
+      throw new BadRequestException(
+        `Template requires exactly ${expectedCount} variable value(s).`,
+      );
+    }
+
+    return rawValues.map(
+      (item, index) => {
+        const cleaned = String(
+          item ?? '',
+        ).trim();
+
+        if (!cleaned) {
+          throw new BadRequestException(
+            `Template variable ${index + 1} is required.`,
+          );
+        }
+
+        if (
+          cleaned.length > 1024
+        ) {
+          throw new BadRequestException(
+            `Template variable ${index + 1} cannot exceed 1024 characters.`,
+          );
+        }
+
+        return cleaned;
+      },
+    );
+  }
+
+  private renderTemplatePreview(
+    templateBody: string,
+    variableValues: string[],
+  ) {
+    let preview =
+      String(templateBody || '');
+
+    variableValues.forEach(
+      (value, index) => {
+        const placeholder =
+          new RegExp(
+            `\\{\\{${index + 1}\\}\\}`,
+            'g',
+          );
+
+        preview =
+          preview.replace(
+            placeholder,
+            value,
+          );
+      },
+    );
+
+    return preview
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 10_000);
+  }
+
+  private assertIdempotencyMatches(
+    input: {
+      existingMessage: {
+        conversationId: string;
+        direction: string;
+        messageType: string;
+        bodyText: string | null;
+        templateId: string | null;
+        rawPayload:
+          | Prisma.JsonValue
+          | null;
+      };
+      conversationId: string;
+      messageType:
+        'TEXT' | 'TEMPLATE';
+      bodyText: string | null;
+      templateId: string | null;
+      variableValues?: unknown;
+    },
+  ) {
+    const existing =
+      input.existingMessage;
+
+    if (
+      existing.direction !==
+        'OUTBOUND' ||
+      existing.conversationId !==
+        input.conversationId ||
+      existing.messageType !==
+        input.messageType
+    ) {
+      throw new ConflictException(
+        'Idempotency-Key was already used for a different reply.',
+      );
+    }
+
+    if (
+      input.messageType === 'TEXT' &&
+      existing.bodyText !==
+        input.bodyText
+    ) {
+      throw new ConflictException(
+        'Idempotency-Key was already used with different text.',
+      );
+    }
+
+    if (
+      input.messageType ===
+        'TEMPLATE' &&
+      existing.templateId !==
+        input.templateId
+    ) {
+      throw new ConflictException(
+        'Idempotency-Key was already used with a different template.',
+      );
+    }
+
+    if (
+      input.messageType ===
+      'TEMPLATE'
+    ) {
+      const rawPayload =
+        existing.rawPayload &&
+        typeof existing.rawPayload ===
+          'object' &&
+        !Array.isArray(
+          existing.rawPayload,
+        )
+          ? (
+              existing.rawPayload as
+                Record<
+                  string,
+                  Prisma.JsonValue
+                >
+            )
+          : null;
+
+      const existingVariables =
+        Array.isArray(
+          rawPayload
+            ?.variableValues,
+        )
+          ? rawPayload
+              ?.variableValues
+              .map((item) =>
+                String(item),
+              )
+          : [];
+
+      const newVariables =
+        Array.isArray(
+          input.variableValues,
+        )
+          ? input.variableValues.map(
+              (item) =>
+                String(item ?? '').trim(),
+            )
+          : [];
+
+      if (
+        JSON.stringify(
+          existingVariables,
+        ) !==
+        JSON.stringify(
+          newVariables,
+        )
+      ) {
+        throw new ConflictException(
+          'Idempotency-Key was already used with different template variables.',
+        );
+      }
+    }
+  }
+
+  private sanitizeQueueError(
+    error: unknown,
+  ) {
+    return String(
+      error instanceof Error
+        ? error.message
+        : 'Outbound queue submission failed',
+    )
+      .replace(
+        /redis:\/\/[^@\s]+@/gi,
+        'redis://[REDACTED]@',
+      )
+      .replace(
+        /rediss:\/\/[^@\s]+@/gi,
+        'rediss://[REDACTED]@',
+      )
+      .replace(
+        /Bearer\s+[A-Za-z0-9._~+/=-]+/gi,
+        'Bearer [REDACTED]',
+      )
+      .slice(0, 1000);
   }
 }

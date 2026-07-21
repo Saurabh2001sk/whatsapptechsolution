@@ -2391,3 +2391,199 @@ test(
     )
   },
 )
+
+test(
+  'conversation reply routes use authenticated tenant idempotency and rate limits',
+  () => {
+    const controller = read(
+      '../src/controller/conversations.controller.ts',
+    )
+
+    assert.match(
+      controller,
+      /@Headers\('idempotency-key'\)/,
+    )
+
+    assert.match(
+      controller,
+      /queueTextReply/,
+    )
+
+    assert.match(
+      controller,
+      /queueTemplateReply/,
+    )
+
+    assert.match(
+      controller,
+      /user\.tenantId/,
+    )
+
+    assert.match(
+      controller,
+      /user\.userId/,
+    )
+
+    assert.match(
+      controller,
+      /consumeReplyLimit/,
+    )
+
+    assert.match(
+      controller,
+      /conversation_reply_user/,
+    )
+
+    assert.match(
+      controller,
+      /conversation_reply_conversation/,
+    )
+
+    assert.match(
+      controller,
+      /conversation_reply_ip/,
+    )
+
+    assert.match(
+      controller,
+      /blockImpersonationWrites/,
+    )
+
+    assert.doesNotMatch(
+      controller,
+      /body\.tenantId/,
+    )
+  },
+)
+
+test(
+  'conversation text replies enforce the customer service window',
+  () => {
+    const service = read(
+      '../src/services/conversations.service.ts',
+    )
+
+    assert.match(
+      service,
+      /CUSTOMER_SERVICE_WINDOW_MS/,
+    )
+
+    assert.match(
+      service,
+      /24 \* 60 \* 60 \* 1000/,
+    )
+
+    assert.match(
+      service,
+      /isServiceWindowOpen/,
+    )
+
+    assert.match(
+      service,
+      /The 24-hour customer service window is closed/,
+    )
+
+    assert.match(
+      service,
+      /messageType:\s*'TEXT'/,
+    )
+
+    assert.match(
+      service,
+      /status:\s*'QUEUED'/,
+    )
+  },
+)
+
+test(
+  'conversation template replies require tenant ownership approval and opt-in outside window',
+  () => {
+    const service = read(
+      '../src/services/conversations.service.ts',
+    )
+
+    assert.match(
+      service,
+      /whatsappTemplate\.findFirst/,
+    )
+
+    assert.match(
+      service,
+      /id:\s*input\.templateId,\s*tenantId,\s*status:\s*'APPROVED'/,
+    )
+
+    assert.match(
+      service,
+      /contact\.optedIn/,
+    )
+
+    assert.match(
+      service,
+      /contact\.optInSource/,
+    )
+
+    assert.match(
+      service,
+      /valid opt-in proof/,
+    )
+
+    assert.match(
+      service,
+      /cleanTemplateVariableValues/,
+    )
+
+    assert.match(
+      service,
+      /templateId/,
+    )
+  },
+)
+
+test(
+  'conversation outbound creation is transaction locked and idempotently queued',
+  () => {
+    const service = read(
+      '../src/services/conversations.service.ts',
+    )
+
+    assert.match(
+      service,
+      /conversation-outbound:\$\{tenantId\}:\$\{idempotencyKey\}/,
+    )
+
+    assert.match(
+      service,
+      /pg_advisory_xact_lock/,
+    )
+
+    assert.match(
+      service,
+      /tenantId_idempotencyKey/,
+    )
+
+    assert.match(
+      service,
+      /assertIdempotencyMatches/,
+    )
+
+    assert.match(
+      service,
+      /Prisma\.TransactionIsolationLevel\s*\.Serializable/,
+    )
+
+    assert.match(
+      service,
+      /addOutboundMessageJob/,
+    )
+
+    assert.match(
+      service,
+      /failureClass:\s*'UNCERTAIN'/,
+    )
+
+    assert.match(
+      service,
+      /Automatic resend was blocked/,
+    )
+  },
+)
